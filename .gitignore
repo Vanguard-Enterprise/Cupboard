@@ -1,8 +1,3 @@
-# Rust build artifacts
-/target/
-**/*.rs.bk
-*.pdb
-
 # Environment / secrets
 .env
 .env.*
@@ -14,3 +9,6 @@
 .vscode/
 *.swp
 .DS_Store
+
+# Logs
+*.log

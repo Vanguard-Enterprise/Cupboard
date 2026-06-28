@@ -1,21 +1,16 @@
 # Cupboard
 
-A Rust server network management platform.
+A platform for managing networks of **Rust** game servers.
 
 ## Overview
 
-Cupboard is a network management platform written in Rust, designed for managing
-and orchestrating server networks.
+Cupboard is a management platform for operators running fleets of [Rust](https://rust.facepunch.com/)
+game servers. It aims to provide centralized control, monitoring, and
+orchestration across a network of servers.
 
 ## Status
 
-🚧 Early development.
-
-## Building
-
-```bash
-cargo build
-```
+🚧 Early planning — tech stack not yet chosen.
 
 ## License
 
