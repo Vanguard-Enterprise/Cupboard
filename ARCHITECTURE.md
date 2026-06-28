@@ -10,7 +10,8 @@ server network's entire operation. Tenants (server-network owners) connect
 everything to us. It spans:
 
 - **Server lifecycle** — provision / start / stop / wipe / update servers and
-  nodes via **Pelican** (panel) + Wings on the game hosts + SSH; plugin management.
+  nodes via **tenant-configured panel connections (Pelican *and/or* Pterodactyl)
+  and/or direct SSH** to the tenant's own installs; plugin management.
 - **Metrics & performance** — collect server + plugin performance data, store it,
   and generate **performance recommendation tips**.
 - **Player tracking & moderation** — BattleMetrics-style player / IP / alt tracking,
@@ -72,7 +73,7 @@ deployed as an independently-scalable unit.
 |---|---|---|
 | **gateway** | Front door: public API, auth validation, tenant routing, fan-out | medium |
 | **auth** | Operator + player/customer auth (email, Discord, Steam), RBAC, invites | low (operators) / high (players) |
-| **fleet** | Server/node lifecycle via Pelican + SSH, plugin management | low-freq control ops |
+| **fleet** | Server/node lifecycle via tenant-configured Pelican/Pterodactyl panel connections + SSH (panel-adapter abstraction), plugin management | low-freq control ops |
 | **collector** | Connection-heavy ingestion: RCON, metric polling, player/event firehose → publishes to Redis Streams | **horizontally shardable — the one we scale independently** |
 | **identity** | Player tracking, IP/alt linking graph, bans, audit, BM import + continuous sync | heavy write path |
 | **metrics** | Perf time-series (to Mimir) + recommendation engine | read/compute heavy |
@@ -89,6 +90,22 @@ Non-Rust: **bot** (TS / discord.js), **web** (Next.js).
 
 The Collector does no business logic — it ingests and publishes. Identity and
 Metrics are independent consumer groups reading at their own pace.
+
+### Panel connections (Fleet)
+
+Tenants run their **own** game-server panels and add connections to Cupboard
+(the in-cluster Pelican is only a dev/test install, not the orchestration layer).
+Fleet is a **multi-panel integration layer**:
+
+- A tenant configures one or more **connections**, each typed `pelican` |
+  `pterodactyl` | `ssh`, with a base URL + credentials (API key / SSH key).
+- Pelican is a Pterodactyl fork with a near-identical Application + Client API, so
+  a single **panel-adapter trait** with a per-type implementation covers both;
+  RCON and SSH are separate transports underneath.
+- Tenant-supplied panel credentials are **encrypted at rest** in Postgres
+  (envelope encryption; data key wrapped by a master key from Vault) rather than
+  one Vault entry per tenant — there are hundreds of tenants supplying secrets at
+  runtime.
 
 ## 5. Deployment & infra (reuses the `v-deployments` GitOps cluster)
 
@@ -149,7 +166,7 @@ Cupboard/
 | 4 | **Redis Streams** as event bus (not NATS) | accepted | No broker exists; adding NATS = new operator + memory on a memory-bound solo cluster; Redis already first-class. NATS/Redpanda = upgrade path. |
 | 5 | **Mimir** for perf metrics (not TimescaleDB) | accepted | Prometheus-compatible TSDB already running + wired to Grafana; CNPG has no Timescale extension anyway. |
 | 6 | **Next.js** frontend (not Vite SPA) | accepted | White-label custom domains need SSR + per-hostname tenant theming; Vite SPA is poor at that. |
-| 7 | **Fleet integrates with Pelican** (not Pterodactyl) | accepted | Pelican panel is already deployed in the cluster. |
+| 7 | Fleet supports **tenant-configured Pelican *and* Pterodactyl** connections (+ SSH) | accepted | Tenants bring their own panel installs; Cupboard connects out to them (the in-cluster Pelican is only a test install). Pelican is a Pterodactyl fork with a near-identical API → one adapter layer covers both. |
 | 8 | Deploy on existing **ArgoCD/Kustomize/Talos** cluster | accepted | Mature GitOps platform already exists (CNPG, Redis, Vault, Traefik, LGTM stack). Reuse, don't reinvent. |
 | 9 | **Discord bot in TS** (not Rust) | accepted | Bot is mostly an API client; discord.js is high-velocity and low-risk. |
 | 10 | Add **cluster capacity before launch** | accepted | 500 servers / 100k users / white-label hosting needs more than the current memory-bound 3-node cluster. |
