@@ -84,12 +84,50 @@ Non-Rust: **bot** (TS / discord.js), **web** (Next.js).
 ### Data flow (event firehose)
 
 ```
-500 servers ──RCON/poll──> collector ──Redis Streams──┬──> identity (player/IP/ban events)
-                                                       └──> metrics  (perf/plugin events → Mimir)
+                  RCON/A2S (pull) ┐
+  tenant servers  plugin   (push) ├─> collector ─Redis Streams─┬─> identity (player/IP/ban events)
+                  perf mod (push) ┘                            └─> metrics  (perf events → Mimir)
 ```
 
 The Collector does no business logic — it ingests and publishes. Identity and
 Metrics are independent consumer groups reading at their own pace.
+
+### Data ingestion (Collector)
+
+How Cupboard observes a tenant's Rust servers. **Operators choose, per server,
+any combination of three mechanisms** — features degrade gracefully based on what
+is enabled:
+
+1. **RCON + A2S — pull, zero-install baseline.** Collector dials *out* to the
+   server's RCON (WebSocket) and queries roster (`status`/`playerlist` → Steam ID,
+   IP, name, ping, sessions) plus the console stream (chat, connect/disconnect),
+   and A2S for server info. Works the moment a connection is added. This is the
+   BattleMetrics approach. *Limitation:* console-level only — no plugin perf, no
+   deep identifiers.
+2. **Cupboard gameplay plugin (Oxide/uMod + Carbon) — push, rich tier.** Installed
+   by the operator; pushes rich events to Cupboard's authenticated ingest endpoint
+   and executes inbound actions (bans, **store entitlement delivery**). Captures the
+   full identity set + chat logs + F7 reports + playtime/stats + (toggleable)
+   combat logs.
+3. **Cupboard performance mod (Harmony, RustServerMetrics-style) — push, perf
+   tier.** A Harmony patch (not an Oxide hook, for low overhead) reporting
+   server/plugin performance — frametime/FPS, network, entity counts, GC, per-plugin
+   hook timings — to ingest → Metrics → Mimir.
+
+**Direction matters:** RCON is *pull* (Collector → server, persistent outbound WS).
+The plugin and mod are *push* (server → Cupboard ingest gateway, per-server token
+auth, backpressure into Redis Streams). The Collector unifies both into one event
+firehose.
+
+**Identifiers captured** (mechanism permitting): Steam ID, **Steam owner ID**
+(family-share — a strong alt signal), **EAC ID**, IP(s), name history, session
+start/stop — plus chat logs, F7 reports, playtime stats, and optional combat logs.
+These feed the Identity linking graph (see Topic 3 / future section).
+
+**New build deliverables** (separate game-server-side repos, like the AmityRust
+plugins — *not* in this backend repo):
+- Cupboard **gameplay plugin** (Oxide/uMod + Carbon)
+- Cupboard **performance mod** (Harmony)
 
 ### Panel connections (Fleet)
 
@@ -170,4 +208,5 @@ Cupboard/
 | 8 | Deploy on existing **ArgoCD/Kustomize/Talos** cluster | accepted | Mature GitOps platform already exists (CNPG, Redis, Vault, Traefik, LGTM stack). Reuse, don't reinvent. |
 | 9 | **Discord bot in TS** (not Rust) | accepted | Bot is mostly an API client; discord.js is high-velocity and low-risk. |
 | 10 | Add **cluster capacity before launch** | accepted | 500 servers / 100k users / white-label hosting needs more than the current memory-bound 3-node cluster. |
+| 12 | **Hybrid ingestion**, operator-selectable: RCON/A2S + Oxide-Carbon gameplay plugin + Harmony perf mod | accepted | Operators choose per server; RCON = zero-install baseline, plugin = rich identity/moderation/entitlements, Harmony mod = low-overhead perf (RustServerMetrics-style). Plugin/mod are new game-server-side repos. |
 | 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
