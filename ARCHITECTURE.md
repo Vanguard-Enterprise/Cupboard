@@ -182,6 +182,19 @@ works precisely *because* the domain now points at us; Traefik's built-in ACME i
 fallback. Rate-limit issuance and verify ownership before requesting. See
 [`docs/custom-domain-tls.md`](docs/custom-domain-tls.md).
 
+### Support (tickets)
+
+Unified ticketing across **web + Discord** — one ticket store; staff reply from the
+admin dashboard **or** Discord with two-way sync.
+
+- **Web**: logged-in players open tickets from the tenant site.
+- **Discord**: the bot opens a **private thread/channel per ticket** (classic
+  ticket-bot UX); messages sync both ways with the Cupboard ticket. Implemented in
+  the TS bot (prior art: the org's `ticket-bot`).
+- **Ban appeals = a special ticket type**, pre-linked to the ban + player record, so
+  staff see full context and can action the ban from within the ticket.
+- Launch scope: categories, assignment, status, internal staff notes, history.
+
 ### Panel connections (Fleet)
 
 Tenants run their **own** game-server panels and add connections to Cupboard
@@ -397,4 +410,7 @@ Cupboard/
 | 25 | White-label sites = **curated themes + config** (not a builder); Next.js SSR tenant-by-hostname; bespoke themes = paid service | accepted | Far less to build than a builder; fits the "custom designs" revenue line. |
 | 26 | **Full player accounts** on tenant sites (Steam/Discord): store browse/buy, view entitlements, profile/stats, appeals, support, link Discord. Admin panel stays operator-only. | accepted | Players need login for appeals/support/entitlements; checkout still provider-side. |
 | 27 | **On-site store pages** (default on, tenant-toggleable): catalog rendered on the Cupboard site from PayNow/Tebex; **checkout delegated to provider** | accepted | Keeps storefront UX on-platform while payments stay with the provider (no MoR). |
+| 28 | **Unified support**: web + Discord, one ticket store, two-way synced; staff work from dashboard or Discord | accepted | Full vision; reuses the bot. |
+| 29 | Discord tickets = **private thread/channel per ticket**, synced (in the TS bot) | accepted | Familiar ticket-bot UX; prior art in the org. |
+| 30 | **Ban appeals = special ticket type** pre-linked to the ban/player record | accepted | Reuses the ticket system; gives staff context. |
 | 11 | Tenant custom-domain TLS → **cert-manager HTTP-01 over Traefik**, per-domain via the Sites service; tenant points DNS (A/CNAME) at our edge | accepted | DNS-points-at-us enables HTTP-01; reuses the existing cert-manager/Traefik toolchain. |
