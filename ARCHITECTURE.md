@@ -350,7 +350,48 @@ source + container builds. Clone the **rustlens** overlay skeleton as the templa
 | Storage | Longhorn (default StorageClass) |
 | RBAC | add a RoleBinding per new namespace in `cluster-rbac` |
 
-## 7. Repository layout (this repo)
+## 7. Cross-cutting concerns
+
+### Environments
+
+**Staging + production.** Staging runs as separate namespaces + its own CNPG/Redis on
+the cluster (`*-staging` namespaces, Vault path `cupboard/staging/*`), promoted to
+prod through the same ArgoCD/image-updater flow. Test tenant onboarding, billing, and
+server connections before they touch prod.
+
+### CI/CD
+
+GitHub Actions (self-hosted runners) build each service/app container → GHCR
+`ghcr.io/vanguard-enterprise/cupboard-<svc>:main`; argocd-image-updater digest-pins
+and ArgoCD syncs. sqlx migrations run as a pre-deploy job per service.
+
+### RBAC (tenant staff)
+
+**Fully custom roles + permissions.** A granular **permission catalog** (per-area
+actions — e.g. `bans.create`, `players.view_pii`, `servers.restart`, `store.manage`,
+`support.respond`, `sites.edit`, `billing.manage`). Tenants define **custom roles** =
+permission sets, with optional **resource scoping** (limit a role/member to specific
+servers). Ship **default role templates** (Owner [full, immutable], Admin, Moderator,
+Support) that tenants can clone/edit. Cupboard-staff superadmin sits above tenants.
+
+### Public API
+
+**Per-tenant scoped API keys** (read/write scopes per area), **rate limits tied to
+subscription tier**, usage metering. REST + OpenAPI (utoipa) via the Gateway; keys
+validated at the Gateway.
+
+### Secrets & encryption
+
+Vault + ESO (`vault-backend`, keys `cupboard/{production,staging}/*`). Tenant-supplied
+panel/store credentials envelope-encrypted at rest (Vault-wrapped data key). TLS
+everywhere; Postgres `sslmode=require`.
+
+### Audit
+
+Central audit log of staff/admin actions and player-data access (Identity owns
+player-data audit). Feeds the GDPR export/erasure tooling (Decision 16).
+
+## 8. Repository layout (this repo)
 
 ```
 Cupboard/
@@ -370,7 +411,7 @@ Cupboard/
   ARCHITECTURE.md
 ```
 
-## 8. Open design problems
+## 9. Open design problems
 
 - ~~TLS for arbitrary tenant custom domains~~ — **resolved**: cert-manager HTTP-01
   over Traefik, per-domain, tenant points DNS at our edge (see §6 Custom-domain TLS /
@@ -380,7 +421,7 @@ Cupboard/
 - **Mimir cardinality** — perf metrics are per-tenant/per-server/per-plugin; keep
   label cardinality disciplined (see `v-deployments` `alloy-metrics/CARDINALITY.md`).
 
-## 9. Decision log
+## 10. Decision log
 
 | # | Decision | Status | Why |
 |---|---|---|---|
@@ -413,4 +454,7 @@ Cupboard/
 | 28 | **Unified support**: web + Discord, one ticket store, two-way synced; staff work from dashboard or Discord | accepted | Full vision; reuses the bot. |
 | 29 | Discord tickets = **private thread/channel per ticket**, synced (in the TS bot) | accepted | Familiar ticket-bot UX; prior art in the org. |
 | 30 | **Ban appeals = special ticket type** pre-linked to the ban/player record | accepted | Reuses the ticket system; gives staff context. |
+| 31 | **Staging + production** environments (separate namespaces/DB/Vault path on the cluster) | accepted | Safe pre-prod testing for a tenant-critical system. |
+| 32 | **Fully custom RBAC** — granular permission catalog + tenant-defined roles + per-server resource scoping; default role templates | accepted | Tenant choice; big networks need granular control. More to build (catalog + UI). |
+| 33 | **Public API** = per-tenant scoped keys + plan-tiered rate limits, REST/OpenAPI via Gateway | accepted | Proper integration foundation; ties limits to billing. |
 | 11 | Tenant custom-domain TLS → **cert-manager HTTP-01 over Traefik**, per-domain via the Sites service; tenant points DNS (A/CNAME) at our edge | accepted | DNS-points-at-us enables HTTP-01; reuses the existing cert-manager/Traefik toolchain. |
