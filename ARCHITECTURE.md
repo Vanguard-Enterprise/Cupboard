@@ -16,8 +16,9 @@ everything to us. It spans:
   and generate **performance recommendation tips**.
 - **Player tracking & moderation** — BattleMetrics-style player / IP / alt tracking,
   bans, audit; **import from BattleMetrics with optional continuous sync**.
-- **Commerce** — hosted per-tenant stores, payments, entitlement/perk delivery into
-  the game servers.
+- **Commerce** — integrate the tenant's **external store provider** (PayNow at
+  launch; Tebex/others later); ingest purchase/entitlement data only (no payment
+  handling — delivery to servers stays with the provider).
 - **Support** — ticketing via the tenant's website *and* via Discord.
 - **White-label hosting** — we host each tenant's storefront *and* admin panel,
   customizable themes, paid custom designs, on **custom domains**.
@@ -77,7 +78,7 @@ deployed as an independently-scalable unit.
 | **collector** | Connection-heavy ingestion: RCON, metric polling, player/event firehose → publishes to Redis Streams | **horizontally shardable — the one we scale independently** |
 | **identity** | Player tracking, IP/alt linking graph, bans, audit, BM import + continuous sync | heavy write path |
 | **metrics** | Perf time-series (to Mimir) + recommendation engine | read/compute heavy |
-| **tenant** | Commerce (store, payments, entitlements) + Sites (white-label builder, themes, domains) + Support (tickets) — split later | medium |
+| **tenant** | Commerce (external store integration: PayNow now, Tebex/others later — ingest entitlements, *no* payment handling) + Sites (white-label builder, themes, domains) + Support (tickets) — split later | medium |
 
 Non-Rust: **bot** (TS / discord.js), **web** (Next.js).
 
@@ -128,6 +129,26 @@ These feed the Identity linking graph (see Topic 3 / future section).
 plugins — *not* in this backend repo):
 - Cupboard **gameplay plugin** (Oxide/uMod + Carbon)
 - Cupboard **performance mod** (Harmony)
+
+### Commerce & billing
+
+**Cupboard does not process player payments.** Player→tenant store sales are handled
+entirely by the tenant's **external store provider** (PayNow at launch). Cupboard
+integrates via a **store-provider adapter** (mirrors the panel adapter — PayNow now,
+**Tebex** / others later):
+
+- Tenant connects their provider account.
+- Cupboard ingests **entitlement/purchase metadata** via the provider's API/webhooks
+  — Steam ID + product (kits, subscriptions, ranks), status, timestamps.
+- **No financial or payment PII** is ingested — only *who owns what*.
+- **Delivery stays with the provider** (PayNow executes grants on servers itself).
+- Use in Cupboard: enrich player profiles with customer/VIP status + purchase
+  history for moderation context; surface in the dashboard.
+
+**Cupboard→tenant billing (Cupboard's own revenue):** subscription **tiers** +
+**one-off services** (custom design, migration), via **Stripe Billing**. Standard
+SaaS billing — Cupboard is merchant-of-record for its *own* fees only. **No**
+marketplace / Connect / application-fee model; Cupboard takes no cut of store GMV.
 
 ### Panel connections (Fleet)
 
@@ -340,4 +361,6 @@ Cupboard/
 | 20 | BM import scope: bans, players+identifiers, notes+flags, servers+RCON (own org, tenant token; queued/resumable) | accepted | Full migration; lose nothing. |
 | 21 | BM sync **two-way where BM's API allows** (bans bidirectional; notes/flags/players/servers one-way BM→Cupboard); origin tracking + LWW conflict resolution | accepted | User chose two-way; necessarily partial, bounded by BM's writable surface. |
 | 22 | BM import is **maximal within the tenant's own access** (default-all: own org + subscribed shared lists; subset-selectable). No access beyond the token (no scraping). | accepted | "More data wins" growth strategy, kept legitimate by bounding to the tenant's authorization. Privacy deferred by choice (see #16 caveat). |
+| 23 | **No Cupboard-built commerce/payments** — player payments via external store providers (**PayNow** launch; adapter for **Tebex**/others later); Cupboard ingests entitlement metadata only (Steam ID + product), no payment PII; delivery stays with provider | accepted | Sidesteps merchant-of-record / money-transmitter burden; PayNow/Tebex already solve game-store monetization. |
+| 24 | **Cupboard revenue = subscription tiers + one-off services** via Stripe Billing (own fees only, no GMV cut) | accepted | Simple SaaS billing; no marketplace compliance. |
 | 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
