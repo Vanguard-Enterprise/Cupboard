@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cupboard-db
+---
+# Tenant-app secret (role + password) sourced from Vault.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: cupboard-pg-bootstrap
+  namespace: cupboard-db
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: cupboard-pg-bootstrap
+    template:
+      type: kubernetes.io/basic-auth
+  data:
+    - secretKey: username
+      remoteRef: { key: cupboard/staging/pg/cupboard, property: username }
+    - secretKey: password
+      remoteRef: { key: cupboard/staging/pg/cupboard, property: db_password }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: cupboard
+  namespace: cupboard-db
+spec:
+  instances: 1                      # HA later; single instance to spare memory at first
+  storage:
+    size: 20Gi
+    storageClass: longhorn
+  bootstrap:
+    initdb:
+      database: cupboard
+      owner: cupboard
+      secret:
+        name: cupboard-pg-bootstrap
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: cupboard-pooled-rw
+  namespace: cupboard-db
+spec:
+  cluster: { name: cupboard }
+  instances: 2
+  type: rw
+  pgbouncer:
+    poolMode: session
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "20"
