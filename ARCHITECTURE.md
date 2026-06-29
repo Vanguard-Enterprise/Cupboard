@@ -142,6 +142,9 @@ Tebex** at launch, others later):
   — Steam ID + product (kits, subscriptions, ranks), status, timestamps.
 - **No financial or payment PII** is ingested — only *who owns what*.
 - **Delivery stays with the provider** (PayNow executes grants on servers itself).
+- **Also ingests the product catalog** so the storefront can render on the Cupboard
+  site (see White-label sites); **checkout is delegated to the provider** (redirect /
+  embedded) — Cupboard never touches card data.
 - Use in Cupboard: enrich player profiles with customer/VIP status + purchase
   history for moderation context; surface in the dashboard.
 
@@ -149,6 +152,35 @@ Tebex** at launch, others later):
 **one-off services** (custom design, migration), via **Stripe Billing**. Standard
 SaaS billing — Cupboard is merchant-of-record for its *own* fees only. **No**
 marketplace / Connect / application-fee model; Cupboard takes no cut of store GMV.
+
+### White-label sites (Sites)
+
+Cupboard hosts each tenant's **public website and admin panel** — themeable, on
+custom domains. Rendering is **Next.js SSR, tenant-by-hostname** (request → resolve
+domain → tenant → load theme + config → render).
+
+- **Customization = curated themes + config** (not a drag-drop builder): the tenant
+  picks a theme and customizes logo/colors/content blocks/pages. Bespoke themes are a
+  **paid service** ("custom designs"). A builder may come later.
+- **On-site store pages (default on, tenant-toggleable).** The store *catalog* renders
+  on the Cupboard site, pulling products from the tenant's PayNow/Tebex via the
+  store-provider adapter. **Checkout is delegated to the provider** (redirect /
+  embedded) — Cupboard never touches card data. A tenant can disable on-site store
+  pages and rely on the provider's own pages.
+- **Player accounts (full).** Players log into the tenant site via **Steam/Discord**
+  to: browse/buy via the on-site store, view their **purchases/entitlements** (from
+  the provider), see profile/stats, file **ban appeals**, open **support tickets**,
+  and link Discord. The **admin panel stays operators/staff only.**
+
+### Custom-domain TLS (resolved)
+
+Onboarding: the tenant **points a DNS record (A/CNAME) at Cupboard's edge IP**;
+Cupboard verifies it resolves to us, then issues the cert. Issuance =
+**cert-manager HTTP-01 solved over Traefik**, one `Certificate` + IngressRoute per
+verified domain, created by the **Sites** service via the Kubernetes API. HTTP-01
+works precisely *because* the domain now points at us; Traefik's built-in ACME is the
+fallback. Rate-limit issuance and verify ownership before requesting. See
+[`docs/custom-domain-tls.md`](docs/custom-domain-tls.md).
 
 ### Panel connections (Fleet)
 
@@ -327,10 +359,9 @@ Cupboard/
 
 ## 8. Open design problems
 
-- **TLS for arbitrary tenant custom domains** — the existing cert-manager only does
-  DNS-01 wildcards for Cloudflare-owned zones; there is no mechanism for domains we
-  don't control. This is a core white-label requirement. See
-  [`docs/custom-domain-tls.md`](docs/custom-domain-tls.md).
+- ~~TLS for arbitrary tenant custom domains~~ — **resolved**: cert-manager HTTP-01
+  over Traefik, per-domain, tenant points DNS at our edge (see §6 Custom-domain TLS /
+  `docs/custom-domain-tls.md`).
 - **Identity store isolation** — Identity is the heavy write path; it may need its
   own CNPG cluster (split from the shared one) before/at launch depending on volume.
 - **Mimir cardinality** — perf metrics are per-tenant/per-server/per-plugin; keep
@@ -363,4 +394,7 @@ Cupboard/
 | 22 | BM import is **maximal within the tenant's own access** (default-all: own org + subscribed shared lists; subset-selectable). No access beyond the token (no scraping). | accepted | "More data wins" growth strategy, kept legitimate by bounding to the tenant's authorization. Privacy deferred by choice (see #16 caveat). |
 | 23 | **No Cupboard-built commerce/payments** — player payments via external store providers (**PayNow + Tebex** at launch; adapter for others later); Cupboard ingests entitlement metadata only (Steam ID + product), no payment PII; delivery stays with provider | accepted | Sidesteps merchant-of-record / money-transmitter burden; PayNow/Tebex already solve game-store monetization. |
 | 24 | **Cupboard revenue = subscription tiers + one-off services** via Stripe Billing (own fees only, no GMV cut) | accepted | Simple SaaS billing; no marketplace compliance. |
-| 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
+| 25 | White-label sites = **curated themes + config** (not a builder); Next.js SSR tenant-by-hostname; bespoke themes = paid service | accepted | Far less to build than a builder; fits the "custom designs" revenue line. |
+| 26 | **Full player accounts** on tenant sites (Steam/Discord): store browse/buy, view entitlements, profile/stats, appeals, support, link Discord. Admin panel stays operator-only. | accepted | Players need login for appeals/support/entitlements; checkout still provider-side. |
+| 27 | **On-site store pages** (default on, tenant-toggleable): catalog rendered on the Cupboard site from PayNow/Tebex; **checkout delegated to provider** | accepted | Keeps storefront UX on-platform while payments stay with the provider (no MoR). |
+| 11 | Tenant custom-domain TLS → **cert-manager HTTP-01 over Traefik**, per-domain via the Sites service; tenant points DNS (A/CNAME) at our edge | accepted | DNS-points-at-us enables HTTP-01; reuses the existing cert-manager/Traefik toolchain. |

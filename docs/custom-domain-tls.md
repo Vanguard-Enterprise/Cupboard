@@ -1,6 +1,8 @@
 # Open design problem: TLS for tenant custom domains
 
-**Status:** open — needs a decision before the white-label storefront/admin hosting ships.
+**Status:** ✅ **resolved** — Option A (cert-manager HTTP-01 over Traefik, per-domain
+certs created by the Sites service). Tenants point a DNS record at our edge so the
+HTTP-01 challenge resolves to us. Rationale below; the options remain for context.
 
 ## The requirement
 
