@@ -195,6 +195,43 @@ data architecture):
   get a real privacy/DPA review before onboarding EU networks (SCCs for the US
   cluster; an EU region likely later). On the checklist, not a blocker.
 
+### Link detection (global, automatic, advisory)
+
+Link detection is **fully automatic** — no human curates the global graph (one org
+must not shape a graph other tenants depend on). Cupboard computes candidate links
+from signals, each contributing a weighted **confidence score**:
+
+| Signal | Strength | Notes |
+|---|---|---|
+| Steam owner / family-share ID | **strong** | The account that owns the game; classic family-share alt. Plugin-captured. |
+| EAC / other game IDs | **strong** | Anti-cheat identifier tied to machine/account. Plugin-captured. |
+| Shared IP | medium | Down-weighted — CGNAT / shared houses / VPN cause false positives. |
+| Name / behavioral | weak | Hint only, never decisive. |
+
+Links are **advisory, not auto-enforcing** — since bans are identifier-level (below),
+a false-positive link never auto-bans anyone; it only drives evasion alerts.
+
+### Manual links (per-org, private)
+
+Orgs can assert their **own** links (tenant-scoped, private), typically in the
+course of banning/moderation. These do **not** enter the global graph and don't
+affect other tenants (they can be shared via opt-in pools, like other moderation).
+
+### Bans & evasion handling
+
+- **Bans target a specific identifier** (Steam ID hash), not the whole player —
+  precise, avoids over-banning off a bad link.
+- **Scope options at the network level** — a ban can apply network-wide (all the
+  tenant's servers) or per-server; pool-shared bans layer on via opt-in pools.
+- **Evasion = alert, not auto-ban.** When a new identifier that is *linked* (global
+  auto-graph **or** the org's own manual links) to a currently-banned identifier
+  appears on the network, the default is to **alert the operator and/or flag the
+  player for manual inspection** — a human decides whether to ban the alt. This
+  response is **operator-configurable at the network level** (alert / flag /
+  stricter orgs may opt into auto-action).
+- **Enforcement** reaches servers via the plugin (sync ban list, block on connect)
+  or RCON `banid` fallback, per the operator's enabled ingestion mechanisms.
+
 ## 6. Deployment & infra (reuses the `v-deployments` GitOps cluster)
 
 Target: the Talos k8s cluster (`use1`), managed by **ArgoCD app-of-apps + Kustomize**.
@@ -263,4 +300,7 @@ Cupboard/
 | 14 | **Global** canonical **Cupboard Player ID** (surrogate, not Steam ID); identifiers as attributes; merge/split | accepted | Dedup + perf + cross-network alt detection; surrogate key enables clean GDPR erasure. Trade-off: makes Cupboard a controller of the identity graph. |
 | 15 | **Two-layer model**: global identity/alt graph + per-tenant private moderation (shared via opt-in pools) | accepted | Reconciles the global ID with tenants not auto-exposing their bans. Supersedes the earlier "opt-in pools only" for the identity layer. |
 | 16 | **Compliance schema hygiene now**, legal paperwork pre-launch | accepted | PII/enforcement separation, soft-delete, retention, export, audit — cheap now, brutal to retrofit. Global graph raises controller risk → privacy review before EU onboarding. |
+| 17 | Link detection **fully automatic** + confidence-scored (owner ID/EAC strong, IP medium, name weak); links **advisory** | accepted | No cross-tenant human curation of the global graph; identifier-level bans mean a false-positive link never auto-bans. |
+| 18 | **Per-org manual links** (private, tenant-scoped, ban-context) | accepted | Orgs assert their own associations without polluting the global graph. |
+| 19 | **Identifier-level bans** (network/per-server scope); **evasion → alert/flag for manual inspection**, operator-configurable | accepted | Precise bans, no over-banning; catch evaders via linked-alt alerts rather than auto-banning alts. |
 | 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
