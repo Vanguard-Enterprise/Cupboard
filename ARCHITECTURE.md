@@ -145,7 +145,57 @@ Fleet is a **multi-panel integration layer**:
   one Vault entry per tenant — there are hundreds of tenants supplying secrets at
   runtime.
 
-## 5. Deployment & infra (reuses the `v-deployments` GitOps cluster)
+## 5. Multi-tenancy, identity & compliance
+
+### Tenant isolation
+
+Shared Postgres; every tenant-scoped table carries **`tenant_id`**, enforced by
+**Postgres Row-Level Security (RLS)**. Standard SaaS approach — scales to thousands
+of tenants, one schema, simplest ops.
+
+### Two-layer data model: global identity, per-tenant moderation
+
+- **Global identity layer (deduped, canonical).** A real player is represented
+  **once, platform-wide**, by an opaque **Cupboard Player ID** (surrogate — *not*
+  the Steam ID). It owns many **identifiers** (Steam ID, Steam owner/family-share
+  ID, EAC ID, IP, Discord), each with first/last-seen + confidence, plus the
+  **links** between identities (alt detection). Global → no per-tenant duplicate
+  player rows, better performance, and cross-network alt detection out of the box.
+  - **Merge/split**: confirming an alt repoints identifiers onto one Cupboard Player
+    ID; a bad match (family share, shared PC) can be un-merged. The surrogate key
+    makes this cheap; merges are fully audited.
+- **Per-tenant layer (RLS-isolated, private by default).** Each tenant's servers,
+  observations, **bans**, notes, flags, store, staff, and site. Moderation data is
+  private and shared with other tenants only through **opt-in sharing pools**
+  (alliances).
+
+Net: **shared identity/alt graph, private moderation.** Tenants benefit from
+platform-wide alt detection but never auto-expose their ban lists.
+
+### Canonical key
+
+**Cupboard Player ID = global opaque surrogate** (ULID/UUID internally; short
+public display ID, BM-style). Steam ID is the most important *identifier*, never the
+primary key. URLs, API, and audit all reference the Cupboard Player ID.
+
+### Compliance design (schema hygiene now; legal paperwork is a pre-launch checklist)
+
+The full legal apparatus is **not** a launch blocker, but the schema-level hygiene
+is built in from day one (cheap now, brutal to retrofit — and it doubles as clean
+data architecture):
+
+- **PII vs enforcement-key separation** — bans key off a **salted hash of the Steam
+  ID**, stored apart from the linkable profile, so a player's PII can be erased
+  while the ban still blocks them.
+- **Soft-delete + retention/purge worker** — raw IP/session data has retention
+  windows; a scheduled job purges past them.
+- **Per-player data export** and an **audit log** of access/changes.
+- **Data minimization** — combat logs off by default; collect only what's needed.
+- ⚠️ A global identity graph makes Cupboard a **controller** of cross-network PII —
+  get a real privacy/DPA review before onboarding EU networks (SCCs for the US
+  cluster; an EU region likely later). On the checklist, not a blocker.
+
+## 6. Deployment & infra (reuses the `v-deployments` GitOps cluster)
 
 Target: the Talos k8s cluster (`use1`), managed by **ArgoCD app-of-apps + Kustomize**.
 Cupboard's k8s manifests live in `v-deployments` (not this repo); this repo holds
@@ -163,7 +213,7 @@ source + container builds. Clone the **rustlens** overlay skeleton as the templa
 | Storage | Longhorn (default StorageClass) |
 | RBAC | add a RoleBinding per new namespace in `cluster-rbac` |
 
-## 6. Repository layout (this repo)
+## 7. Repository layout (this repo)
 
 ```
 Cupboard/
@@ -183,7 +233,7 @@ Cupboard/
   ARCHITECTURE.md
 ```
 
-## 7. Open design problems
+## 8. Open design problems
 
 - **TLS for arbitrary tenant custom domains** — the existing cert-manager only does
   DNS-01 wildcards for Cloudflare-owned zones; there is no mechanism for domains we
@@ -194,7 +244,7 @@ Cupboard/
 - **Mimir cardinality** — perf metrics are per-tenant/per-server/per-plugin; keep
   label cardinality disciplined (see `v-deployments` `alloy-metrics/CARDINALITY.md`).
 
-## 8. Decision log
+## 9. Decision log
 
 | # | Decision | Status | Why |
 |---|---|---|---|
@@ -209,4 +259,8 @@ Cupboard/
 | 9 | **Discord bot in TS** (not Rust) | accepted | Bot is mostly an API client; discord.js is high-velocity and low-risk. |
 | 10 | Add **cluster capacity before launch** | accepted | 500 servers / 100k users / white-label hosting needs more than the current memory-bound 3-node cluster. |
 | 12 | **Hybrid ingestion**, operator-selectable: RCON/A2S + Oxide-Carbon gameplay plugin + Harmony perf mod | accepted | Operators choose per server; RCON = zero-install baseline, plugin = rich identity/moderation/entitlements, Harmony mod = low-overhead perf (RustServerMetrics-style). Plugin/mod are new game-server-side repos. |
+| 13 | **RLS** row-level `tenant_id` isolation in shared Postgres | accepted | Standard SaaS approach; scales to thousands of tenants; fits shared-Postgres/coarse-deploy. |
+| 14 | **Global** canonical **Cupboard Player ID** (surrogate, not Steam ID); identifiers as attributes; merge/split | accepted | Dedup + perf + cross-network alt detection; surrogate key enables clean GDPR erasure. Trade-off: makes Cupboard a controller of the identity graph. |
+| 15 | **Two-layer model**: global identity/alt graph + per-tenant private moderation (shared via opt-in pools) | accepted | Reconciles the global ID with tenants not auto-exposing their bans. Supersedes the earlier "opt-in pools only" for the identity layer. |
+| 16 | **Compliance schema hygiene now**, legal paperwork pre-launch | accepted | PII/enforcement separation, soft-delete, retention, export, audit — cheap now, brutal to retrofit. Global graph raises controller risk → privacy review before EU onboarding. |
 | 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
