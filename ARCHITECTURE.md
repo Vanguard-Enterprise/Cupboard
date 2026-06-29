@@ -232,6 +232,37 @@ affect other tenants (they can be shared via opt-in pools, like other moderation
 - **Enforcement** reaches servers via the plugin (sync ban list, block on connect)
   or RCON `banid` fallback, per the operator's enabled ingestion mechanisms.
 
+### BattleMetrics import & sync
+
+Migration wedge — "bring your whole BM history, lose nothing." Works through BM's
+REST API with the tenant's own API token, as a **background job** (queued,
+resumable, rate-limit-aware — not synchronous).
+
+**Imported (tenant's own org):** bans + ban lists, players + identifiers (matched
+into the global graph by Steam ID), notes + flags, servers + RCON config.
+
+**Sync model: two-way *where BM's API allows*.**
+- **Bans** — bidirectional (BM supports ban create/update via API).
+- **Notes, flags, players, servers** — one-way BM→Cupboard (BM's API doesn't expose
+  these for write).
+- Mechanics: each synced record carries `origin` + BM `external_id` + `updated_at` +
+  content hash; **echo guard** skips changes we just wrote; **last-write-wins by
+  timestamp** with a conflict log.
+- ⚠️ "Two-way" is therefore *partial*, bounded by BM's writable surface.
+
+**Cross-org data sourcing — consensual paths only:**
+- **Own-org import** — the tenant's own token. Consensual.
+- **Shared/subscribed BM ban lists** — lists a tenant *already subscribes to* on BM
+  (the publisher chose to share). This is the legitimate "leverage other orgs'
+  cheater data" path — the main cross-org value.
+- **Partner authorization / Cupboard opt-in pools** — a partner explicitly
+  authorizes access, or shares forward via pools.
+- **Out of scope:** harvesting other orgs' *private* BM data or scraping BM web
+  pages — ToS + PII/legal risk; not built.
+
+Cupboard's own global identity graph + opt-in pools are the long-term cross-network
+moat, sourced from consented data.
+
 ## 6. Deployment & infra (reuses the `v-deployments` GitOps cluster)
 
 Target: the Talos k8s cluster (`use1`), managed by **ArgoCD app-of-apps + Kustomize**.
@@ -303,4 +334,7 @@ Cupboard/
 | 17 | Link detection **fully automatic** + confidence-scored (owner ID/EAC strong, IP medium, name weak); links **advisory** | accepted | No cross-tenant human curation of the global graph; identifier-level bans mean a false-positive link never auto-bans. |
 | 18 | **Per-org manual links** (private, tenant-scoped, ban-context) | accepted | Orgs assert their own associations without polluting the global graph. |
 | 19 | **Identifier-level bans** (network/per-server scope); **evasion → alert/flag for manual inspection**, operator-configurable | accepted | Precise bans, no over-banning; catch evaders via linked-alt alerts rather than auto-banning alts. |
+| 20 | BM import scope: bans, players+identifiers, notes+flags, servers+RCON (own org, tenant token; queued/resumable) | accepted | Full migration; lose nothing. |
+| 21 | BM sync **two-way where BM's API allows** (bans bidirectional; notes/flags/players/servers one-way BM→Cupboard); origin tracking + LWW conflict resolution | accepted | User chose two-way; necessarily partial, bounded by BM's writable surface. |
+| 22 | Cross-org data only via **consensual** paths (own import, subscribed shared ban lists, partner auth, pools); **no scraping of private/other-org data** | proposed | Non-consensual access = ToS/legal/PII risk. Legit value = shared ban lists + pools. Confirming the real target is shared ban lists. |
 | 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
