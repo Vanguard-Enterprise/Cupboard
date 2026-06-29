@@ -9,9 +9,8 @@ pub struct Config {
     pub database_url: String,
     pub db_max_connections: u32,
     pub environment: String,
-    /// OTLP endpoint for the cluster's alloy-receiver (consumed when the telemetry
-    /// second pass wires trace export; read now so config is stable).
-    #[allow(dead_code)]
+    /// OTLP/gRPC endpoint for the cluster's alloy-receiver (e.g.
+    /// `http://alloy-receiver…:4317`). When unset, telemetry stays logs-only.
     pub otel_endpoint: Option<String>,
 }
 

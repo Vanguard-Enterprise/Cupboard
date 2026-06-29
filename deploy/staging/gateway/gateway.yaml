@@ -11,8 +11,10 @@ metadata:
 data:
   BIND_ADDR: "0.0.0.0:8080"
   ENVIRONMENT: "staging"
+  # tower_http span is emitted at INFO so it survives the filter and exports as a trace.
   RUST_LOG: "info,sqlx=warn,tower_http=info"
-  # Observability → cluster alloy-receiver (consumed when trace export is wired).
+  # Observability → cluster alloy-receiver. Presence of OTEL_EXPORTER_OTLP_ENDPOINT
+  # switches the app from logs-only to logs + OTLP traces + OTLP metrics (gRPC :4317).
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy-receiver.alloy-receiver.svc.cluster.local:4317"
   OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
   OTEL_SERVICE_NAME: "cupboard-gateway"

@@ -32,6 +32,15 @@ serde_json = "1"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# OpenTelemetry — pinned 0.32 matrix (tracing-opentelemetry 0.33 → otel 0.32).
+# Bump these together; they share a tightly-coupled internal API. gRPC export to
+# the cluster's alloy-receiver is plaintext in-cluster, so no TLS feature.
+opentelemetry = "0.32"
+opentelemetry_sdk = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+    "grpc-tonic", "trace", "metrics",
+] }
+tracing-opentelemetry = "0.33"
 
 # Errors / utils
 anyhow = "1"
