@@ -16,8 +16,8 @@ everything to us. It spans:
   and generate **performance recommendation tips**.
 - **Player tracking & moderation** — BattleMetrics-style player / IP / alt tracking,
   bans, audit; **import from BattleMetrics with optional continuous sync**.
-- **Commerce** — integrate the tenant's **external store provider** (PayNow at
-  launch; Tebex/others later); ingest purchase/entitlement data only (no payment
+- **Commerce** — integrate the tenant's **external store provider** (PayNow **and**
+  Tebex at launch; others later); ingest purchase/entitlement data only (no payment
   handling — delivery to servers stays with the provider).
 - **Support** — ticketing via the tenant's website *and* via Discord.
 - **White-label hosting** — we host each tenant's storefront *and* admin panel,
@@ -78,7 +78,7 @@ deployed as an independently-scalable unit.
 | **collector** | Connection-heavy ingestion: RCON, metric polling, player/event firehose → publishes to Redis Streams | **horizontally shardable — the one we scale independently** |
 | **identity** | Player tracking, IP/alt linking graph, bans, audit, BM import + continuous sync | heavy write path |
 | **metrics** | Perf time-series (to Mimir) + recommendation engine | read/compute heavy |
-| **tenant** | Commerce (external store integration: PayNow now, Tebex/others later — ingest entitlements, *no* payment handling) + Sites (white-label builder, themes, domains) + Support (tickets) — split later | medium |
+| **tenant** | Commerce (external store integration: PayNow + Tebex at launch, others later — ingest entitlements, *no* payment handling) + Sites (white-label builder, themes, domains) + Support (tickets) — split later | medium |
 
 Non-Rust: **bot** (TS / discord.js), **web** (Next.js).
 
@@ -134,8 +134,8 @@ plugins — *not* in this backend repo):
 
 **Cupboard does not process player payments.** Player→tenant store sales are handled
 entirely by the tenant's **external store provider** (PayNow at launch). Cupboard
-integrates via a **store-provider adapter** (mirrors the panel adapter — PayNow now,
-**Tebex** / others later):
+integrates via a **store-provider adapter** (mirrors the panel adapter — **PayNow +
+Tebex** at launch, others later):
 
 - Tenant connects their provider account.
 - Cupboard ingests **entitlement/purchase metadata** via the provider's API/webhooks
@@ -361,6 +361,6 @@ Cupboard/
 | 20 | BM import scope: bans, players+identifiers, notes+flags, servers+RCON (own org, tenant token; queued/resumable) | accepted | Full migration; lose nothing. |
 | 21 | BM sync **two-way where BM's API allows** (bans bidirectional; notes/flags/players/servers one-way BM→Cupboard); origin tracking + LWW conflict resolution | accepted | User chose two-way; necessarily partial, bounded by BM's writable surface. |
 | 22 | BM import is **maximal within the tenant's own access** (default-all: own org + subscribed shared lists; subset-selectable). No access beyond the token (no scraping). | accepted | "More data wins" growth strategy, kept legitimate by bounding to the tenant's authorization. Privacy deferred by choice (see #16 caveat). |
-| 23 | **No Cupboard-built commerce/payments** — player payments via external store providers (**PayNow** launch; adapter for **Tebex**/others later); Cupboard ingests entitlement metadata only (Steam ID + product), no payment PII; delivery stays with provider | accepted | Sidesteps merchant-of-record / money-transmitter burden; PayNow/Tebex already solve game-store monetization. |
+| 23 | **No Cupboard-built commerce/payments** — player payments via external store providers (**PayNow + Tebex** at launch; adapter for others later); Cupboard ingests entitlement metadata only (Steam ID + product), no payment PII; delivery stays with provider | accepted | Sidesteps merchant-of-record / money-transmitter burden; PayNow/Tebex already solve game-store monetization. |
 | 24 | **Cupboard revenue = subscription tiers + one-off services** via Stripe Billing (own fees only, no GMV cut) | accepted | Simple SaaS billing; no marketplace compliance. |
 | 11 | Tenant custom-domain TLS | **open** | No existing mechanism for non-CF-owned domains. See docs/custom-domain-tls.md. |
