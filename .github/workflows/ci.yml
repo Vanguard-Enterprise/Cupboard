@@ -13,17 +13,39 @@ env:
 jobs:
   lint-test:
     runs-on: ubuntu-latest   # swap to a self-hosted `vanguard-ci-runners` label if preferred
+    services:
+      # Postgres for the RLS integration test. POSTGRES_USER is the superuser, used as
+      # the migration/owner role; a non-owner `cupboard_app` role is created below so the
+      # tenant-isolation test exercises RLS for real.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cupboard
+          POSTGRES_PASSWORD: cupboard
+          POSTGRES_DB: cupboard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cupboard"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Create non-owner app role (cupboard_app) for the RLS test
+        run: |
+          PGPASSWORD=cupboard psql -h localhost -U cupboard -d cupboard_test \
+            -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='cupboard_app') THEN CREATE ROLE cupboard_app LOGIN PASSWORD 'cupboard_app'; END IF; END \$\$;"
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
+        env:
+          TEST_DATABASE_URL: postgres://cupboard:cupboard@localhost:5432/cupboard_test
+          TEST_DATABASE_URL_APP: postgres://cupboard_app:cupboard_app@localhost:5432/cupboard_test
         run: cargo test --workspace
 
   build-push:
@@ -35,7 +57,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [cupboard-gateway]   # add services here as they land
+        service: [cupboard-gateway, cupboard-auth]   # add services here as they land
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -54,5 +76,34 @@ jobs:
           tags: |
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:main
             ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-push-web:
+    # The Next.js dashboard has its own Node Dockerfile in apps/web (not the Rust BIN
+    # multi-stage), so it builds in a separate job.
+    needs: lint-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push cupboard-web
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/web
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/cupboard-web:main
+            ${{ env.IMAGE_PREFIX }}/cupboard-web:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

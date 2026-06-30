@@ -1,26 +1,42 @@
-//! Cupboard Gateway — the front door (Phase 0 walking skeleton).
+//! Cupboard Gateway — the front door.
 //!
-//! For now: boots telemetry, connects to Postgres, runs migrations, and serves
-//! liveness/readiness probes. Auth, tenant routing, and the public API arrive in
-//! Phase 1+.
+//! Boots telemetry + Postgres, then serves: health probes, an unauthenticated
+//! reverse-proxy of `/auth/*` to the auth service, and JWT-validated `/api/*` routes
+//! that carry the verified [`Claims`] downstream. The RBAC permission gate and real
+//! tenant data routes land in later steps/phases.
 
+mod auth;
 mod config;
-mod metrics;
+mod proxy;
 
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::{any, get},
+    Extension, Json, Router,
+};
 use config::Config;
+use cupboard_auth_core::{Claims, Keys};
+use cupboard_domain::Permission;
 use serde_json::json;
 use sqlx::PgPool;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone)]
-struct AppState {
-    pool: PgPool,
-    environment: String,
+pub(crate) struct AppState {
+    pub pool: PgPool,
+    pub environment: String,
+    /// Verify-only key set (auth holds the private signing key). `None` until the JWT
+    /// public key is configured — protected routes then fail closed (503).
+    pub keys: Option<Arc<Keys>>,
+    /// Client for reverse-proxying to the auth service.
+    pub http: reqwest::Client,
+    pub auth_service_url: String,
 }
 
 #[tokio::main]
@@ -35,18 +51,56 @@ async fn main() -> anyhow::Result<()> {
     let pool = cupboard_db::connect(&config.database_url, config.db_max_connections).await?;
     cupboard_db::run_migrations(&pool, &MIGRATOR).await?;
 
+    let keys = match config.jwt_public_key_pem.as_deref() {
+        Some(pem) => Some(Arc::new(Keys::verifier_from_ed_pem(pem)?)),
+        None => {
+            tracing::warn!(
+                "JWT_PUBLIC_KEY_PEM not set — token-protected /api routes will return 503 \
+                 until it is configured (the /auth proxy and health probes still work)"
+            );
+            None
+        }
+    };
     let state = AppState {
         pool,
         environment: config.environment.clone(),
+        keys,
+        http: reqwest::Client::builder().build()?,
+        auth_service_url: config.auth_service_url.clone(),
     };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        // Unauthenticated passthrough to the auth service (login/signup precede a token).
+        .route("/auth/{*path}", any(proxy::proxy_auth))
+        // A JWT-validated route proving front-door auth; real /api routes follow.
+        .route(
+            "/api/whoami",
+            get(whoami).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        // RBAC-gated example: requires `org.manage` in the token's active org. Demonstrates
+        // the gateway permission gate that real downstream /api routes will reuse.
+        .route(
+            "/api/admin/ping",
+            get(admin_ping)
+                // Innermost: require `org.manage` against the injected claims.
+                .layer(axum::middleware::from_fn(require_org_manage))
+                // Outermost: validate the token and inject the claims first.
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::require_auth,
+                )),
+        )
+        // `route_layer` so the metrics middleware sees the matched-path template
+        // (bounded cardinality); see `cupboard_telemetry::http`.
+        .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         // INFO-level spans so the default `info` filter keeps them and they
         // export as traces (DefaultMakeSpan is DEBUG, which the filter drops).
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
-        .layer(axum::middleware::from_fn(metrics::track))
         .with_state(state);
 
     let addr: SocketAddr = config.bind_addr.parse()?;
@@ -92,6 +146,41 @@ async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
         "service": "cupboard-gateway",
         "environment": state.environment,
     }))
+}
+
+/// A minimal JWT-protected endpoint: echoes the verified claims. Proves the gateway
+/// validates tokens and exposes the tenant/permission context to downstream handlers.
+async fn whoami(Extension(claims): Extension<Claims>) -> Json<serde_json::Value> {
+    Json(json!({
+        "user_id": claims.sub,
+        "org": claims.org,
+        "permissions": claims.perms,
+    }))
+}
+
+/// RBAC-gated demo endpoint — only reachable with `org.manage`; proves the gateway's
+/// permission gate.
+async fn admin_ping(Extension(claims): Extension<Claims>) -> Json<serde_json::Value> {
+    Json(json!({ "pong": true, "org": claims.org }))
+}
+
+/// The gateway RBAC gate for the demo route: require `org.manage` in the (already
+/// validated) claims. Real `/api/*` routes for downstream services replicate this with
+/// their own required permission.
+async fn require_org_manage(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    // Compute the decision before moving `req` into `next.run`.
+    let decision = match req.extensions().get::<Claims>() {
+        Some(claims) if claims.has_permission(Permission::OrgManage) => Ok(()),
+        Some(_) => Err(StatusCode::FORBIDDEN),
+        None => Err(StatusCode::UNAUTHORIZED),
+    };
+    match decision {
+        Ok(()) => Ok(next.run(req).await),
+        Err(status) => Err(status),
+    }
 }
 
 /// Readiness — dependencies reachable. 200 only if the database answers.

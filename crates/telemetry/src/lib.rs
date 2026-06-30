@@ -16,6 +16,8 @@
 //! OTel crate matrix is pinned to 0.32 (tracing-opentelemetry 0.33) in the
 //! workspace `Cargo.toml` — bump those together.
 
+pub mod http;
+
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig as _;

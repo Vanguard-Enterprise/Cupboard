@@ -4,7 +4,10 @@ members = [
     "crates/domain",
     "crates/telemetry",
     "crates/db",
+    "crates/crypto",
+    "crates/auth-core",
     "services/gateway",
+    "services/auth",
 ]
 
 [workspace.package]
@@ -48,10 +51,28 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# Auth / crypto
+# EdDSA (Ed25519) JWTs: auth signs, gateway verifies with the public key only.
+jsonwebtoken = "9"
+argon2 = { version = "0.5", features = ["std"] }
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+# Discord OAuth + internal HTTP (gateway → auth proxy). rustls, no native-tls.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# Signed cookies for OAuth state/PKCE (matches axum 0.8).
+# NOTE: `cookie` 0.18.1 fails to compile against `time` >= 0.3.52, while
+# `jsonwebtoken`'s `simple_asn1` requires `time` >= 0.3.47 — so `time` is pinned to
+# 0.3.51 in Cargo.lock. Don't bump `time` past 0.3.51 until `cookie` catches up.
+axum-extra = { version = "0.10", features = ["cookie", "cookie-signed", "typed-header"] }
+
 # Internal crates
 cupboard-domain = { path = "crates/domain" }
 cupboard-telemetry = { path = "crates/telemetry" }
 cupboard-db = { path = "crates/db" }
+cupboard-crypto = { path = "crates/crypto" }
+cupboard-auth-core = { path = "crates/auth-core" }
 
 [profile.release]
 opt-level = 3

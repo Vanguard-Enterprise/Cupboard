@@ -12,6 +12,14 @@ pub struct Config {
     /// OTLP/gRPC endpoint for the cluster's alloy-receiver (e.g.
     /// `http://alloy-receiver…:4317`). When unset, telemetry stays logs-only.
     pub otel_endpoint: Option<String>,
+    /// Ed25519 public key (PEM) for verifying access tokens minted by the auth service.
+    /// Optional so the gateway can roll out before the auth Vault key exists: when
+    /// absent, token-protected `/api/*` routes fail **closed** (503), while the `/auth/*`
+    /// proxy and health probes keep working.
+    pub jwt_public_key_pem: Option<String>,
+    /// Base URL of the internal auth service, for reverse-proxying `/auth/*` (ClusterIP
+    /// in-cluster; localhost in dev).
+    pub auth_service_url: String,
 }
 
 impl Config {
@@ -26,6 +34,11 @@ impl Config {
                 .unwrap_or(10),
             environment: env::var("ENVIRONMENT").unwrap_or_else(|_| "development".into()),
             otel_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            jwt_public_key_pem: env::var("JWT_PUBLIC_KEY_PEM")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            auth_service_url: env::var("AUTH_SERVICE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8081".into()),
         })
     }
 }
