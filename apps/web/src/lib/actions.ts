@@ -4,6 +4,7 @@
 // httpOnly cookies, and redirects. They return `{ error }` on failure so client forms can
 // render it via useActionState.
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
 
 export type FormState = { error?: string };
@@ -123,6 +124,98 @@ export async function createInviteAction(
   if (!res.ok) return { error: await readError(res) };
   const created = await res.json();
   return { acceptUrl: created.accept_url };
+}
+
+export type ServerFormState = { error?: string; ok?: boolean };
+
+/** Add a game-server connection (Fleet). The RCON password is sent once and stored
+ * envelope-encrypted server-side; it is never read back. */
+export async function createServerAction(
+  _prev: ServerFormState,
+  form: FormData,
+): Promise<ServerFormState> {
+  const port = Number(form.get("rcon_port"));
+  const queryPortRaw = form.get("query_port");
+  const queryPort = queryPortRaw ? Number(queryPortRaw) : null;
+  const body: Record<string, unknown> = {
+    name: form.get("name"),
+    rcon_host: form.get("rcon_host"),
+    rcon_port: Number.isFinite(port) ? port : 0,
+    rcon_password: form.get("rcon_password"),
+  };
+  if (queryPort && Number.isFinite(queryPort)) body.query_port = queryPort;
+
+  const res = await apiFetch("/fleet/servers", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/servers");
+  return { ok: true };
+}
+
+/** Remove a server connection. */
+export async function deleteServerAction(form: FormData): Promise<void> {
+  const id = form.get("server_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/fleet/servers/${id}`, { method: "DELETE" });
+    revalidatePath("/servers");
+  }
+}
+
+export type BanFormState = { error?: string; ok?: boolean };
+
+/// Create an identifier-level ban (Identity). `subject_value` is the Steam ID.
+export async function createBanAction(
+  _prev: BanFormState,
+  form: FormData,
+): Promise<BanFormState> {
+  const body: Record<string, unknown> = {
+    subject_type: "steam",
+    subject_value: form.get("subject_value"),
+    reason: form.get("reason") || null,
+    scope: "network",
+  };
+  const playerId = form.get("player_id");
+  if (typeof playerId === "string" && playerId) body.player_id = playerId;
+
+  const res = await apiFetch("/bans", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/bans");
+  return { ok: true };
+}
+
+/// Revoke an active ban.
+export async function revokeBanAction(form: FormData): Promise<void> {
+  const id = form.get("ban_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/bans/${id}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: form.get("reason") || null }),
+    });
+    revalidatePath("/bans");
+  }
+}
+
+/// Dismiss or action a ban-evasion alert.
+export async function dismissEvasionAction(form: FormData): Promise<void> {
+  await updateEvasion(form, "dismiss");
+}
+export async function actionEvasionAction(form: FormData): Promise<void> {
+  await updateEvasion(form, "action");
+}
+async function updateEvasion(form: FormData, verb: "dismiss" | "action"): Promise<void> {
+  const id = form.get("alert_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/evasion/${id}/${verb}`, { method: "POST" });
+    revalidatePath("/evasion");
+  }
 }
 
 export async function logoutAction(): Promise<void> {

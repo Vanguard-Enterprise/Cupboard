@@ -1,18 +1,50 @@
-//! Reverse-proxy for `/auth/*` → the internal auth service. These routes are
-//! unauthenticated (login/signup happen before a token exists); the gateway forwards
-//! method, path, query, headers, and body unchanged. Auth bodies are tiny, so the body
-//! is buffered rather than streamed.
+//! Reverse-proxy from the gateway to internal services. `/auth/*` is unauthenticated
+//! (login/signup precede a token); `/fleet/*` sits behind the JWT gate but the downstream
+//! service re-validates the forwarded bearer token and enforces its own RBAC. In all
+//! cases the gateway forwards method, path, query, headers, and body unchanged. Bodies
+//! are small, so they're buffered rather than streamed.
 
 use crate::AppState;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, Response, StatusCode};
 
-/// Max proxied body size (1 MiB) — auth payloads are small; this caps abuse.
+/// Max proxied body size (1 MiB) — API payloads are small; this caps abuse.
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 
+/// Reverse-proxy `/auth/*` to the auth service (unauthenticated passthrough).
 pub async fn proxy_auth(
     State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.auth_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
+/// Reverse-proxy `/fleet/*` to the fleet service. The `require_auth` layer validates the
+/// token first; fleet re-validates it and enforces `servers.*` permissions.
+pub async fn proxy_fleet(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.fleet_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
+/// Reverse-proxy `/players/*` to the identity service. Auth-gated; identity re-validates
+/// the token and enforces `players.*` permissions (including PII gating).
+pub async fn proxy_identity(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.identity_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
+/// Shared reverse-proxy: forward the request to `base_url` + original path/query.
+async fn proxy_to(
+    base_url: &str,
+    state: AppState,
     req: Request<Body>,
 ) -> Result<Response<Body>, StatusCode> {
     let path = req.uri().path();
@@ -21,12 +53,7 @@ pub async fn proxy_auth(
         .query()
         .map(|q| format!("?{q}"))
         .unwrap_or_default();
-    let url = format!(
-        "{}{}{}",
-        state.auth_service_url.trim_end_matches('/'),
-        path,
-        query
-    );
+    let url = format!("{}{}{}", base_url.trim_end_matches('/'), path, query);
 
     let method = req.method().clone();
     // Drop hop-by-hop / length headers; reqwest sets its own.
@@ -47,7 +74,7 @@ pub async fn proxy_auth(
         .send()
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, %url, "auth proxy upstream request failed");
+            tracing::error!(error = %e, %url, "proxy upstream request failed");
             StatusCode::BAD_GATEWAY
         })?;
 

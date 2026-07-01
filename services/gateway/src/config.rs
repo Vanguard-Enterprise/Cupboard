@@ -20,6 +20,10 @@ pub struct Config {
     /// Base URL of the internal auth service, for reverse-proxying `/auth/*` (ClusterIP
     /// in-cluster; localhost in dev).
     pub auth_service_url: String,
+    /// Base URL of the internal fleet service, for reverse-proxying `/fleet/*`.
+    pub fleet_service_url: String,
+    /// Base URL of the internal identity service, for reverse-proxying `/players/*`.
+    pub identity_service_url: String,
 }
 
 impl Config {
@@ -39,6 +43,10 @@ impl Config {
                 .filter(|s| !s.is_empty()),
             auth_service_url: env::var("AUTH_SERVICE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8081".into()),
+            fleet_service_url: env::var("FLEET_SERVICE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8082".into()),
+            identity_service_url: env::var("IDENTITY_SERVICE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8083".into()),
         })
     }
 }

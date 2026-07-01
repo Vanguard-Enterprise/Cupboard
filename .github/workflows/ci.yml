@@ -18,7 +18,9 @@ jobs:
       # the migration/owner role; a non-owner `cupboard_app` role is created below so the
       # tenant-isolation test exercises RLS for real.
       postgres:
-        image: postgres:16
+        # Match prod/staging CNPG (PG18) so uuidv7() and other version-gated features
+        # used by the Phase 2 identity schema behave identically in CI.
+        image: postgres:18
         env:
           POSTGRES_USER: cupboard
           POSTGRES_PASSWORD: cupboard
@@ -57,7 +59,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [cupboard-gateway, cupboard-auth]   # add services here as they land
+        service: [cupboard-gateway, cupboard-auth, cupboard-fleet, cupboard-collector, cupboard-identity]   # add services here as they land
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

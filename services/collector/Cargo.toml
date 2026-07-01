@@ -1,0 +1,27 @@
+[package]
+name = "cupboard-collector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cupboard-collector"
+path = "src/main.rs"
+
+[dependencies]
+cupboard-domain.workspace = true
+cupboard-telemetry.workspace = true
+cupboard-bus.workspace = true
+cupboard-gameconn.workspace = true
+
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true

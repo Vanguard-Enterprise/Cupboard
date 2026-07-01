@@ -7,6 +7,9 @@
 mod permission;
 pub use permission::{Permission, RoleTemplate, DEFAULT_ROLE_TEMPLATES};
 
+pub mod events;
+pub use events::{ObservedPlayer, RosterEvent, ROSTER_STREAM};
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -56,6 +59,17 @@ uuid_newtype! {
     /// The canonical, global Cupboard player identity (a surrogate key — *not* a Steam
     /// ID). See `docs/identity-schema.md`.
     PlayerId
+}
+
+uuid_newtype! {
+    /// A game server connection owned by a tenant (Fleet). Scopes sessions/bans on the
+    /// data path and identifies a server to the Collector.
+    ServerId
+}
+
+uuid_newtype! {
+    /// An identifier-level ban (Identity & Moderation). Per-tenant.
+    BanId
 }
 
 uuid_newtype! {
