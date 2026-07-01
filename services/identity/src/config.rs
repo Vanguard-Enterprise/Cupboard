@@ -25,6 +25,10 @@ pub struct Config {
     pub redis_url: String,
     /// This consumer's name within the `identity` group (unique per replica).
     pub consumer_name: String,
+
+    /// Shared secret the Collector presents (`X-Internal-Token`) to `/internal/*` (the
+    /// connect-time ban enforcement lookup). `None` disables those endpoints (fail closed).
+    pub internal_api_token: Option<String>,
 }
 
 impl Config {
@@ -61,6 +65,9 @@ impl Config {
             consumer_name: env::var("CONSUMER_NAME")
                 .or_else(|_| env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "identity-1".into()),
+            internal_api_token: env::var("INTERNAL_API_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }

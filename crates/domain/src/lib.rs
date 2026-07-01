@@ -68,6 +68,11 @@ uuid_newtype! {
 }
 
 uuid_newtype! {
+    /// An identifier-level ban (Identity & Moderation). Per-tenant.
+    BanId
+}
+
+uuid_newtype! {
     /// An operator/staff account that logs into the admin dashboard. Global — a single
     /// user may be a member of several organizations.
     UserId

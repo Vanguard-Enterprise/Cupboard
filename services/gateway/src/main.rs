@@ -103,6 +103,21 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // Bans (identity service): list/create + revoke.
+        .route(
+            "/bans",
+            any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/bans/{*path}",
+            any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // A JWT-validated route proving front-door auth; real /api routes follow.
         .route(
             "/api/whoami",

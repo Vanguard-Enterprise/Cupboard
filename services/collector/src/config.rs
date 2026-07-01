@@ -14,7 +14,9 @@ pub struct Config {
 
     /// Base URL of the fleet service's cluster-internal API (config feed + status).
     pub fleet_internal_url: String,
-    /// Shared secret presented to fleet's `/internal/*` endpoints.
+    /// Base URL of the identity service's cluster-internal API (ban enforcement lookup).
+    pub identity_internal_url: String,
+    /// Shared secret presented to fleet's + identity's `/internal/*` endpoints.
     pub internal_api_token: String,
 
     /// How often to poll each server's roster (`playerlist`).
@@ -33,6 +35,8 @@ impl Config {
                 .map_err(|_| anyhow::anyhow!("REDIS_URL is required"))?,
             fleet_internal_url: env::var("FLEET_INTERNAL_URL")
                 .map_err(|_| anyhow::anyhow!("FLEET_INTERNAL_URL is required"))?,
+            identity_internal_url: env::var("IDENTITY_INTERNAL_URL")
+                .map_err(|_| anyhow::anyhow!("IDENTITY_INTERNAL_URL is required"))?,
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .map_err(|_| anyhow::anyhow!("INTERNAL_API_TOKEN is required"))?,
             poll_interval_secs: env::var("POLL_INTERVAL_SECS")

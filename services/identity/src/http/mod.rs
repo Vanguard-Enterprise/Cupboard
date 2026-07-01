@@ -1,5 +1,7 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
+mod bans;
+mod internal;
 mod players;
 
 use crate::error::AppError;
@@ -22,6 +24,11 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(readyz))
         .route("/players", get(players::list))
         .route("/players/{id}", get(players::get))
+        // Bans (tenant-scoped, JWT + RBAC).
+        .route("/bans", get(bans::list).post(bans::create))
+        .route("/bans/{id}/revoke", axum::routing::post(bans::revoke))
+        // Cluster-internal enforcement lookup for the Collector (token-guarded).
+        .route("/internal/enforce", axum::routing::post(internal::enforce))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
         .with_state(state)

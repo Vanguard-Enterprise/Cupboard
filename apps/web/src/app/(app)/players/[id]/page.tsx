@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
+import { BanForm } from "../../bans/ban-form";
 
 type Profile = {
   player: {
@@ -42,6 +43,8 @@ export default async function PlayerProfilePage({
     return <p className="text-sm text-red-400">Failed to load player.</p>;
   }
   const profile: Profile = await res.json();
+  const steamId = profile.identifiers.find((i) => i.type === "steam")?.value ?? null;
+  const canBan = can(session.permissions, Permission.BansCreate);
 
   return (
     <div className="flex flex-col gap-8">
@@ -59,6 +62,13 @@ export default async function PlayerProfilePage({
             : "—"}
         </p>
       </div>
+
+      {canBan && steamId && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Ban this player</h2>
+          <BanForm subjectValue={steamId} playerId={profile.player.id} label="Ban player" />
+        </section>
+      )}
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-300">Identifiers</h2>

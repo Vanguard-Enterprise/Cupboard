@@ -164,6 +164,45 @@ export async function deleteServerAction(form: FormData): Promise<void> {
   }
 }
 
+export type BanFormState = { error?: string; ok?: boolean };
+
+/// Create an identifier-level ban (Identity). `subject_value` is the Steam ID.
+export async function createBanAction(
+  _prev: BanFormState,
+  form: FormData,
+): Promise<BanFormState> {
+  const body: Record<string, unknown> = {
+    subject_type: "steam",
+    subject_value: form.get("subject_value"),
+    reason: form.get("reason") || null,
+    scope: "network",
+  };
+  const playerId = form.get("player_id");
+  if (typeof playerId === "string" && playerId) body.player_id = playerId;
+
+  const res = await apiFetch("/bans", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/bans");
+  return { ok: true };
+}
+
+/// Revoke an active ban.
+export async function revokeBanAction(form: FormData): Promise<void> {
+  const id = form.get("ban_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/bans/${id}/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: form.get("reason") || null }),
+    });
+    revalidatePath("/bans");
+  }
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

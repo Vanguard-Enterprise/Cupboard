@@ -40,6 +40,7 @@ struct Running {
 /// Reconcile loop; runs until aborted.
 pub async fn run(
     fleet: FleetClient,
+    identity: crate::identity_client::IdentityClient,
     bus: Bus,
     poll_interval: Duration,
     reconcile_interval: Duration,
@@ -83,6 +84,7 @@ pub async fn run(
                     config.clone(),
                     bus.clone(),
                     fleet.clone(),
+                    identity.clone(),
                     poll_interval,
                 ));
                 running.insert(*id, Running { handle, key });

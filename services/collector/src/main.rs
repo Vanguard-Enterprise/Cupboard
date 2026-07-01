@@ -7,6 +7,7 @@
 
 mod config;
 mod fleet_client;
+mod identity_client;
 mod manager;
 mod mapping;
 mod rcon_task;
@@ -21,6 +22,7 @@ use axum::{Json, Router};
 use config::Config;
 use cupboard_bus::Bus;
 use fleet_client::FleetClient;
+use identity_client::IdentityClient;
 use serde_json::json;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
@@ -41,15 +43,22 @@ async fn main() -> anyhow::Result<()> {
     // Bus connection for producers (XADD only) — cloned into each per-server task.
     let bus = Bus::connect(&config.redis_url).await?;
 
+    let http = reqwest::Client::builder().build()?;
     let fleet = FleetClient::new(
-        reqwest::Client::builder().build()?,
+        http.clone(),
         config.fleet_internal_url.clone(),
+        config.internal_api_token.clone(),
+    );
+    let identity = IdentityClient::new(
+        http,
+        config.identity_internal_url.clone(),
         config.internal_api_token.clone(),
     );
 
     // Supervisor: reconciles per-server RCON connections against fleet's config feed.
     let manager = tokio::spawn(manager::run(
         fleet,
+        identity,
         bus,
         Duration::from_secs(config.poll_interval_secs),
         Duration::from_secs(config.reconcile_interval_secs),
