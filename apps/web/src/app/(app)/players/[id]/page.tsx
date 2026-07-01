@@ -20,6 +20,12 @@ type Profile = {
     connected_at: string;
     disconnected_at: string | null;
   }[];
+  links: {
+    other_player_id: string;
+    other_display_id: number;
+    confidence: number;
+    signals: string;
+  }[];
 };
 
 export default async function PlayerProfilePage({
@@ -127,6 +133,41 @@ export default async function PlayerProfilePage({
           </table>
         </div>
       </section>
+
+      {profile.links.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Linked players (possible alts)</h2>
+          <div className="overflow-hidden rounded border border-neutral-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-neutral-900 text-neutral-400">
+                <tr>
+                  <th className="px-3 py-2">Player</th>
+                  <th className="px-3 py-2">Confidence</th>
+                  <th className="px-3 py-2">Shared signals</th>
+                </tr>
+              </thead>
+              <tbody>
+                {profile.links.map((l) => (
+                  <tr key={l.other_player_id} className="border-t border-neutral-800">
+                    <td className="px-3 py-2">
+                      <Link
+                        href={`/players/${l.other_player_id}`}
+                        className="text-indigo-400 hover:text-indigo-300"
+                      >
+                        Player #{l.other_display_id}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-neutral-400">
+                      {Math.round(l.confidence * 100)}%
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-neutral-500">{l.signals}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {profile.names.length > 1 && (
         <section className="flex flex-col gap-2">

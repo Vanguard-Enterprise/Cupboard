@@ -53,6 +53,22 @@ pub async fn create(
     let subject_hash = hmac_sha256(input.subject_value.as_bytes(), pepper).to_vec();
 
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+
+    // If the caller didn't attach a player, resolve one from the banned identifier so
+    // evasion detection can link this ban to the player's alts.
+    let player_id = match input.player_id {
+        Some(p) => Some(p),
+        None => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT player_id FROM player_identifiers WHERE type = $1 AND value_hash = $2",
+            )
+            .bind(&input.subject_type)
+            .bind(&subject_hash)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+    };
+
     let ban = sqlx::query_as::<_, Ban>(&format!(
         "INSERT INTO bans \
          (tenant_id, subject_type, subject_value, subject_hash, player_id, scope, server_id, \
@@ -63,7 +79,7 @@ pub async fn create(
     .bind(&input.subject_type)
     .bind(&input.subject_value)
     .bind(&subject_hash)
-    .bind(input.player_id)
+    .bind(player_id)
     .bind(&input.scope)
     .bind(input.server_id)
     .bind(&input.reason)

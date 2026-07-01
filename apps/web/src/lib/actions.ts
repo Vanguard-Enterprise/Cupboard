@@ -203,6 +203,21 @@ export async function revokeBanAction(form: FormData): Promise<void> {
   }
 }
 
+/// Dismiss or action a ban-evasion alert.
+export async function dismissEvasionAction(form: FormData): Promise<void> {
+  await updateEvasion(form, "dismiss");
+}
+export async function actionEvasionAction(form: FormData): Promise<void> {
+  await updateEvasion(form, "action");
+}
+async function updateEvasion(form: FormData, verb: "dismiss" | "action"): Promise<void> {
+  const id = form.get("alert_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/evasion/${id}/${verb}`, { method: "POST" });
+    revalidatePath("/evasion");
+  }
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

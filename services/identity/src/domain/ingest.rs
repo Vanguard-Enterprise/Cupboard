@@ -91,6 +91,13 @@ pub async fn ingest_roster(
     .execute(&mut *tx)
     .await?;
 
+    // Re-evaluate alt-links for each observed player and raise evasion alerts if they're
+    // linked to a banned player on this tenant. Advisory only — never auto-bans.
+    for &player_id in &present {
+        crate::domain::links::evaluate_links(&mut tx, player_id, obs).await?;
+        crate::domain::links::check_evasion(&mut tx, tenant, player_id, obs).await?;
+    }
+
     tx.commit().await?;
     Ok(())
 }
@@ -432,5 +439,82 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(open_after, 1, "B should be closed, A still open");
+    }
+
+    #[tokio::test]
+    async fn evasion_alert_when_alt_shares_ip_with_banned_player() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP evasion_alert_when_alt_shares_ip_with_banned_player: unset");
+            return;
+        };
+        let pepper = b"ev-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let ip = "203.0.113.200";
+        let steam_a = uniq("ban");
+        let steam_b = uniq("alt");
+
+        let ev = |players| RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            observed_at: Utc::now(),
+            players,
+        };
+
+        // 1) Banned-to-be player A is seen (creates player A + its IP signal).
+        ingest_roster(
+            &pool,
+            pepper,
+            &ev(vec![player(&steam_a, None, Some(ip), 60)]),
+        )
+        .await
+        .unwrap();
+
+        // 2) Ban A — player_id is resolved from the Steam identifier.
+        crate::domain::bans::create(
+            &pool,
+            TenantId(tenant),
+            pepper,
+            crate::domain::bans::NewBan {
+                subject_type: "steam".into(),
+                subject_value: steam_a.clone(),
+                player_id: None,
+                scope: "network".into(),
+                server_id: None,
+                reason: Some("cheating".into()),
+                issued_by: Uuid::new_v4(),
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // 3) Alt B connects from the same IP → link forms, evasion alert raised.
+        ingest_roster(
+            &pool,
+            pepper,
+            &ev(vec![player(&steam_b, None, Some(ip), 5)]),
+        )
+        .await
+        .unwrap();
+
+        let b_id: Uuid =
+            sqlx::query_scalar("SELECT player_id FROM player_identifiers WHERE value_hash = $1")
+                .bind(hmac_sha256(steam_b.as_bytes(), pepper).to_vec())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let alerts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM ban_evasion_alerts WHERE tenant_id = $1 AND suspect_player = $2",
+        )
+        .bind(tenant)
+        .bind(b_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            alerts, 1,
+            "an alt sharing the banned player's IP must raise one evasion alert"
+        );
     }
 }

@@ -1,6 +1,7 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
 mod bans;
+mod evasion;
 mod internal;
 mod players;
 
@@ -27,6 +28,13 @@ pub fn router(state: AppState) -> Router {
         // Bans (tenant-scoped, JWT + RBAC).
         .route("/bans", get(bans::list).post(bans::create))
         .route("/bans/{id}/revoke", axum::routing::post(bans::revoke))
+        // Ban-evasion alerts (tenant-scoped).
+        .route("/evasion", get(evasion::list))
+        .route(
+            "/evasion/{id}/dismiss",
+            axum::routing::post(evasion::dismiss),
+        )
+        .route("/evasion/{id}/action", axum::routing::post(evasion::action))
         // Cluster-internal enforcement lookup for the Collector (token-guarded).
         .route("/internal/enforce", axum::routing::post(internal::enforce))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))

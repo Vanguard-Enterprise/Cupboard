@@ -85,12 +85,22 @@ pub struct SessionRow {
     pub disconnected_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, sqlx::FromRow, serde::Serialize)]
+pub struct LinkRow {
+    pub other_player_id: Uuid,
+    pub other_display_id: i64,
+    pub confidence: f32,
+    /// The shared-signals JSON, as text (sqlx `json` feature isn't enabled).
+    pub signals: String,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct PlayerProfile {
     pub player: PlayerHeader,
     pub identifiers: Vec<IdentifierRow>,
     pub names: Vec<NameRow>,
     pub recent_sessions: Vec<SessionRow>,
+    pub links: Vec<LinkRow>,
 }
 
 /// Full profile for one player, but only if this tenant has actually observed them (they
@@ -142,6 +152,20 @@ pub async fn profile(
     .fetch_all(&mut *tx)
     .await?;
 
+    // Global auto-links (advisory alt graph). Read-only reference data.
+    let links = sqlx::query_as::<_, LinkRow>(
+        "SELECT (CASE WHEN pl.player_a = $1 THEN pl.player_b ELSE pl.player_a END) \
+                 AS other_player_id, \
+                op.display_id AS other_display_id, pl.confidence, pl.signals::text AS signals \
+         FROM player_links pl \
+         JOIN players op ON op.id = (CASE WHEN pl.player_a = $1 THEN pl.player_b ELSE pl.player_a END) \
+         WHERE pl.player_a = $1 OR pl.player_b = $1 \
+         ORDER BY pl.confidence DESC LIMIT 50",
+    )
+    .bind(player_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
     let mut profile = PlayerProfile {
@@ -149,6 +173,7 @@ pub async fn profile(
         identifiers,
         names,
         recent_sessions,
+        links,
     };
     if !include_ip {
         for s in &mut profile.recent_sessions {
