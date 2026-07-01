@@ -67,6 +67,10 @@
 - **cupboard-plugin** (Oxide/Carbon): push rich events (full identifiers incl. owner/EAC, chat, F7 reports, playtime/stats, toggleable combat logs); execute inbound actions (bans, entitlement grants). Per-server token auth.
 - **cupboard-perfmod** (Harmony): server/plugin perf telemetry.
 - **Collector:** push ingestion gateway (auth, backpressure) alongside RCON pull.
+  - *Carried from Phase 2 (RCON-path enrichments deferred to keep the slice thin):*
+    **A2S server-info query** (map/hostname/live player count — `query_port` is already
+    stored, just unwired) and the **RCON console stream** (real-time chat +
+    connect/disconnect events; Phase 2 ingestion is poll-only `playerlist`).
 - **Metrics & Analytics:** perf ingestion → **Mimir**; perf dashboards; **recommendation tips** (rule-based to start).
 - **apps/web:** perf dashboards, chat logs, richer profiles.
 - **DoD:** plugin-enabled server streams rich events + perf; recommendations surface; data degrades gracefully without the plugin.
