@@ -59,7 +59,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [cupboard-gateway, cupboard-auth, cupboard-fleet, cupboard-collector]   # add services here as they land
+        service: [cupboard-gateway, cupboard-auth, cupboard-fleet, cupboard-collector, cupboard-identity]   # add services here as they land
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

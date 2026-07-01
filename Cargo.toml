@@ -12,6 +12,7 @@ members = [
     "services/auth",
     "services/fleet",
     "services/collector",
+    "services/identity",
 ]
 
 [workspace.package]

@@ -38,6 +38,7 @@ pub(crate) struct AppState {
     pub http: reqwest::Client,
     pub auth_service_url: String,
     pub fleet_service_url: String,
+    pub identity_service_url: String,
 }
 
 #[tokio::main]
@@ -69,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
         http: reqwest::Client::builder().build()?,
         auth_service_url: config.auth_service_url.clone(),
         fleet_service_url: config.fleet_service_url.clone(),
+        identity_service_url: config.identity_service_url.clone(),
     };
 
     let app = Router::new()
@@ -81,6 +83,22 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/fleet/{*path}",
             any(proxy::proxy_fleet).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        // Authenticated passthrough to the identity service (player list + profiles).
+        // `/players` (list) and `/players/{id}` (profile) both need forwarding.
+        .route(
+            "/players",
+            any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/players/{*path}",
+            any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 auth::require_auth,
             )),

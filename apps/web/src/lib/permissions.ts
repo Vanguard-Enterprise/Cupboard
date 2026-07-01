@@ -7,6 +7,7 @@ export const Permission = {
   RolesManage: "roles.manage",
   BansView: "bans.view",
   PlayersView: "players.view",
+  PlayersViewPii: "players.view_pii",
   ServersView: "servers.view",
   ServersManage: "servers.manage",
   BillingManage: "billing.manage",

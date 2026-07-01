@@ -1,0 +1,131 @@
+import Link from "next/link";
+import { apiFetch, getSession } from "@/lib/api";
+import { can, Permission } from "@/lib/permissions";
+
+type Profile = {
+  player: {
+    id: string;
+    display_id: number;
+    status: string;
+    first_seen_at: string | null;
+    last_seen_at: string | null;
+  };
+  identifiers: { type: string; value: string | null; last_seen_at: string }[];
+  names: { name: string | null; last_seen_at: string }[];
+  recent_sessions: {
+    server_id: string;
+    name: string | null;
+    ip: string | null;
+    connected_at: string;
+    disconnected_at: string | null;
+  }[];
+};
+
+export default async function PlayerProfilePage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const session = await getSession();
+  if (!session) return null;
+  if (!can(session.permissions, Permission.PlayersView)) {
+    return <p className="text-sm text-neutral-400">You don&apos;t have access to players.</p>;
+  }
+  const canPii = can(session.permissions, Permission.PlayersViewPii);
+
+  const res = await apiFetch(`/players/${id}`);
+  if (res.status === 404) {
+    return <p className="text-sm text-neutral-400">Player not found.</p>;
+  }
+  if (!res.ok) {
+    return <p className="text-sm text-red-400">Failed to load player.</p>;
+  }
+  const profile: Profile = await res.json();
+
+  return (
+    <div className="flex flex-col gap-8">
+      <div>
+        <Link href="/players" className="text-sm text-indigo-400 hover:text-indigo-300">
+          ← Players
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold">
+          {profile.names[0]?.name ?? `Player #${profile.player.display_id}`}
+        </h1>
+        <p className="mt-1 text-sm text-neutral-400">
+          Cupboard Player #{profile.player.display_id} · {profile.player.status} · first seen{" "}
+          {profile.player.first_seen_at
+            ? new Date(profile.player.first_seen_at).toLocaleString()
+            : "—"}
+        </p>
+      </div>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-neutral-300">Identifiers</h2>
+        <div className="overflow-hidden rounded border border-neutral-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-neutral-900 text-neutral-400">
+              <tr>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2">Value</th>
+                <th className="px-3 py-2">Last seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profile.identifiers.map((idr, i) => (
+                <tr key={i} className="border-t border-neutral-800">
+                  <td className="px-3 py-2 uppercase text-neutral-400">{idr.type}</td>
+                  <td className="px-3 py-2 font-mono">{idr.value ?? "—"}</td>
+                  <td className="px-3 py-2 text-neutral-400">
+                    {new Date(idr.last_seen_at).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-sm font-medium text-neutral-300">Recent sessions</h2>
+        <div className="overflow-hidden rounded border border-neutral-800">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-neutral-900 text-neutral-400">
+              <tr>
+                <th className="px-3 py-2">Name</th>
+                <th className="px-3 py-2">IP</th>
+                <th className="px-3 py-2">Connected</th>
+                <th className="px-3 py-2">Ended</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profile.recent_sessions.map((s, i) => (
+                <tr key={i} className="border-t border-neutral-800">
+                  <td className="px-3 py-2">{s.name ?? "—"}</td>
+                  <td className="px-3 py-2 font-mono text-neutral-400">
+                    {canPii ? (s.ip ?? "—") : "hidden"}
+                  </td>
+                  <td className="px-3 py-2 text-neutral-400">
+                    {new Date(s.connected_at).toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-neutral-400">
+                    {s.disconnected_at ? new Date(s.disconnected_at).toLocaleString() : "online"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {profile.names.length > 1 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Known names</h2>
+          <p className="text-sm text-neutral-400">
+            {profile.names.map((n) => n.name).filter(Boolean).join(", ")}
+          </p>
+        </section>
+      )}
+    </div>
+  );
+}

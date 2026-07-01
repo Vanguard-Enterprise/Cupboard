@@ -47,14 +47,15 @@ async fn publish_read_ack_round_trip() {
     };
     producer.publish(&stream, &sent).await.expect("publish");
 
-    let deliveries = consumer
+    let batch = consumer
         .read::<Ping>(&stream, group, "c1", 10, 2000)
         .await
         .expect("read");
-    assert_eq!(deliveries.len(), 1, "should read the one published entry");
-    assert_eq!(deliveries[0].payload, sent);
+    assert_eq!(batch.ok.len(), 1, "should read the one published entry");
+    assert!(batch.failed_ids.is_empty(), "nothing malformed");
+    assert_eq!(batch.ok[0].payload, sent);
 
-    let ids: Vec<String> = deliveries.iter().map(|d| d.id.clone()).collect();
+    let ids: Vec<String> = batch.ok.iter().map(|d| d.id.clone()).collect();
     consumer.ack(&stream, group, &ids).await.expect("ack");
 
     // After ack + consuming all `>` entries, a second read blocks briefly then returns
@@ -63,5 +64,44 @@ async fn publish_read_ack_round_trip() {
         .read::<Ping>(&stream, group, "c1", 10, 300)
         .await
         .expect("read again");
-    assert!(again.is_empty(), "no more entries after ack");
+    assert!(again.ok.is_empty(), "no more entries after ack");
+}
+
+#[tokio::test]
+async fn one_poison_entry_does_not_fail_the_batch() {
+    let Ok(url) = std::env::var("TEST_REDIS_URL") else {
+        eprintln!("SKIP one_poison_entry_does_not_fail_the_batch: TEST_REDIS_URL unset");
+        return;
+    };
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let stream = format!("test:poison:{suffix}");
+    let group = "g1";
+
+    let mut bus = Bus::connect(&url).await.expect("connect");
+    bus.ensure_group(&stream, group).await.expect("group");
+
+    // A well-formed JSON that is NOT a Ping (missing fields) — unparseable as T.
+    bus.publish(&stream, &serde_json::json!({"not": "a ping"}))
+        .await
+        .expect("publish poison");
+    let good = Ping {
+        n: 1,
+        who: "ok".into(),
+    };
+    bus.publish(&stream, &good).await.expect("publish good");
+
+    let batch = bus
+        .read::<Ping>(&stream, group, "c1", 10, 2000)
+        .await
+        .expect("read");
+    assert_eq!(batch.ok.len(), 1, "the good entry still comes through");
+    assert_eq!(batch.ok[0].payload, good);
+    assert_eq!(
+        batch.failed_ids.len(),
+        1,
+        "the poison entry is reported, not fatal"
+    );
 }

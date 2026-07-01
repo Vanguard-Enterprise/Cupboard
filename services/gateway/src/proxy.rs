@@ -31,6 +31,16 @@ pub async fn proxy_fleet(
     proxy_to(&base, state, req).await
 }
 
+/// Reverse-proxy `/players/*` to the identity service. Auth-gated; identity re-validates
+/// the token and enforces `players.*` permissions (including PII gating).
+pub async fn proxy_identity(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.identity_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
 /// Shared reverse-proxy: forward the request to `base_url` + original path/query.
 async fn proxy_to(
     base_url: &str,

@@ -25,8 +25,6 @@ pub enum BusError {
     Redis(#[from] redis::RedisError),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("stream entry {0} is missing its `data` field")]
-    MissingData(String),
 }
 
 /// One consumed, still-unacked stream entry.
@@ -35,6 +33,23 @@ pub struct Delivery<T> {
     /// The stream entry id (`<ms>-<seq>`), passed back to [`Bus::ack`].
     pub id: String,
     pub payload: T,
+}
+
+/// The result of a [`Bus::read`]: parsed deliveries plus the ids of entries that could not
+/// be parsed (which the caller should still ack to clear them from the pending list).
+#[derive(Debug)]
+pub struct ReadBatch<T> {
+    pub ok: Vec<Delivery<T>>,
+    pub failed_ids: Vec<String>,
+}
+
+impl<T> Default for ReadBatch<T> {
+    fn default() -> Self {
+        Self {
+            ok: Vec::new(),
+            failed_ids: Vec::new(),
+        }
+    }
 }
 
 /// A handle to the Redis Streams bus over a multiplexed async connection.
@@ -81,8 +96,13 @@ impl Bus {
     }
 
     /// Blocking `XREADGROUP` for new (`>`) entries as `consumer` in `group`, up to `count`
-    /// entries, blocking up to `block_ms` for the first one. Returns deserialized
-    /// deliveries (still unacked — call [`ack`](Self::ack) once processed).
+    /// entries, blocking up to `block_ms` for the first one.
+    ///
+    /// Returns [`ReadBatch`]: successfully-deserialized deliveries plus the ids of entries
+    /// that were missing/unparseable. A single poison entry must never fail the whole
+    /// batch, so bad entries are logged and surfaced via `failed_ids` — the caller should
+    /// [`ack`](Self::ack) both `ok` ids and `failed_ids` so poison doesn't linger in the
+    /// pending list. Only redis-level errors are returned as `Err`.
     pub async fn read<T: DeserializeOwned>(
         &mut self,
         stream: &str,
@@ -90,27 +110,35 @@ impl Bus {
         consumer: &str,
         count: usize,
         block_ms: usize,
-    ) -> Result<Vec<Delivery<T>>, BusError> {
+    ) -> Result<ReadBatch<T>, BusError> {
         let opts = StreamReadOptions::default()
             .group(group, consumer)
             .count(count)
             .block(block_ms);
         let reply: StreamReadReply = self.conn.xread_options(&[stream], &[">"], &opts).await?;
 
-        let mut out = Vec::new();
+        let mut batch = ReadBatch::default();
         for key in reply.keys {
             for entry in key.ids {
-                let json: String = entry
-                    .get(DATA_FIELD)
-                    .ok_or_else(|| BusError::MissingData(entry.id.clone()))?;
-                let payload = serde_json::from_str::<T>(&json)?;
-                out.push(Delivery {
-                    id: entry.id,
-                    payload,
-                });
+                match entry.get::<String>(DATA_FIELD) {
+                    Some(json) => match serde_json::from_str::<T>(&json) {
+                        Ok(payload) => batch.ok.push(Delivery {
+                            id: entry.id,
+                            payload,
+                        }),
+                        Err(e) => {
+                            tracing::warn!(entry = %entry.id, error = %e, "skipping unparseable stream entry");
+                            batch.failed_ids.push(entry.id);
+                        }
+                    },
+                    None => {
+                        tracing::warn!(entry = %entry.id, "stream entry missing `data` field; skipping");
+                        batch.failed_ids.push(entry.id);
+                    }
+                }
             }
         }
-        Ok(out)
+        Ok(batch)
     }
 
     /// `XACK` the given entry ids in `group`, marking them processed.
