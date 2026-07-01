@@ -6,6 +6,7 @@ members = [
     "crates/db",
     "crates/crypto",
     "crates/auth-core",
+    "crates/gameconn",
     "services/gateway",
     "services/auth",
 ]
@@ -31,6 +32,11 @@ sqlx = { version = "0.8", default-features = false, features = [
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Game-server connections (Collector/Fleet). Rust's RCON is a WebSocket carrying JSON
+# frames (not Source TCP RCON); ws:// is plaintext in practice, so no TLS feature here.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 # Observability
 tracing = "0.1"
@@ -73,6 +79,7 @@ cupboard-telemetry = { path = "crates/telemetry" }
 cupboard-db = { path = "crates/db" }
 cupboard-crypto = { path = "crates/crypto" }
 cupboard-auth-core = { path = "crates/auth-core" }
+cupboard-gameconn = { path = "crates/gameconn" }
 
 [profile.release]
 opt-level = 3
