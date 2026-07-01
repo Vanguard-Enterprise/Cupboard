@@ -44,7 +44,15 @@ async fn set_status(
     status: &str,
 ) -> Result<StatusCode, AppError> {
     let org = claims.require(Permission::BansCreate)?;
-    if evasion::set_status(&state.app_pool, TenantId::from(org), id, status).await? {
+    if evasion::set_status(
+        &state.app_pool,
+        TenantId::from(org),
+        claims.0.sub.0,
+        id,
+        status,
+    )
+    .await?
+    {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::NotFound("evasion alert not found".into()))

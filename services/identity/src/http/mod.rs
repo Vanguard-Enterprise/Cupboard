@@ -25,6 +25,7 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(readyz))
         .route("/players", get(players::list))
         .route("/players/{id}", get(players::get))
+        .route("/players/{id}/merge", axum::routing::post(players::merge))
         // Bans (tenant-scoped, JWT + RBAC).
         .route("/bans", get(bans::list).post(bans::create))
         .route("/bans/{id}/revoke", axum::routing::post(bans::revoke))

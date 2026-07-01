@@ -42,6 +42,7 @@ pub async fn list(app_pool: &PgPool, tenant: TenantId) -> Result<Vec<EvasionAler
 pub async fn set_status(
     app_pool: &PgPool,
     tenant: TenantId,
+    actor: Uuid,
     id: Uuid,
     status: &str,
 ) -> Result<bool, AppError> {
@@ -51,6 +52,19 @@ pub async fn set_status(
         .bind(status)
         .execute(&mut *tx)
         .await?;
+    let changed = res.rows_affected() > 0;
+    if changed {
+        crate::domain::audit::record_in_tx(
+            &mut tx,
+            Some(tenant.0),
+            Some(actor),
+            &format!("evasion.{status}"),
+            Some("evasion_alert"),
+            Some(id),
+            None,
+        )
+        .await?;
+    }
     tx.commit().await?;
-    Ok(res.rows_affected() > 0)
+    Ok(changed)
 }

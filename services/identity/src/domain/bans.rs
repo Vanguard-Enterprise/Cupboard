@@ -87,6 +87,18 @@ pub async fn create(
     .bind(input.expires_at)
     .fetch_one(&mut *tx)
     .await?;
+
+    crate::domain::audit::record_in_tx(
+        &mut tx,
+        Some(tenant.0),
+        Some(input.issued_by),
+        "ban.create",
+        Some("ban"),
+        Some(ban.id),
+        Some(serde_json::json!({ "subject_type": ban.subject_type, "scope": ban.scope })),
+    )
+    .await?;
+
     tx.commit().await?;
     Ok(ban)
 }
@@ -121,6 +133,20 @@ pub async fn revoke(
     .bind(reason)
     .fetch_optional(&mut *tx)
     .await?;
+
+    if let Some(ref b) = ban {
+        crate::domain::audit::record_in_tx(
+            &mut tx,
+            Some(tenant.0),
+            Some(revoked_by),
+            "ban.revoke",
+            Some("ban"),
+            Some(b.id),
+            None,
+        )
+        .await?;
+    }
+
     tx.commit().await?;
     Ok(ban)
 }
