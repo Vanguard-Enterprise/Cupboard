@@ -106,7 +106,21 @@
 - **Identity store isolation** — split Identity onto its own CNPG cluster if write volume needs it.
 - **GDPR tooling** — per-player export, erasure + retention/purge worker (schema hygiene already in place).
 - **Security review** (`/security-review`), Mimir cardinality pass, runbooks/alerts, prod cutover.
-- **DoD:** load test passes at target scale; security review clean; prod environment live.
+- **Network segmentation backlog** (deferred from Phase 2 — the workload layer is already
+  hardened: restricted PodSecurity enforced on all cupboard namespaces, ClusterIP-only
+  backends, envelope-encrypted creds, internal-token auth on `/internal/*`):
+  - **Adopt a policy-capable CNI first.** The cluster runs **flannel**, which does *not*
+    enforce `NetworkPolicy` (objects apply but are silent no-ops) — introduce Calico
+    (Canal: flannel + Calico policy) or Cilium before any of the below can take effect.
+  - **NetworkPolicies:** default-deny ingress/egress per cupboard namespace, then explicit
+    allows — gateway→{auth,fleet,identity}, collector→{fleet,identity,redis} + broad
+    egress for outbound RCON, {fleet,identity,auth}→CNPG `cupboard-db`,
+    identity/collector→`cupboard-redis`, all→kube-dns + `alloy-receiver` (OTLP). Mind
+    kubelet health-probe traffic when writing default-deny ingress.
+  - **mTLS between services** — replace the shared `INTERNAL_API_TOKEN` on the cross-service
+    `/internal/*` endpoints with mutual TLS (SPIFFE/cert-manager or a mesh).
+- **DoD:** load test passes at target scale; security review clean; network policies enforced
+  (on a policy-capable CNI); prod environment live.
 
 ---
 
