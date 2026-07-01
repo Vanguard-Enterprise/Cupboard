@@ -36,7 +36,7 @@ pub async fn list(
              (s.disconnected_at IS NULL) AS online, \
              s.server_id, s.connected_at, s.last_seen_at \
          FROM player_sessions s JOIN players p ON p.id = s.player_id \
-         ORDER BY p.id, s.connected_at DESC",
+         ORDER BY p.id, s.connected_at DESC LIMIT 1000",
     )
     .fetch_all(&mut *tx)
     .await?;
@@ -83,6 +83,24 @@ pub struct SessionRow {
     pub ip: Option<String>,
     pub connected_at: DateTime<Utc>,
     pub disconnected_at: Option<DateTime<Utc>>,
+}
+
+/// Whether this tenant has ever observed `player_id` (has a session for them, under RLS).
+/// Used to authorize tenant-initiated operations on global players (e.g. merge), so a
+/// tenant can't act on players it has never seen.
+pub async fn tenant_has_seen(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    player_id: Uuid,
+) -> Result<bool, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let seen: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM player_sessions WHERE player_id = $1 LIMIT 1")
+            .bind(player_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    tx.commit().await?;
+    Ok(seen.is_some())
 }
 
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]

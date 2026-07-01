@@ -181,11 +181,14 @@ pub async fn enforce(
     }
 
     let rows: Vec<(Vec<u8>, Option<String>)> = sqlx::query_as(
+        // DISTINCT ON needs a matching leading ORDER BY; issued_at DESC makes the reason
+        // deterministic (the most recent applicable ban wins) rather than arbitrary.
         "SELECT DISTINCT ON (subject_hash) subject_hash, reason FROM bans \
          WHERE tenant_id = $1 AND status = 'active' \
            AND (expires_at IS NULL OR expires_at > now()) \
            AND (scope = 'network' OR (scope = 'server' AND server_id = $2)) \
-           AND subject_hash = ANY($3)",
+           AND subject_hash = ANY($3) \
+         ORDER BY subject_hash, issued_at DESC",
     )
     .bind(tenant_id)
     .bind(server_id)

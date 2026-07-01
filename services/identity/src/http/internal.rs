@@ -23,7 +23,9 @@ fn check_internal_token(state: &AppState, headers: &HeaderMap) -> Result<(), App
         .get(INTERNAL_TOKEN_HEADER)
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default();
-    if presented.is_empty() || presented != expected {
+    if presented.is_empty()
+        || !cupboard_crypto::constant_time_eq(presented.as_bytes(), expected.as_bytes())
+    {
         return Err(AppError::Unauthorized("invalid internal token".into()));
     }
     Ok(())

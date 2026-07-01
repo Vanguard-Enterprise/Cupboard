@@ -50,6 +50,19 @@ pub fn hash_token(token: &str, pepper: &[u8]) -> Vec<u8> {
     hmac_sha256(token.as_bytes(), pepper).to_vec()
 }
 
+/// Constant-time byte-slice equality, for comparing secrets (shared API tokens) without a
+/// timing side channel. Length is compared first (not itself secret for fixed-size tokens).
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Plain (unkeyed) SHA-256. Used for the OAuth2 PKCE S256 challenge, where the verifier
 /// is a high-entropy secret and the challenge is its public, non-secret digest.
 pub fn sha256(data: &[u8]) -> [u8; 32] {

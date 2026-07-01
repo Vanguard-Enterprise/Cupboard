@@ -145,6 +145,18 @@ async fn resolve_or_create_player(
     .bind(obs)
     .execute(&mut **tx)
     .await?;
+
+    // Backfill any pre-emptive bans on this Steam ID (created before the player was ever
+    // seen, so their player_id was left NULL) — otherwise evasion detection, which keys off
+    // bans.player_id, would never fire for them.
+    sqlx::query(
+        "UPDATE bans SET player_id = $1 \
+         WHERE subject_type = 'steam' AND subject_hash = $2 AND player_id IS NULL",
+    )
+    .bind(id)
+    .bind(steam_hash)
+    .execute(&mut **tx)
+    .await?;
     Ok(id)
 }
 
@@ -515,6 +527,83 @@ mod tests {
         assert_eq!(
             alerts, 1,
             "an alt sharing the banned player's IP must raise one evasion alert"
+        );
+    }
+
+    #[tokio::test]
+    async fn preemptive_ban_backfills_player_and_still_flags_evasion() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP preemptive_ban_backfills_player_and_still_flags_evasion: unset");
+            return;
+        };
+        let pepper = b"pre-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let ip = "203.0.113.201";
+        let steam_a = uniq("pre");
+        let steam_b = uniq("prealt");
+
+        let ev = |players| RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            observed_at: Utc::now(),
+            players,
+        };
+
+        // 1) Ban A BEFORE it's ever observed → bans.player_id starts NULL.
+        crate::domain::bans::create(
+            &pool,
+            TenantId(tenant),
+            pepper,
+            crate::domain::bans::NewBan {
+                subject_type: "steam".into(),
+                subject_value: steam_a.clone(),
+                player_id: None,
+                scope: "network".into(),
+                server_id: None,
+                reason: Some("pre-ban".into()),
+                issued_by: Uuid::new_v4(),
+                expires_at: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // 2) A is seen for the first time → ingestion backfills bans.player_id.
+        ingest_roster(
+            &pool,
+            pepper,
+            &ev(vec![player(&steam_a, None, Some(ip), 60)]),
+        )
+        .await
+        .unwrap();
+
+        // 3) Alt B shares the IP → evasion alert fires despite the ban being pre-emptive.
+        ingest_roster(
+            &pool,
+            pepper,
+            &ev(vec![player(&steam_b, None, Some(ip), 5)]),
+        )
+        .await
+        .unwrap();
+
+        let b_id: Uuid =
+            sqlx::query_scalar("SELECT player_id FROM player_identifiers WHERE value_hash = $1")
+                .bind(hmac_sha256(steam_b.as_bytes(), pepper).to_vec())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let alerts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM ban_evasion_alerts WHERE tenant_id = $1 AND suspect_player = $2",
+        )
+        .bind(tenant)
+        .bind(b_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            alerts, 1,
+            "pre-emptive ban must still catch the alt after backfill"
         );
     }
 }

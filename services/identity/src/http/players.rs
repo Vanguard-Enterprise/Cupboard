@@ -51,7 +51,15 @@ pub async fn merge(
     Path(id): Path<Uuid>,
     Json(req): Json<MergeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    claims.require(Permission::OrgManage)?;
+    let org = claims.require(Permission::OrgManage)?;
+    let tenant = TenantId::from(org);
+    // Authorize against the caller's tenant: they may only merge players they've observed,
+    // even though the merge itself rewrites the RLS-exempt global graph.
+    for pid in [id, req.into_player_id] {
+        if !players::tenant_has_seen(&state.app_pool, tenant, pid).await? {
+            return Err(AppError::NotFound("player not found".into()));
+        }
+    }
     let snapshot = merge::merge_players(
         &state.owner_pool,
         id,

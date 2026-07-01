@@ -84,13 +84,24 @@ pub struct PlayerEntry {
 }
 
 impl PlayerEntry {
-    /// The IP portion of [`address`](Self::address), dropping the `:port`. Handles the
-    /// common IPv4 `1.2.3.4:port` shape; returns the whole string if there's no port.
+    /// The IP portion of [`address`](Self::address), dropping the `:port`. Handles IPv4
+    /// `1.2.3.4:port` and bracketed IPv6 `[::1]:port`; a bare IPv6 (multiple colons, no
+    /// brackets) or a plain host is returned unchanged rather than mangled.
     pub fn ip(&self) -> &str {
-        match self.address.rsplit_once(':') {
-            Some((ip, _port)) => ip,
-            None => &self.address,
+        let addr = &self.address;
+        if let Some(rest) = addr.strip_prefix('[') {
+            // Bracketed IPv6: return whatever is inside the brackets.
+            if let Some(end) = rest.find(']') {
+                return &rest[..end];
+            }
         }
+        // Only strip a trailing port when there's exactly one colon (IPv4:port).
+        if addr.matches(':').count() == 1 {
+            if let Some((ip, _port)) = addr.rsplit_once(':') {
+                return ip;
+            }
+        }
+        addr
     }
 
     /// Whether this player is on a family-shared copy: the owner is a real Steam ID that
@@ -112,9 +123,11 @@ pub struct RconClient {
 }
 
 impl RconClient {
-    /// Dial `ws://{host}:{port}/{password}` and complete the WebSocket handshake.
+    /// Dial `ws://{host}:{port}/{password}` and complete the WebSocket handshake. The
+    /// password is percent-encoded into the path so values with URL-reserved characters
+    /// (space, `/`, `#`, `?`, `%`, …) still produce a valid URL.
     pub async fn connect(host: &str, port: u16, password: &str) -> Result<Self, GameconnError> {
-        let url = format!("ws://{host}:{port}/{password}");
+        let url = format!("ws://{host}:{port}/{}", encode_path_segment(password));
         let (ws, _resp) = connect_async(&url)
             .await
             .map_err(|e| GameconnError::Connect(e.to_string()))?;
@@ -186,6 +199,20 @@ pub fn parse_playerlist(raw: &str) -> Result<Vec<PlayerEntry>, serde_json::Error
     serde_json::from_str(raw)
 }
 
+/// Percent-encode a URL path segment, leaving only the unreserved set (RFC 3986) intact.
+fn encode_path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +258,30 @@ mod tests {
     #[test]
     fn empty_roster_parses() {
         assert!(parse_playerlist("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn ip_handles_ipv6_and_ports() {
+        let mk = |addr: &str| PlayerEntry {
+            steam_id: "1".into(),
+            owner_steam_id: String::new(),
+            display_name: String::new(),
+            ping: 0,
+            address: addr.into(),
+            connected_seconds: 0,
+            health: 0.0,
+        };
+        assert_eq!(mk("1.2.3.4:28015").ip(), "1.2.3.4");
+        assert_eq!(mk("[2001:db8::1]:28015").ip(), "2001:db8::1");
+        // Bare IPv6 (no brackets, no port) must not be mangled.
+        assert_eq!(mk("2001:db8::1").ip(), "2001:db8::1");
+        assert_eq!(mk("fe80::1:2:3").ip(), "fe80::1:2:3");
+    }
+
+    #[test]
+    fn encodes_url_reserved_chars_in_password() {
+        assert_eq!(encode_path_segment("changeme123"), "changeme123");
+        assert_eq!(encode_path_segment("a b/c#d%e"), "a%20b%2Fc%23d%25e");
     }
 
     #[test]

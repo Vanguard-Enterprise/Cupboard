@@ -3,9 +3,9 @@
 //! `merged`, and writes a `merge_log` snapshot for best-effort un-merge. Runs on the owner
 //! pool (global graph). Fully audited.
 //!
-//! Links (auto + manual) involving the source are dropped rather than repointed — they
-//! recompute from signals on the next sighting, which sidesteps the pair-uniqueness and
-//! `player_a < player_b` constraints.
+//! Auto-links involving the source are dropped (they recompute from signals on the next
+//! sighting). Manual links (per-tenant private assertions that never recompute) are
+//! repointed onto the target for every tenant, preserving `player_a < player_b`.
 
 use crate::error::AppError;
 use serde_json::json;
@@ -33,10 +33,11 @@ pub async fn merge_players(
             .bind(from)
             .fetch_optional(&mut *tx)
             .await?;
-    let into_exists: Option<Uuid> = sqlx::query_scalar("SELECT id FROM players WHERE id = $1")
-        .bind(into)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let into_status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM players WHERE id = $1")
+            .bind(into)
+            .fetch_optional(&mut *tx)
+            .await?;
     match from_status.as_deref() {
         None => return Err(AppError::NotFound("source player not found".into())),
         Some("merged") => {
@@ -46,8 +47,16 @@ pub async fn merge_players(
         }
         _ => {}
     }
-    if into_exists.is_none() {
-        return Err(AppError::NotFound("target player not found".into()));
+    // The target must exist and be active — never merge into a tombstoned (merged/erased)
+    // player, or resolve_or_create_player would later hand out a dead id.
+    match into_status.as_deref() {
+        None => return Err(AppError::NotFound("target player not found".into())),
+        Some("active") => {}
+        Some(other) => {
+            return Err(AppError::BadRequest(format!(
+                "target player is not active (status: {other})"
+            )))
+        }
     }
 
     // Identifiers can't collide across players (globally unique per type) — plain repoint.
@@ -128,10 +137,33 @@ pub async fn merge_players(
             .execute(&mut *tx)
             .await?
             .rows_affected();
-    sqlx::query("DELETE FROM manual_links WHERE player_a = $1 OR player_b = $1")
-        .bind(from)
-        .execute(&mut *tx)
-        .await?;
+    // Manual links never recompute, so repoint them (across every tenant) rather than
+    // delete. Drop any that would become a self-link, then rewrite the source endpoint to
+    // the target keeping player_a < player_b.
+    sqlx::query(
+        "DELETE FROM manual_links \
+         WHERE (player_a = $1 AND player_b = $2) OR (player_a = $2 AND player_b = $1)",
+    )
+    .bind(from)
+    .bind(into)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE manual_links SET player_a = LEAST($2, player_b), player_b = GREATEST($2, player_b) \
+         WHERE player_a = $1",
+    )
+    .bind(from)
+    .bind(into)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE manual_links SET player_a = LEAST(player_a, $2), player_b = GREATEST(player_a, $2) \
+         WHERE player_b = $1",
+    )
+    .bind(from)
+    .bind(into)
+    .execute(&mut *tx)
+    .await?;
 
     // Mark the source merged.
     sqlx::query(

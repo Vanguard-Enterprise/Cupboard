@@ -108,19 +108,23 @@ async fn enforce_bans(
         }
     };
     for hit in hits {
-        let reason = sanitize_reason(hit.reason.as_deref().unwrap_or("banned"));
+        // Both fields are quoted into the RCON command, so both must be sanitized — a
+        // hostile/non-standard server could report a Steam ID with quotes/backslashes.
+        let steam_id = sanitize_arg(&hit.steam_id);
+        let reason = sanitize_arg(hit.reason.as_deref().unwrap_or("banned"));
         // Rust `kick` accepts a Steam ID; kicking each poll keeps a banned player off.
-        let cmd = format!("kick \"{}\" \"{}\"", hit.steam_id, reason);
+        let cmd = format!("kick \"{steam_id}\" \"{reason}\"");
         client.command(&cmd).await?;
-        tracing::info!(server = %config.name, steam_id = %hit.steam_id, "kicked banned player");
+        tracing::info!(server = %config.name, steam_id = %steam_id, "kicked banned player");
     }
     Ok(())
 }
 
-/// Strip characters that would break the quoted RCON argument.
-fn sanitize_reason(reason: &str) -> String {
-    reason
-        .replace(['"', '\n', '\r'], " ")
+/// Strip characters that could break out of (or malform) a quoted RCON argument — quotes,
+/// backslashes, and newlines — and bound the length.
+fn sanitize_arg(value: &str) -> String {
+    value
+        .replace(['"', '\\', '\n', '\r'], " ")
         .chars()
         .take(128)
         .collect()
@@ -135,13 +139,13 @@ async fn report(fleet: &FleetClient, config: &ServerConfig, status: &str, error:
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_reason;
+    use super::sanitize_arg;
 
     #[test]
-    fn sanitize_strips_quote_injection_and_bounds_length() {
-        assert_eq!(sanitize_reason("cheating"), "cheating");
-        // Quotes/newlines can't break out of the quoted RCON arg.
-        assert_eq!(sanitize_reason("a\"b\nc\rd"), "a b c d");
-        assert_eq!(sanitize_reason(&"x".repeat(500)).len(), 128);
+    fn sanitize_strips_injection_and_bounds_length() {
+        assert_eq!(sanitize_arg("cheating"), "cheating");
+        // Quotes, backslashes, and newlines can't break out of the quoted RCON arg.
+        assert_eq!(sanitize_arg("a\"b\nc\rd\\e"), "a b c d e");
+        assert_eq!(sanitize_arg(&"x".repeat(500)).len(), 128);
     }
 }
