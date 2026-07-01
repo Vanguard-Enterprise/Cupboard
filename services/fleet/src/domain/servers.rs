@@ -163,6 +163,35 @@ pub async fn delete(app_pool: &PgPool, tenant: TenantId, id: Uuid) -> Result<boo
     Ok(res.rows_affected() > 0)
 }
 
+/// Statuses the Collector may report for a connection (mirrors the CHECK constraint).
+pub const VALID_STATUSES: [&str; 4] = ["unknown", "connected", "degraded", "down"];
+
+/// Update a server's liveness from a Collector heartbeat. Cross-tenant (owner pool);
+/// `mark_seen` bumps `last_seen_at` on a successful poll.
+pub async fn update_status(
+    owner_pool: &PgPool,
+    id: Uuid,
+    status: &str,
+    error: Option<&str>,
+    mark_seen: bool,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE servers SET \
+         connection_status = $2, \
+         last_error = $3, \
+         last_seen_at = CASE WHEN $4 THEN now() ELSE last_seen_at END, \
+         updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(status)
+    .bind(error)
+    .bind(mark_seen)
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
 /// A decrypted connection config for the Collector. Carries the plaintext RCON password —
 /// only ever served over the cluster-internal, token-guarded `/internal` endpoint.
 #[derive(Debug, serde::Serialize)]

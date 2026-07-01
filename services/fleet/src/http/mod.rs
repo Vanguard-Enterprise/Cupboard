@@ -29,8 +29,12 @@ pub fn router(state: AppState) -> Router {
                 .patch(servers::update)
                 .delete(servers::delete),
         )
-        // Cross-tenant, token-guarded config feed for the Collector (not via the gateway).
+        // Cross-tenant, token-guarded endpoints for the Collector (not via the gateway).
         .route("/internal/servers", get(internal::list_configs))
+        .route(
+            "/internal/servers/{id}/status",
+            axum::routing::post(internal::update_status),
+        )
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))

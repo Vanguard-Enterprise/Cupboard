@@ -6,33 +6,70 @@
 use crate::domain::servers;
 use crate::error::AppError;
 use crate::state::AppState;
-use axum::extract::State;
-use axum::http::HeaderMap;
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
+use serde::Deserialize;
+use uuid::Uuid;
 
 const INTERNAL_TOKEN_HEADER: &str = "x-internal-token";
 
-pub async fn list_configs(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Json<Vec<servers::ServerConfig>>, AppError> {
-    // Fail closed: if no internal token is configured, the endpoint is disabled entirely.
+/// Verify the shared internal token. Fails closed when none is configured.
+fn check_internal_token(state: &AppState, headers: &HeaderMap) -> Result<(), AppError> {
     let expected = state
         .config
         .internal_api_token
         .as_deref()
         .ok_or_else(|| AppError::Unavailable("internal API disabled".into()))?;
-
     let presented = headers
         .get(INTERNAL_TOKEN_HEADER)
         .and_then(|h| h.to_str().ok())
         .unwrap_or_default();
-
-    // Constant-time-ish compare on equal-length secrets; length check first is fine here.
     if presented.is_empty() || presented != expected {
         return Err(AppError::Unauthorized("invalid internal token".into()));
     }
+    Ok(())
+}
 
+pub async fn list_configs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<servers::ServerConfig>>, AppError> {
+    check_internal_token(&state, &headers)?;
     let configs = servers::list_enabled_configs(&state.owner_pool, state.master_key()).await?;
     Ok(Json(configs))
+}
+
+#[derive(Deserialize)]
+pub struct StatusUpdate {
+    pub status: String,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Collector heartbeat: update a server's connection liveness. `connected` also refreshes
+/// `last_seen_at`.
+pub async fn update_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<StatusUpdate>,
+) -> Result<StatusCode, AppError> {
+    check_internal_token(&state, &headers)?;
+    if !servers::VALID_STATUSES.contains(&body.status.as_str()) {
+        return Err(AppError::BadRequest(format!(
+            "invalid status '{}'",
+            body.status
+        )));
+    }
+    let mark_seen = body.status == "connected";
+    servers::update_status(
+        &state.owner_pool,
+        id,
+        &body.status,
+        body.error.as_deref(),
+        mark_seen,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

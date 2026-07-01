@@ -7,9 +7,11 @@ members = [
     "crates/crypto",
     "crates/auth-core",
     "crates/gameconn",
+    "crates/bus",
     "services/gateway",
     "services/auth",
     "services/fleet",
+    "services/collector",
 ]
 
 [workspace.package]
@@ -38,6 +40,9 @@ serde_json = "1"
 # frames (not Source TCP RCON); ws:// is plaintext in practice, so no TLS feature here.
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+
+# Event bus — Redis Streams (Collector → Identity/Metrics consumer groups).
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "streams"] }
 
 # Observability
 tracing = "0.1"
@@ -84,6 +89,7 @@ cupboard-db = { path = "crates/db" }
 cupboard-crypto = { path = "crates/crypto" }
 cupboard-auth-core = { path = "crates/auth-core" }
 cupboard-gameconn = { path = "crates/gameconn" }
+cupboard-bus = { path = "crates/bus" }
 
 [profile.release]
 opt-level = 3
