@@ -10,6 +10,9 @@
 //!   * **Bearer-secret hygiene** — refresh tokens and invite tokens are random secrets
 //!     shown once to the client; we persist only their keyed hash, never the raw value.
 
+pub mod envelope;
+pub use envelope::{open, seal, Envelope, EnvelopeError};
+
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use rand::RngCore as _;

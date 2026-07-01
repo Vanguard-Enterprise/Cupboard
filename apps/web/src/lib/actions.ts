@@ -4,6 +4,7 @@
 // httpOnly cookies, and redirects. They return `{ error }` on failure so client forms can
 // render it via useActionState.
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
 
 export type FormState = { error?: string };
@@ -123,6 +124,44 @@ export async function createInviteAction(
   if (!res.ok) return { error: await readError(res) };
   const created = await res.json();
   return { acceptUrl: created.accept_url };
+}
+
+export type ServerFormState = { error?: string; ok?: boolean };
+
+/** Add a game-server connection (Fleet). The RCON password is sent once and stored
+ * envelope-encrypted server-side; it is never read back. */
+export async function createServerAction(
+  _prev: ServerFormState,
+  form: FormData,
+): Promise<ServerFormState> {
+  const port = Number(form.get("rcon_port"));
+  const queryPortRaw = form.get("query_port");
+  const queryPort = queryPortRaw ? Number(queryPortRaw) : null;
+  const body: Record<string, unknown> = {
+    name: form.get("name"),
+    rcon_host: form.get("rcon_host"),
+    rcon_port: Number.isFinite(port) ? port : 0,
+    rcon_password: form.get("rcon_password"),
+  };
+  if (queryPort && Number.isFinite(queryPort)) body.query_port = queryPort;
+
+  const res = await apiFetch("/fleet/servers", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/servers");
+  return { ok: true };
+}
+
+/** Remove a server connection. */
+export async function deleteServerAction(form: FormData): Promise<void> {
+  const id = form.get("server_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/fleet/servers/${id}`, { method: "DELETE" });
+    revalidatePath("/servers");
+  }
 }
 
 export async function logoutAction(): Promise<void> {

@@ -9,6 +9,7 @@ members = [
     "crates/gameconn",
     "services/gateway",
     "services/auth",
+    "services/fleet",
 ]
 
 [workspace.package]
@@ -65,6 +66,9 @@ hmac = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
+# Envelope encryption for tenant-supplied secrets at rest (RCON/panel creds): a random
+# per-secret data key encrypts the value; the master key (from Vault) wraps the data key.
+aes-gcm = "0.10"
 # Discord OAuth + internal HTTP (gateway → auth proxy). rustls, no native-tls.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # Signed cookies for OAuth state/PKCE (matches axum 0.8).

@@ -34,9 +34,10 @@ pub(crate) struct AppState {
     /// Verify-only key set (auth holds the private signing key). `None` until the JWT
     /// public key is configured — protected routes then fail closed (503).
     pub keys: Option<Arc<Keys>>,
-    /// Client for reverse-proxying to the auth service.
+    /// Client for reverse-proxying to internal services.
     pub http: reqwest::Client,
     pub auth_service_url: String,
+    pub fleet_service_url: String,
 }
 
 #[tokio::main]
@@ -67,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         keys,
         http: reqwest::Client::builder().build()?,
         auth_service_url: config.auth_service_url.clone(),
+        fleet_service_url: config.fleet_service_url.clone(),
     };
 
     let app = Router::new()
@@ -74,6 +76,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/readyz", get(readyz))
         // Unauthenticated passthrough to the auth service (login/signup precede a token).
         .route("/auth/{*path}", any(proxy::proxy_auth))
+        // Authenticated passthrough to the fleet service. `require_auth` validates the
+        // token at the door; fleet re-validates and enforces `servers.*` RBAC.
+        .route(
+            "/fleet/{*path}",
+            any(proxy::proxy_fleet).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // A JWT-validated route proving front-door auth; real /api routes follow.
         .route(
             "/api/whoami",

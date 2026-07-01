@@ -23,6 +23,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard" className="rounded px-2 py-1 hover:bg-neutral-900">
             Dashboard
           </Link>
+          {can(perms, Permission.ServersView) && (
+            <Link href="/servers" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Servers
+            </Link>
+          )}
           {can(perms, Permission.StaffManage) && (
             <Link href="/staff" className="rounded px-2 py-1 hover:bg-neutral-900">
               Staff

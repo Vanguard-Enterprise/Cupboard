@@ -59,6 +59,12 @@ uuid_newtype! {
 }
 
 uuid_newtype! {
+    /// A game server connection owned by a tenant (Fleet). Scopes sessions/bans on the
+    /// data path and identifies a server to the Collector.
+    ServerId
+}
+
+uuid_newtype! {
     /// An operator/staff account that logs into the admin dashboard. Global — a single
     /// user may be a member of several organizations.
     UserId
