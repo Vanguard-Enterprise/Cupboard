@@ -103,6 +103,14 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // Chat logs (identity service).
+        .route(
+            "/chat",
+            any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // Bans (identity service): list/create + revoke.
         .route(
             "/bans",

@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 /// The Redis Stream key for roster snapshots (`XADD`ed by the Collector).
 pub const ROSTER_STREAM: &str = "cupboard:roster";
 
+/// The Redis Stream key for chat messages (console stream now; plugin push later).
+pub const CHAT_STREAM: &str = "cupboard:chat";
+
+/// The Redis Stream key for real-time connect/disconnect edges (console stream now;
+/// plugin push later). Roster polls remain the self-healing baseline; these edges give
+/// exact session boundaries between polls.
+pub const SESSION_STREAM: &str = "cupboard:sessions";
+
 /// One player observed on a server during a single RCON poll.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObservedPlayer {
@@ -33,4 +41,44 @@ pub struct RosterEvent {
     /// When the Collector took this snapshot.
     pub observed_at: DateTime<Utc>,
     pub players: Vec<ObservedPlayer>,
+}
+
+/// One chat message observed on a server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatEvent {
+    pub server_id: ServerId,
+    pub tenant_id: TenantId,
+    /// When the message was sent (server-reported when available, else observation time).
+    pub at: DateTime<Utc>,
+    /// Game chat channel (Rust: 0 = global, 1 = team, …). Kept raw — new channels must
+    /// not break the contract.
+    pub channel: i64,
+    /// Sender's SteamID64. `"0"` (or empty) = a server/system message.
+    pub steam_id: String,
+    /// Sender's display name at send time.
+    pub name: String,
+    pub message: String,
+}
+
+/// Which edge of a session was observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEdge {
+    Connected,
+    Disconnected,
+}
+
+/// A real-time connect/disconnect edge for one player on one server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvent {
+    pub server_id: ServerId,
+    pub tenant_id: TenantId,
+    pub at: DateTime<Utc>,
+    pub edge: SessionEdge,
+    pub steam_id: String,
+    pub name: String,
+    /// Connecting IP, when the mechanism exposed it (console join lines carry it).
+    pub ip: Option<String>,
+    /// Disconnect reason, on `Disconnected` edges that reported one.
+    pub reason: Option<String>,
 }

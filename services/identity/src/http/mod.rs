@@ -1,6 +1,7 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
 mod bans;
+mod chat;
 mod evasion;
 mod internal;
 mod players;
@@ -26,6 +27,8 @@ pub fn router(state: AppState) -> Router {
         .route("/players", get(players::list))
         .route("/players/{id}", get(players::get))
         .route("/players/{id}/merge", axum::routing::post(players::merge))
+        // Chat logs (tenant-scoped, JWT + RBAC).
+        .route("/chat", get(chat::list))
         // Bans (tenant-scoped, JWT + RBAC).
         .route("/bans", get(bans::list).post(bans::create))
         .route("/bans/{id}/revoke", axum::routing::post(bans::revoke))

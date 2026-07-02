@@ -28,6 +28,13 @@ type Profile = {
   }[];
 };
 
+type ChatMessage = {
+  id: string;
+  channel: number;
+  message: string;
+  sent_at: string;
+};
+
 export default async function PlayerProfilePage({
   params,
 }: {
@@ -49,6 +56,8 @@ export default async function PlayerProfilePage({
     return <p className="text-sm text-red-400">Failed to load player.</p>;
   }
   const profile: Profile = await res.json();
+  const chatRes = await apiFetch(`/chat?player_id=${id}&limit=25`);
+  const chat: ChatMessage[] = chatRes.ok ? await chatRes.json() : [];
   const steamId = profile.identifiers.find((i) => i.type === "steam")?.value ?? null;
   const canBan = can(session.permissions, Permission.BansCreate);
 
@@ -175,6 +184,29 @@ export default async function PlayerProfilePage({
           <p className="text-sm text-neutral-400">
             {profile.names.map((n) => n.name).filter(Boolean).join(", ")}
           </p>
+        </section>
+      )}
+
+      {chat.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Recent chat</h2>
+          <div className="overflow-hidden rounded border border-neutral-800">
+            <table className="w-full text-left text-sm">
+              <tbody>
+                {chat.map((m) => (
+                  <tr key={m.id} className="border-t border-neutral-800 first:border-t-0 align-top">
+                    <td className="whitespace-nowrap px-3 py-2 text-neutral-400">
+                      {new Date(m.sent_at).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-neutral-500">
+                      {m.channel === 1 ? "team" : "global"}
+                    </td>
+                    <td className="px-3 py-2 break-all">{m.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
     </div>

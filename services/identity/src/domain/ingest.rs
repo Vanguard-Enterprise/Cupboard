@@ -1,15 +1,25 @@
-//! Roster ingestion: turn one [`RosterEvent`] into upserts across the global identity
-//! graph and the tenant's sessions (docs/identity-schema.md "Ingestion upsert").
+//! Ingestion: turn bus events into upserts across the global identity graph and the
+//! tenant's data (docs/identity-schema.md "Ingestion upsert").
 //!
-//! Runs on the owner pool: it writes the no-RLS global tables and sets `tenant_id`
-//! explicitly on `player_sessions`. One transaction per roster snapshot. Idempotent — the
-//! same snapshot re-applied is a no-op beyond bumping `last_seen`/`sighting_count`, so
-//! at-most-once delivery is fine (the next poll re-reports the full roster).
+//! - [`ingest_roster`] — poll snapshots, the self-healing baseline.
+//! - [`ingest_session_edge`] — real-time connect/disconnect edges (console stream / plugin),
+//!   giving exact session boundaries between polls.
+//! - [`ingest_chat`] — chat messages.
+//!
+//! All run on the owner pool: they write the no-RLS global tables and set `tenant_id`
+//! explicitly on tenant tables. One transaction per event. Roster ingestion is idempotent;
+//! the edge/chat paths tolerate replays (an already-open session is refreshed, a re-closed
+//! session is a no-op; a replayed chat line duplicates, which moderation context absorbs).
 
 use cupboard_crypto::hmac_sha256;
-use cupboard_domain::RosterEvent;
+use cupboard_domain::{ChatEvent, RosterEvent, SessionEdge, SessionEvent};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
+
+/// A SteamID64 the graph should track — digits, not the `"0"`/empty server sentinel.
+fn is_player_steam_id(s: &str) -> bool {
+    !s.is_empty() && s != "0" && s.bytes().all(|b| b.is_ascii_digit())
+}
 
 /// Apply a roster snapshot. See module docs.
 pub async fn ingest_roster(
@@ -25,56 +35,7 @@ pub async fn ingest_roster(
     let mut present: Vec<Uuid> = Vec::with_capacity(event.players.len());
 
     for p in &event.players {
-        let steam_hash = hmac_sha256(p.steam_id.as_bytes(), pepper).to_vec();
-        let player_id = resolve_or_create_player(&mut tx, &p.steam_id, &steam_hash, obs).await?;
-        present.push(player_id);
-
-        // Name history.
-        if !p.name.is_empty() {
-            sqlx::query(
-                "INSERT INTO name_history (player_id, name, first_seen_at, last_seen_at) \
-                 VALUES ($1, $2, $3, $3) \
-                 ON CONFLICT (player_id, name) DO UPDATE SET last_seen_at = $3",
-            )
-            .bind(player_id)
-            .bind(&p.name)
-            .bind(obs)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        // IP signal (linking + the session's stored IP).
-        let ip_hash =
-            p.ip.as_ref()
-                .map(|ip| hmac_sha256(ip.as_bytes(), pepper).to_vec());
-        if let (Some(ip), Some(h)) = (&p.ip, &ip_hash) {
-            upsert_signal(&mut tx, player_id, "ip", Some(ip), h, obs).await?;
-        }
-
-        // Steam-owner signal (family share — a strong alt signal).
-        if let Some(owner) = &p.owner_steam_id {
-            let owner_hash = hmac_sha256(owner.as_bytes(), pepper).to_vec();
-            upsert_signal(
-                &mut tx,
-                player_id,
-                "steam_owner",
-                Some(owner),
-                &owner_hash,
-                obs,
-            )
-            .await?;
-        }
-
-        upsert_session(
-            &mut tx,
-            tenant,
-            server,
-            player_id,
-            p,
-            ip_hash.as_deref(),
-            obs,
-        )
-        .await?;
+        present.push(ingest_one_player(&mut tx, pepper, tenant, server, p, obs).await?);
     }
 
     // Close open sessions for players no longer on this server (empty roster closes all:
@@ -97,6 +58,149 @@ pub async fn ingest_roster(
         crate::domain::links::evaluate_links(&mut tx, player_id, obs).await?;
         crate::domain::links::check_evasion(&mut tx, tenant, player_id, obs).await?;
     }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The per-player upsert shared by roster snapshots and connect edges: resolve/create the
+/// player, refresh name history + IP/owner signals, and open-or-refresh the session.
+async fn ingest_one_player(
+    tx: &mut Transaction<'_, Postgres>,
+    pepper: &[u8],
+    tenant: Uuid,
+    server: Uuid,
+    p: &cupboard_domain::ObservedPlayer,
+    obs: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Uuid> {
+    let steam_hash = hmac_sha256(p.steam_id.as_bytes(), pepper).to_vec();
+    let player_id = resolve_or_create_player(tx, &p.steam_id, &steam_hash, obs).await?;
+
+    // Name history.
+    if !p.name.is_empty() {
+        sqlx::query(
+            "INSERT INTO name_history (player_id, name, first_seen_at, last_seen_at) \
+             VALUES ($1, $2, $3, $3) \
+             ON CONFLICT (player_id, name) DO UPDATE SET last_seen_at = $3",
+        )
+        .bind(player_id)
+        .bind(&p.name)
+        .bind(obs)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    // IP signal (linking + the session's stored IP).
+    let ip_hash =
+        p.ip.as_ref()
+            .map(|ip| hmac_sha256(ip.as_bytes(), pepper).to_vec());
+    if let (Some(ip), Some(h)) = (&p.ip, &ip_hash) {
+        upsert_signal(tx, player_id, "ip", Some(ip), h, obs).await?;
+    }
+
+    // Steam-owner signal (family share — a strong alt signal).
+    if let Some(owner) = &p.owner_steam_id {
+        let owner_hash = hmac_sha256(owner.as_bytes(), pepper).to_vec();
+        upsert_signal(tx, player_id, "steam_owner", Some(owner), &owner_hash, obs).await?;
+    }
+
+    upsert_session(tx, tenant, server, player_id, p, ip_hash.as_deref(), obs).await?;
+    Ok(player_id)
+}
+
+/// Apply one real-time connect/disconnect edge.
+///
+/// `Connected` mirrors a one-player roster upsert (player, name history, IP signal, open
+/// session, link/evasion re-eval) with an exact `connected_at`. `Disconnected` closes the
+/// open session with an exact timestamp instead of waiting for the next poll to notice.
+pub async fn ingest_session_edge(
+    pool: &PgPool,
+    pepper: &[u8],
+    event: &SessionEvent,
+) -> anyhow::Result<()> {
+    if !is_player_steam_id(&event.steam_id) {
+        return Ok(());
+    }
+    let tenant = event.tenant_id.0;
+    let server = event.server_id.0;
+    let at = event.at;
+    let steam_hash = hmac_sha256(event.steam_id.as_bytes(), pepper).to_vec();
+
+    let mut tx = pool.begin().await?;
+    match event.edge {
+        SessionEdge::Connected => {
+            let observed = cupboard_domain::ObservedPlayer {
+                steam_id: event.steam_id.clone(),
+                owner_steam_id: None, // console join lines don't carry the owner
+                name: event.name.clone(),
+                ip: event.ip.clone(),
+                connected_seconds: 0,
+            };
+            let player_id =
+                ingest_one_player(&mut tx, pepper, tenant, server, &observed, at).await?;
+            crate::domain::links::evaluate_links(&mut tx, player_id, at).await?;
+            crate::domain::links::check_evasion(&mut tx, tenant, player_id, at).await?;
+        }
+        SessionEdge::Disconnected => {
+            // Close via the identifier (the player must exist if we ever opened a session).
+            sqlx::query(
+                "UPDATE player_sessions SET disconnected_at = $4, last_seen_at = $4 \
+                 WHERE tenant_id = $1 AND server_id = $2 AND disconnected_at IS NULL \
+                   AND player_id = (SELECT player_id FROM player_identifiers \
+                                    WHERE type = 'steam' AND value_hash = $3)",
+            )
+            .bind(tenant)
+            .bind(server)
+            .bind(&steam_hash)
+            .bind(at)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Store one chat message, resolving (or creating) the sender in the global graph.
+/// Server/system messages (`steam_id` `"0"`) are stored with `player_id` NULL.
+pub async fn ingest_chat(pool: &PgPool, pepper: &[u8], event: &ChatEvent) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    let player_id = if is_player_steam_id(&event.steam_id) {
+        let steam_hash = hmac_sha256(event.steam_id.as_bytes(), pepper).to_vec();
+        let id = resolve_or_create_player(&mut tx, &event.steam_id, &steam_hash, event.at).await?;
+        if !event.name.is_empty() {
+            sqlx::query(
+                "INSERT INTO name_history (player_id, name, first_seen_at, last_seen_at) \
+                 VALUES ($1, $2, $3, $3) \
+                 ON CONFLICT (player_id, name) DO UPDATE SET last_seen_at = $3",
+            )
+            .bind(id)
+            .bind(&event.name)
+            .bind(event.at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        Some(id)
+    } else {
+        None
+    };
+
+    // Bound attacker-controlled text: Rust caps chat around 128 chars, but a hostile
+    // server could claim anything over RCON.
+    sqlx::query(
+        "INSERT INTO chat_messages (tenant_id, server_id, player_id, channel, name, message, sent_at) \
+         VALUES ($1, $2, $3, $4, left($5, 128), left($6, 2048), $7)",
+    )
+    .bind(event.tenant_id.0)
+    .bind(event.server_id.0)
+    .bind(player_id)
+    .bind(i32::try_from(event.channel).unwrap_or(-1))
+    .bind(&event.name)
+    .bind(&event.message)
+    .bind(event.at)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
     Ok(())
@@ -297,6 +401,18 @@ mod tests {
         )
     }
 
+    // All-digit variant for the edge/chat paths, which validate SteamID64 shape.
+    fn uniq_digits(tag: u32) -> String {
+        format!(
+            "76561{tag}{}",
+            Utc::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+                .unsigned_abs()
+                % 1_000_000_000
+        )
+    }
+
     #[tokio::test]
     async fn ingests_players_signals_and_sessions() {
         let Some(pool) = setup().await else {
@@ -451,6 +567,182 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(open_after, 1, "B should be closed, A still open");
+    }
+
+    #[tokio::test]
+    async fn session_edges_open_and_close_exactly() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP session_edges_open_and_close_exactly: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"edge-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam = uniq_digits(41);
+        let t0 = Utc::now();
+
+        let edge = |edge, at| cupboard_domain::SessionEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at,
+            edge,
+            steam_id: steam.clone(),
+            name: "EdgeCase".into(),
+            ip: Some("203.0.113.99".into()),
+            reason: None,
+        };
+
+        // Connect: player is created, a session opens with the exact timestamp + IP.
+        ingest_session_edge(
+            &pool,
+            pepper,
+            &edge(cupboard_domain::SessionEdge::Connected, t0),
+        )
+        .await
+        .unwrap();
+        let (open, ip): (i64, Option<String>) = sqlx::query_as(
+            "SELECT count(*), max(ip) FROM player_sessions \
+             WHERE tenant_id=$1 AND server_id=$2 AND disconnected_at IS NULL",
+        )
+        .bind(tenant)
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1, "connect edge opens a session");
+        assert_eq!(ip.as_deref(), Some("203.0.113.99"));
+
+        // A replayed connect refreshes rather than duplicating.
+        ingest_session_edge(
+            &pool,
+            pepper,
+            &edge(
+                cupboard_domain::SessionEdge::Connected,
+                t0 + Duration::seconds(5),
+            ),
+        )
+        .await
+        .unwrap();
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_sessions \
+             WHERE tenant_id=$1 AND server_id=$2 AND disconnected_at IS NULL",
+        )
+        .bind(tenant)
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1, "replayed connect must not duplicate the session");
+
+        // Disconnect closes it with the exact timestamp.
+        let t_end = t0 + Duration::seconds(90);
+        ingest_session_edge(
+            &pool,
+            pepper,
+            &edge(cupboard_domain::SessionEdge::Disconnected, t_end),
+        )
+        .await
+        .unwrap();
+        let (open, closed_at): (i64, Option<chrono::DateTime<Utc>>) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE disconnected_at IS NULL), max(disconnected_at) \
+             FROM player_sessions WHERE tenant_id=$1 AND server_id=$2",
+        )
+        .bind(tenant)
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 0, "disconnect edge closes the session");
+        assert_eq!(closed_at.unwrap().timestamp(), t_end.timestamp());
+
+        // A disconnect for someone with no open session is a harmless no-op.
+        ingest_session_edge(
+            &pool,
+            pepper,
+            &edge(
+                cupboard_domain::SessionEdge::Disconnected,
+                t_end + Duration::seconds(1),
+            ),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn chat_ingest_stores_messages_and_resolves_players() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP chat_ingest_stores_messages_and_resolves_players: unset");
+            return;
+        };
+        let pepper = b"chat-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam = uniq_digits(42);
+
+        let chat = |steam_id: &str, name: &str, msg: &str| cupboard_domain::ChatEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at: Utc::now(),
+            channel: 0,
+            steam_id: steam_id.into(),
+            name: name.into(),
+            message: msg.into(),
+        };
+
+        // A player message creates the player and links the row to it.
+        ingest_chat(&pool, pepper, &chat(&steam, "Chatty", "hello world"))
+            .await
+            .unwrap();
+        // A server/system message stores with player_id NULL.
+        ingest_chat(
+            &pool,
+            pepper,
+            &chat("0", "SERVER", "Restarting in 5 minutes"),
+        )
+        .await
+        .unwrap();
+        // An oversized message is stored truncated, not rejected.
+        ingest_chat(&pool, pepper, &chat(&steam, "Chatty", &"x".repeat(5000)))
+            .await
+            .unwrap();
+
+        let (total, linked): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(player_id) FROM chat_messages \
+             WHERE tenant_id=$1 AND server_id=$2",
+        )
+        .bind(tenant)
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(linked, 2, "server message must not be linked to a player");
+
+        let longest: i32 = sqlx::query_scalar(
+            "SELECT max(length(message))::int4 FROM chat_messages WHERE tenant_id=$1",
+        )
+        .bind(tenant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(longest, 2048, "oversized message is bounded");
+
+        // The chatty player exists in the graph with the chat name recorded.
+        let hash = hmac_sha256(steam.as_bytes(), pepper).to_vec();
+        let player: Uuid =
+            sqlx::query_scalar("SELECT player_id FROM player_identifiers WHERE value_hash=$1")
+                .bind(&hash)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let names: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM name_history WHERE player_id=$1 AND name='Chatty'",
+        )
+        .bind(player)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(names, 1);
     }
 
     #[tokio::test]

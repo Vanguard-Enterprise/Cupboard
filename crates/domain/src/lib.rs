@@ -8,7 +8,10 @@ mod permission;
 pub use permission::{Permission, RoleTemplate, DEFAULT_ROLE_TEMPLATES};
 
 pub mod events;
-pub use events::{ObservedPlayer, RosterEvent, ROSTER_STREAM};
+pub use events::{
+    ChatEvent, ObservedPlayer, RosterEvent, SessionEdge, SessionEvent, CHAT_STREAM, ROSTER_STREAM,
+    SESSION_STREAM,
+};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

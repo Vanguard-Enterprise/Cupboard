@@ -16,7 +16,9 @@
 //! keeps reporting even when RCON credentials are wrong or the console is unreachable.
 
 pub mod a2s;
+pub mod console;
 pub mod rcon;
 
 pub use a2s::{A2sError, ServerInfo};
-pub use rcon::{GameconnError, PlayerEntry, RconClient};
+pub use console::{parse_console_line, ConsoleEvent};
+pub use rcon::{ChatEntry, GameconnError, PlayerEntry, RconClient, RconFrame};
