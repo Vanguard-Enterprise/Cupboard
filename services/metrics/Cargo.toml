@@ -13,6 +13,7 @@ path = "src/main.rs"
 cupboard-domain.workspace = true
 cupboard-telemetry.workspace = true
 cupboard-bus.workspace = true
+cupboard-auth-core.workspace = true
 
 tokio.workspace = true
 axum.workspace = true
@@ -21,7 +22,6 @@ serde_json.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 opentelemetry.workspace = true
-
-[dev-dependencies]
+serde.workspace = true
 uuid.workspace = true
 chrono.workspace = true

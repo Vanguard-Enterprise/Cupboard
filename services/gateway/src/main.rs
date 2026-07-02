@@ -40,6 +40,7 @@ pub(crate) struct AppState {
     pub fleet_service_url: String,
     pub identity_service_url: String,
     pub collector_service_url: String,
+    pub metrics_service_url: String,
 }
 
 #[tokio::main]
@@ -73,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         fleet_service_url: config.fleet_service_url.clone(),
         identity_service_url: config.identity_service_url.clone(),
         collector_service_url: config.collector_service_url.clone(),
+        metrics_service_url: config.metrics_service_url.clone(),
     };
 
     let app = Router::new()
@@ -112,6 +114,14 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/chat",
             any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        // Perf dashboards + recommendations (metrics service).
+        .route(
+            "/perf/{*path}",
+            any(proxy::proxy_metrics).layer(axum::middleware::from_fn_with_state(
                 state.clone(),
                 auth::require_auth,
             )),

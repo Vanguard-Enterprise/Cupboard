@@ -33,7 +33,7 @@ pusher stands in for it, exactly like the Phase 2 RCON spike preceded Fleet.
 | D | **Command channel = piggyback on push responses.** Every accepted push returns `{"commands": [...]}` (pending ban/kick/entitlement actions); the plugin ACKs results by pushing `command_result` events. A 30s heartbeat event guarantees a command flush path on idle servers. RCON kick/banid enforcement from Phase 2 stays as the no-plugin fallback. |
 | E | **Backpressure**: streams are bounded (`XADD MAXLEN ~`), Collector answers 429 + `Retry-After` when Redis is down or the caller exceeds per-token rate limits; request body capped (1 MiB). The plugin buffers to a bounded queue and sheds lowest-value events first (combat log → chat → stats; identifiers/sessions last). |
 | F | **Chat, reports, playtime live in Identity** (tenant-scoped RLS tables `chat_messages`, `player_reports`, plus playtime stats) — they are moderation context and hang off the player graph. Retention/purge tooling stays Phase 7; schema keeps the PII/hash separation discipline. |
-| G | **Perf pipeline**: new `services/metrics` consumes `cupboard:perf` → exports OTel metrics with `tenant_id`/`server_id` attributes → `alloy-receiver` → **Mimir** (Decision 5). The recommendation engine runs rule-based PromQL queries against Mimir; tips persist in a `metrics` PG schema (RLS) and serve to web via the gateway. Web perf charts query Mimir *through* the metrics service (tenant-guarded PromQL proxy), never directly. |
+| G | **Perf pipeline**: new `services/metrics` consumes `cupboard:perf` → exports OTel metrics with `tenant_id`/`server_id` attributes → `alloy-receiver` → **Mimir** (Decision 5). *Amended at PR7:* the v1 rule engine and dashboard charts read a **process-local sliding window** (2h) inside the metrics service — recommendations compute on read (nothing persisted, nothing stale) and charts serve the recent range without a Mimir round-trip or a PromQL proxy security surface. Mimir remains the long-term TSDB via OTel; PromQL-backed long-range views layer on when needed (Grafana serves operators today). |
 | H | **New repos** `Vanguard-Enterprise/cupboard-plugin` (PR4) and `cupboard-perfmod` (PR6), per ARCHITECTURE ("separate game-server-side repos"). Created when their PR starts. |
 
 ## Thinnest end-to-end slice ("first rich data in")
@@ -106,6 +106,27 @@ Oxide/Carbon reference assemblies).
   not deploy secrets. (`cupboard/staging/metrics` only if a Mimir tenant header or
   basic-auth turns out to be needed.)
 - `use1` app-of-apps is `syncPolicy: None` — `kubectl apply` new Application CRs.
+
+## Degradation matrix (DoD #3 closeout — verified 2026-07-02)
+
+Operators enable mechanisms per server; every column degrades to the one left of it.
+Verified live on the test server (RCON+A2S+plugin) and synthetically for the rest.
+
+| Capability | RCON only | + A2S | + plugin (CupboardLink) | + perf mod |
+|---|---|---|---|---|
+| Roster / sessions / IPs | ✅ 30s polls | ✅ | ✅ + exact edges, works with RCON down | ✅ |
+| Server metadata (map/pop) | — | ✅ | ✅ | ✅ |
+| Chat | ✅ console stream | ✅ | ✅ (+team chat); cross-source deduped | ✅ |
+| Ban enforcement | ✅ kick ≤30s + instant on join | ✅ | ✅ + command channel (kick/ban/unban), works with RCON down | ✅ |
+| Identifiers | steam + owner (roster) | ✅ | ✅ + EAC id | ✅ |
+| F7 reports | — | — | ✅ | ✅ |
+| Playtime | ✅ (session-derived) | ✅ | ✅ | ✅ |
+| Perf samples + recommendations | — | — | ✅ 30s sampler (no frame dist.) | ✅ + frame-time avg/max |
+
+Loss behaviors: plugin unreachable → bounded buffer + backoff (oldest shed);
+Redis down → 503 backpressure, plugin re-sends; identity down → enforcement
+skipped that batch, healed at next poll/roster; perf reporting stops → the
+`stale-reporting` recommendation says so.
 
 ## Open questions (non-blocking; decide as we reach them)
 

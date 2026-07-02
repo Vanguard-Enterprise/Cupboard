@@ -100,8 +100,10 @@ impl Instruments {
     }
 }
 
-/// Run the consume→record loop forever (until aborted at shutdown).
-pub async fn run(mut bus: Bus, consumer_name: String) {
+/// Run the consume→record loop forever (until aborted at shutdown). Each sample is
+/// recorded twice: onto the OTel instruments (→ Mimir) and into the sliding window
+/// (→ rules + dashboard series).
+pub async fn run(mut bus: Bus, window: crate::window::WindowStore, consumer_name: String) {
     let meter = opentelemetry::global::meter("cupboard-metrics");
     let instruments = Instruments::new(&meter);
     tracing::info!(consumer = %consumer_name, "perf consumer starting");
@@ -130,6 +132,7 @@ pub async fn run(mut bus: Bus, consumer_name: String) {
         let mut ack_ids = batch.failed_ids;
         for d in batch.ok {
             instruments.record(&d.payload);
+            window.insert(&d.payload);
             tracing::debug!(entry = %d.id, server_id = %d.payload.server_id, fps = d.payload.fps, "recorded perf sample");
             ack_ids.push(d.id);
         }

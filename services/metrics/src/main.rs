@@ -11,19 +11,26 @@
 //! truncates hook lists to [`cupboard_domain::push::MAX_HOOK_TIMINGS`]) for hook time.
 
 mod config;
+mod http;
 mod recorder;
+mod rules;
+mod window;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
+use anyhow::Context as _;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use config::Config;
+use cupboard_auth_core::Keys;
 use cupboard_bus::Bus;
 use serde_json::json;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
+use window::WindowStore;
 
 #[derive(Clone)]
 struct HealthState {
@@ -43,17 +50,34 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let bus = Bus::connect(&config.redis_url).await?;
-    let consumer = tokio::spawn(recorder::run(bus, config.consumer_name.clone()));
+    let keys = Keys::verifier_from_ed_pem(&config.jwt_public_key_pem)
+        .context("load Ed25519 JWT verifier")?;
 
-    let app = Router::new()
+    // The window store links the consumer (writer) to the perf API (reader).
+    let window = WindowStore::default();
+
+    let bus = Bus::connect(&config.redis_url).await?;
+    let consumer = tokio::spawn(recorder::run(
+        bus,
+        window.clone(),
+        config.consumer_name.clone(),
+    ));
+
+    let health = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
-        .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
-        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
         .with_state(HealthState {
             environment: config.environment.clone(),
         });
+    let app = health
+        .merge(http::router(http::ApiState {
+            window,
+            keys: Arc::new(keys),
+        }))
+        .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)),
+        );
 
     let addr: SocketAddr = config.bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

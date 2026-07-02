@@ -51,6 +51,16 @@ pub async fn proxy_ingest(
     proxy_to(&base, state, req).await
 }
 
+/// Reverse-proxy `/perf/*` to the metrics service. Auth-gated; metrics re-validates
+/// the token and scopes data by tenant.
+pub async fn proxy_metrics(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.metrics_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
 /// Shared reverse-proxy: forward the request to `base_url` + original path/query.
 async fn proxy_to(
     base_url: &str,

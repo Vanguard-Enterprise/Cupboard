@@ -13,6 +13,8 @@ pub struct Config {
     pub redis_url: String,
     /// This consumer's name within the `metrics` group (unique per replica).
     pub consumer_name: String,
+    /// Ed25519 public key (PEM) for verifying access tokens on the perf API.
+    pub jwt_public_key_pem: String,
 }
 
 impl Config {
@@ -26,6 +28,8 @@ impl Config {
             consumer_name: env::var("CONSUMER_NAME")
                 .or_else(|_| env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "metrics-1".into()),
+            jwt_public_key_pem: env::var("JWT_PUBLIC_KEY_PEM")
+                .map_err(|_| anyhow::anyhow!("JWT_PUBLIC_KEY_PEM is required"))?,
         })
     }
 }
