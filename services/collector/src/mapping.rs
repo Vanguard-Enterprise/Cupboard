@@ -3,7 +3,8 @@
 
 use chrono::{DateTime, Utc};
 use cupboard_domain::{
-    ChatEvent, ObservedPlayer, RosterEvent, ServerId, SessionEdge, SessionEvent, TenantId,
+    ChatEvent, EventSource, ObservedPlayer, RosterEvent, ServerId, SessionEdge, SessionEvent,
+    TenantId,
 };
 use cupboard_gameconn::{ChatEntry, ConsoleEvent, PlayerEntry};
 use uuid::Uuid;
@@ -33,6 +34,7 @@ pub fn to_roster_event(
                     Some(ip.to_string())
                 }
             },
+            eac_id: None, // RCON rosters don't expose the anti-cheat id
             connected_seconds: p.connected_seconds,
         })
         .collect();
@@ -61,6 +63,7 @@ pub fn to_chat_event(
         steam_id: entry.user_id.clone(),
         name: entry.username.clone(),
         message: entry.message.clone(),
+        source: Some(EventSource::Rcon),
     }
 }
 
@@ -100,8 +103,10 @@ pub fn to_session_event(
         steam_id,
         name,
         ip,
-        // Console join lines don't expose the owning Steam ID; the plugin path does.
+        // Console join lines don't expose the owning Steam ID or EAC id; the plugin
+        // path does.
         owner_steam_id: None,
+        eac_id: None,
         reason,
     }
 }

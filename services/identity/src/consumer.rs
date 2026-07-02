@@ -9,7 +9,8 @@
 
 use cupboard_bus::Bus;
 use cupboard_domain::{
-    ChatEvent, RosterEvent, SessionEvent, CHAT_STREAM, ROSTER_STREAM, SESSION_STREAM,
+    ChatEvent, ReportEvent, RosterEvent, SessionEvent, CHAT_STREAM, REPORT_STREAM, ROSTER_STREAM,
+    SESSION_STREAM,
 };
 use serde::de::DeserializeOwned;
 use sqlx::PgPool;
@@ -48,6 +49,16 @@ pub async fn run_chat(bus: Bus, pool: PgPool, pepper: Vec<u8>, consumer_name: St
         let pool = pool.clone();
         let pepper = pepper.clone();
         async move { ingest::ingest_chat(&pool, &pepper, &ev).await }
+    })
+    .await
+}
+
+/// Consume F7 reports forever.
+pub async fn run_reports(bus: Bus, pool: PgPool, pepper: Vec<u8>, consumer_name: String) {
+    consume::<ReportEvent, _, _>(bus, REPORT_STREAM, consumer_name, move |ev| {
+        let pool = pool.clone();
+        let pepper = pepper.clone();
+        async move { ingest::ingest_report(&pool, &pepper, &ev).await }
     })
     .await
 }

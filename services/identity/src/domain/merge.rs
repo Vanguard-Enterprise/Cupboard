@@ -255,6 +255,7 @@ mod tests {
                 owner_steam_id: None,
                 name: "n".into(),
                 ip: Some("203.0.113.9".into()),
+                eac_id: None,
                 connected_seconds: 5,
             }],
         };

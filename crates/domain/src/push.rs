@@ -44,6 +44,9 @@ pub enum PushEvent {
         /// Owning Steam ID when the copy is family-shared.
         #[serde(default)]
         owner_steam_id: Option<String>,
+        /// Anti-cheat (EAC) identifier.
+        #[serde(default)]
+        eac_id: Option<String>,
     },
     PlayerDisconnected {
         at: DateTime<Utc>,
@@ -68,6 +71,22 @@ pub enum PushEvent {
         at: DateTime<Utc>,
         players: Vec<PushedPlayer>,
     },
+    /// An F7 report filed in-game against another player.
+    Report {
+        at: DateTime<Utc>,
+        reporter_steam_id: String,
+        #[serde(default)]
+        reporter_name: String,
+        target_steam_id: String,
+        #[serde(default)]
+        target_name: String,
+        #[serde(default)]
+        subject: String,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        report_type: String,
+    },
     /// The plugin's acknowledgement of an executed (or failed) inbound command.
     CommandResult {
         at: DateTime<Utc>,
@@ -91,6 +110,9 @@ pub struct PushedPlayer {
     /// Owning Steam ID when the copy is family-shared.
     #[serde(default)]
     pub owner_steam_id: Option<String>,
+    /// Anti-cheat (EAC) identifier.
+    #[serde(default)]
+    pub eac_id: Option<String>,
     #[serde(default)]
     pub connected_seconds: i64,
 }

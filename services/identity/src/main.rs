@@ -75,6 +75,12 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(consumer::run_chat(
             Bus::connect(&config.redis_url).await?,
             owner_pool.clone(),
+            pepper.clone(),
+            config.consumer_name.clone(),
+        )),
+        tokio::spawn(consumer::run_reports(
+            Bus::connect(&config.redis_url).await?,
+            owner_pool.clone(),
             pepper,
             config.consumer_name.clone(),
         )),

@@ -26,6 +26,8 @@ type Profile = {
     confidence: number;
     signals: string;
   }[];
+  playtime: Playtime[];
+  reports_against: Report[];
 };
 
 type ChatMessage = {
@@ -34,6 +36,23 @@ type ChatMessage = {
   message: string;
   sent_at: string;
 };
+
+type Playtime = { server_id: string; total_secs: number; sessions: number };
+type Report = {
+  id: string;
+  reporter_player_id: string | null;
+  reporter_name: string | null;
+  subject: string | null;
+  message: string | null;
+  report_type: string | null;
+  reported_at: string;
+};
+
+function formatPlaytime(secs: number): string {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
 
 export default async function PlayerProfilePage({
   params,
@@ -75,6 +94,19 @@ export default async function PlayerProfilePage({
           {profile.player.first_seen_at
             ? new Date(profile.player.first_seen_at).toLocaleString()
             : "—"}
+          {profile.playtime.length > 0 && (
+            <>
+              {" · "}
+              {formatPlaytime(profile.playtime.reduce((a, p) => a + p.total_secs, 0))} played
+              {" over "}
+              {profile.playtime.reduce((a, p) => a + p.sessions, 0)} session(s)
+            </>
+          )}
+          {profile.reports_against.length > 0 && (
+            <span className="ml-2 rounded bg-red-950 px-2 py-0.5 text-xs text-red-300">
+              {profile.reports_against.length} report(s)
+            </span>
+          )}
         </p>
       </div>
 
@@ -184,6 +216,35 @@ export default async function PlayerProfilePage({
           <p className="text-sm text-neutral-400">
             {profile.names.map((n) => n.name).filter(Boolean).join(", ")}
           </p>
+        </section>
+      )}
+
+      {profile.reports_against.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Reports against this player</h2>
+          <div className="overflow-hidden rounded border border-neutral-800">
+            <table className="w-full text-left text-sm">
+              <tbody>
+                {profile.reports_against.map((r) => (
+                  <tr key={r.id} className="border-t border-neutral-800 first:border-t-0 align-top">
+                    <td className="whitespace-nowrap px-3 py-2 text-neutral-400">
+                      {new Date(r.reported_at).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="rounded bg-red-950 px-2 py-0.5 text-xs text-red-300">
+                        {r.report_type ?? "report"}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-neutral-300">{r.subject ?? "—"}</td>
+                    <td className="px-3 py-2 break-all text-neutral-400">{r.message ?? "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-neutral-500">
+                      by {r.reporter_name ?? "unknown"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 

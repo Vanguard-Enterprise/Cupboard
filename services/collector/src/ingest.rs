@@ -29,8 +29,8 @@ use cupboard_domain::push::{
     PUSH_SCHEMA_VERSION,
 };
 use cupboard_domain::{
-    ChatEvent, ObservedPlayer, RosterEvent, ServerId, SessionEdge, SessionEvent, TenantId,
-    CHAT_STREAM, ROSTER_STREAM, SESSION_STREAM,
+    ChatEvent, EventSource, ObservedPlayer, ReportEvent, RosterEvent, ServerId, SessionEdge,
+    SessionEvent, TenantId, CHAT_STREAM, REPORT_STREAM, ROSTER_STREAM, SESSION_STREAM,
 };
 use serde_json::json;
 
@@ -171,6 +171,12 @@ pub async fn post_events(
                     Err(resp) => return resp,
                 }
             }
+            Translated::Report(ev) => {
+                match publish_one(&mut bus, REPORT_STREAM, state.stream_maxlen, &ev, &who).await {
+                    Ok(()) => accepted += 1,
+                    Err(resp) => return resp,
+                }
+            }
             Translated::Accepted => accepted += 1,
             Translated::Unknown => dropped_unknown += 1,
         }
@@ -249,6 +255,7 @@ enum Translated {
     Session(SessionEvent),
     Chat(ChatEvent),
     Roster(RosterEvent),
+    Report(ReportEvent),
     /// Consumed with no stream side effect (heartbeats, command results for now).
     Accepted,
     Unknown,
@@ -266,6 +273,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             name,
             ip,
             owner_steam_id,
+            eac_id,
         } => Translated::Session(SessionEvent {
             server_id,
             tenant_id,
@@ -275,6 +283,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             name,
             ip,
             owner_steam_id,
+            eac_id,
             reason: None,
         }),
         PushEvent::PlayerDisconnected {
@@ -291,6 +300,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             name,
             ip: None,
             owner_steam_id: None,
+            eac_id: None,
             reason,
         }),
         PushEvent::Chat {
@@ -307,6 +317,28 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             steam_id,
             name,
             message,
+            source: Some(EventSource::Plugin),
+        }),
+        PushEvent::Report {
+            at,
+            reporter_steam_id,
+            reporter_name,
+            target_steam_id,
+            target_name,
+            subject,
+            message,
+            report_type,
+        } => Translated::Report(ReportEvent {
+            server_id,
+            tenant_id,
+            at: clamp(at, now),
+            reporter_steam_id,
+            reporter_name,
+            target_steam_id,
+            target_name,
+            subject,
+            message,
+            report_type,
         }),
         PushEvent::Roster { at, players } => Translated::Roster(RosterEvent {
             server_id,
@@ -323,6 +355,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
                     steam_id: p.steam_id,
                     name: p.name,
                     ip: p.ip.filter(|ip| !ip.is_empty()),
+                    eac_id: p.eac_id.filter(|e| !e.is_empty()),
                     connected_seconds: p.connected_seconds.max(0),
                 })
                 .collect(),

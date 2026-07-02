@@ -12,7 +12,7 @@
 //! session is a no-op; a replayed chat line duplicates, which moderation context absorbs).
 
 use cupboard_crypto::hmac_sha256;
-use cupboard_domain::{ChatEvent, RosterEvent, SessionEdge, SessionEvent};
+use cupboard_domain::{ChatEvent, ReportEvent, RosterEvent, SessionEdge, SessionEvent};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -104,6 +104,29 @@ async fn ingest_one_player(
         upsert_signal(tx, player_id, "steam_owner", Some(owner), &owner_hash, obs).await?;
     }
 
+    // EAC identifier (plugin-observed). An identifier is a unique global key: if this
+    // EAC id already belongs to a DIFFERENT player we don't steal it — we bump its
+    // last_seen and leave ownership alone (a contested EAC id is alt evidence, consumed
+    // by link tuning later, not a reason to rewire the graph mid-ingest).
+    if let Some(eac) = &p.eac_id {
+        let eac_hash = hmac_sha256(eac.as_bytes(), pepper).to_vec();
+        let owner_of_eac: Uuid = sqlx::query_scalar(
+            "INSERT INTO player_identifiers (player_id, type, value, value_hash, first_seen_at, last_seen_at) \
+             VALUES ($1, 'eac', $2, $3, $4, $4) \
+             ON CONFLICT (type, value_hash) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at \
+             RETURNING player_id",
+        )
+        .bind(player_id)
+        .bind(eac)
+        .bind(&eac_hash)
+        .bind(obs)
+        .fetch_one(&mut **tx)
+        .await?;
+        if owner_of_eac != player_id {
+            tracing::debug!(%player_id, %owner_of_eac, "eac id already owned by another player (possible alt)");
+        }
+    }
+
     upsert_session(tx, tenant, server, player_id, p, ip_hash.as_deref(), obs).await?;
     Ok(player_id)
 }
@@ -141,6 +164,7 @@ pub async fn ingest_session_edge(
                 owner_steam_id: owner,
                 name: event.name.clone(),
                 ip: event.ip.clone(),
+                eac_id: event.eac_id.clone().filter(|e| !e.is_empty()),
                 connected_seconds: 0,
             };
             let player_id =
@@ -193,11 +217,38 @@ pub async fn ingest_chat(pool: &PgPool, pepper: &[u8], event: &ChatEvent) -> any
         None
     };
 
+    // Cross-source dedupe: with RCON *and* the plugin active, every message arrives
+    // twice. Skip when the same player+message already landed from the OTHER source
+    // within ±15s (covers plugin batching lag). Same-source repeats are real repeats;
+    // legacy NULL-source rows never suppress.
+    let source = event.source.map(|s| s.as_str());
+    if let (Some(pid), Some(src)) = (player_id, source) {
+        let duplicate: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM chat_messages \
+             WHERE tenant_id = $1 AND server_id = $2 AND player_id = $3 \
+               AND message = left($4, 2048) \
+               AND source IS NOT NULL AND source <> $5 \
+               AND sent_at BETWEEN $6 - interval '15 seconds' AND $6 + interval '15 seconds')",
+        )
+        .bind(event.tenant_id.0)
+        .bind(event.server_id.0)
+        .bind(pid)
+        .bind(&event.message)
+        .bind(src)
+        .bind(event.at)
+        .fetch_one(&mut *tx)
+        .await?;
+        if duplicate {
+            tx.commit().await?;
+            return Ok(());
+        }
+    }
+
     // Bound attacker-controlled text: Rust caps chat around 128 chars, but a hostile
     // server could claim anything over RCON.
     sqlx::query(
-        "INSERT INTO chat_messages (tenant_id, server_id, player_id, channel, name, message, sent_at) \
-         VALUES ($1, $2, $3, $4, left($5, 128), left($6, 2048), $7)",
+        "INSERT INTO chat_messages (tenant_id, server_id, player_id, channel, name, message, sent_at, source) \
+         VALUES ($1, $2, $3, $4, left($5, 128), left($6, 2048), $7, $8)",
     )
     .bind(event.tenant_id.0)
     .bind(event.server_id.0)
@@ -205,6 +256,54 @@ pub async fn ingest_chat(pool: &PgPool, pepper: &[u8], event: &ChatEvent) -> any
     .bind(i32::try_from(event.channel).unwrap_or(-1))
     .bind(&event.name)
     .bind(&event.message)
+    .bind(event.at)
+    .bind(source)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Store one F7 report, resolving (or creating) both sides in the global graph. The
+/// target may never have been observed directly — they still get a player so repeated
+/// reports against them aggregate.
+pub async fn ingest_report(
+    pool: &PgPool,
+    pepper: &[u8],
+    event: &ReportEvent,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    let reporter_id = if is_player_steam_id(&event.reporter_steam_id) {
+        let hash = hmac_sha256(event.reporter_steam_id.as_bytes(), pepper).to_vec();
+        Some(resolve_or_create_player(&mut tx, &event.reporter_steam_id, &hash, event.at).await?)
+    } else {
+        None
+    };
+    let target_id = if is_player_steam_id(&event.target_steam_id) {
+        let hash = hmac_sha256(event.target_steam_id.as_bytes(), pepper).to_vec();
+        Some(resolve_or_create_player(&mut tx, &event.target_steam_id, &hash, event.at).await?)
+    } else {
+        None
+    };
+
+    sqlx::query(
+        "INSERT INTO player_reports \
+         (tenant_id, server_id, reporter_player_id, target_player_id, reporter_name, \
+          target_name, subject, message, report_type, reported_at) \
+         VALUES ($1, $2, $3, $4, left($5, 128), left($6, 128), left($7, 256), \
+                 left($8, 2048), left($9, 64), $10)",
+    )
+    .bind(event.tenant_id.0)
+    .bind(event.server_id.0)
+    .bind(reporter_id)
+    .bind(target_id)
+    .bind(&event.reporter_name)
+    .bind(&event.target_name)
+    .bind(&event.subject)
+    .bind(&event.message)
+    .bind(&event.report_type)
     .bind(event.at)
     .execute(&mut *tx)
     .await?;
@@ -411,6 +510,7 @@ mod tests {
             owner_steam_id: owner.map(Into::into),
             name: format!("name-{steam}"),
             ip: ip.map(Into::into),
+            eac_id: None,
             connected_seconds: secs,
         }
     }
@@ -613,6 +713,7 @@ mod tests {
             name: "EdgeCase".into(),
             ip: Some("203.0.113.99".into()),
             owner_steam_id: None,
+            eac_id: None,
             reason: None,
         };
 
@@ -711,6 +812,7 @@ mod tests {
             steam_id: steam_id.into(),
             name: name.into(),
             message: msg.into(),
+            source: None,
         };
 
         // A player message creates the player and links the row to it.
@@ -770,6 +872,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_ingest_resolves_both_sides() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP report_ingest_resolves_both_sides: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"report-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let reporter = uniq_digits(51);
+        let target = uniq_digits(52);
+
+        ingest_report(
+            &pool,
+            pepper,
+            &cupboard_domain::ReportEvent {
+                server_id: ServerId(server),
+                tenant_id: TenantId(tenant),
+                at: Utc::now(),
+                reporter_steam_id: reporter.clone(),
+                reporter_name: "GoodCitizen".into(),
+                target_steam_id: target.clone(),
+                target_name: "SusPlayer".into(),
+                subject: "cheating".into(),
+                message: "aimbot obvious".into(),
+                report_type: "cheat".into(),
+            },
+        )
+        .await
+        .expect("report ingests");
+
+        // Both sides resolved to players (the target was never otherwise observed).
+        let (count, with_both): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(*) FILTER (WHERE reporter_player_id IS NOT NULL \
+                 AND target_player_id IS NOT NULL) \
+             FROM player_reports WHERE tenant_id = $1",
+        )
+        .bind(tenant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(with_both, 1, "reporter and target both resolved");
+    }
+
+    #[tokio::test]
+    async fn chat_dedupes_across_sources_not_within() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP chat_dedupes_across_sources_not_within: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"dedupe-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam = uniq_digits(53);
+        let t0 = Utc::now();
+
+        let chat = |source, at| cupboard_domain::ChatEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at,
+            channel: 0,
+            steam_id: steam.clone(),
+            name: "Dupe".into(),
+            message: "hello world".into(),
+            source: Some(source),
+        };
+
+        use cupboard_domain::EventSource::{Plugin, Rcon};
+        // RCON sees it, then the plugin reports the same message 2s later → dedupe.
+        ingest_chat(&pool, pepper, &chat(Rcon, t0)).await.unwrap();
+        ingest_chat(&pool, pepper, &chat(Plugin, t0 + Duration::seconds(2)))
+            .await
+            .unwrap();
+        // The player really repeats themselves (same source) → NOT deduped.
+        ingest_chat(&pool, pepper, &chat(Rcon, t0 + Duration::seconds(5)))
+            .await
+            .unwrap();
+        // …and the plugin echo of that repeat is deduped again.
+        ingest_chat(&pool, pepper, &chat(Plugin, t0 + Duration::seconds(7)))
+            .await
+            .unwrap();
+
+        let rows: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM chat_messages WHERE tenant_id = $1")
+                .bind(tenant)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, 2, "two real messages, two rows — echoes deduped");
+    }
+
+    #[tokio::test]
+    async fn eac_identifier_attaches_without_stealing() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP eac_identifier_attaches_without_stealing: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"eac-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam_a = uniq_digits(54);
+        let steam_b = uniq_digits(55);
+        let eac = format!("eac-{steam_a}");
+
+        let edge = |steam: &str| cupboard_domain::SessionEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at: Utc::now(),
+            edge: cupboard_domain::SessionEdge::Connected,
+            steam_id: steam.into(),
+            name: "EacUser".into(),
+            ip: None,
+            owner_steam_id: None,
+            eac_id: Some(eac.clone()),
+            reason: None,
+        };
+
+        // A connects with the EAC id → identifier attaches to A.
+        ingest_session_edge(&pool, pepper, &edge(&steam_a))
+            .await
+            .unwrap();
+        // B connects claiming the SAME EAC id → must not steal it from A.
+        ingest_session_edge(&pool, pepper, &edge(&steam_b))
+            .await
+            .unwrap();
+
+        let eac_hash = hmac_sha256(eac.as_bytes(), pepper).to_vec();
+        let a_id: Uuid = sqlx::query_scalar(
+            "SELECT player_id FROM player_identifiers WHERE type='steam' AND value_hash=$1",
+        )
+        .bind(hmac_sha256(steam_a.as_bytes(), pepper).to_vec())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let eac_owner: Uuid = sqlx::query_scalar(
+            "SELECT player_id FROM player_identifiers WHERE type='eac' AND value_hash=$1",
+        )
+        .bind(&eac_hash)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(eac_owner, a_id, "first observer keeps the EAC identifier");
+    }
+
+    #[tokio::test]
     async fn concurrent_consumers_create_one_player_without_failures() {
         let Some(pool) = setup().await else {
             eprintln!("SKIP concurrent_consumers_create_one_player_without_failures: unset");
@@ -792,6 +1039,7 @@ mod tests {
             name: "Racer".into(),
             ip: Some("203.0.113.77".into()),
             owner_steam_id: None,
+            eac_id: None,
             reason: None,
         };
         let chat_ev = cupboard_domain::ChatEvent {
@@ -802,6 +1050,7 @@ mod tests {
             steam_id: steam.clone(),
             name: "Racer".into(),
             message: "first!".into(),
+            source: None,
         };
         let roster_ev = RosterEvent {
             server_id: ServerId(server),
