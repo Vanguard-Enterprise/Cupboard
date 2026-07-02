@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     // Supervisor: reconciles per-server RCON/A2S connections against fleet's config feed.
     let manager = tokio::spawn(manager::run(
         fleet,
-        identity,
+        identity.clone(),
         bus.clone(),
         registry.clone(),
         Duration::from_secs(config.poll_interval_secs),
@@ -70,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
         bus,
         limiter: RateLimiter::new(config.push_rate_limit_per_min),
         stream_maxlen: config.push_stream_maxlen,
+        identity,
     };
 
     // Health probes + the push-ingestion endpoint (reached via the gateway's /ingest

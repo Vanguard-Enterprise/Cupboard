@@ -60,6 +60,14 @@ pub enum PushEvent {
         name: String,
         message: String,
     },
+    /// A full online-roster snapshot (the plugin sends one periodically). The push-tier
+    /// equivalent of the RCON `playerlist` poll: self-healing session baseline for
+    /// plugin-only servers, and the enforcement sweep — the response carries kick
+    /// commands for any banned player in it.
+    Roster {
+        at: DateTime<Utc>,
+        players: Vec<PushedPlayer>,
+    },
     /// The plugin's acknowledgement of an executed (or failed) inbound command.
     CommandResult {
         at: DateTime<Utc>,
@@ -71,6 +79,20 @@ pub enum PushEvent {
     /// Any event type this backend doesn't know yet — accepted and dropped (counted).
     #[serde(other)]
     Unknown,
+}
+
+/// One player in a pushed roster snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PushedPlayer {
+    pub steam_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub ip: Option<String>,
+    /// Owning Steam ID when the copy is family-shared.
+    #[serde(default)]
+    pub owner_steam_id: Option<String>,
+    #[serde(default)]
+    pub connected_seconds: i64,
 }
 
 /// The response to every accepted push: how much was taken, plus pending commands for

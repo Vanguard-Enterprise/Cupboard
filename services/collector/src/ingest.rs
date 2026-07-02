@@ -9,9 +9,10 @@
 //!    entries instead of growing Redis unboundedly;
 //! 4. Redis down → 503 + `Retry-After` — the plugin buffers and retries.
 //!
-//! No business logic: events are validated at the transport level, translated onto the
-//! same streams the RCON pull path feeds, and answered with any pending commands
-//! (empty until the command queue lands with the plugin PRs).
+//! No business logic beyond translation: events are validated at the transport level,
+//! translated onto the same streams the RCON pull path feeds, and answered with
+//! enforcement commands derived statelessly from identity's ban lookup (see
+//! [`enforcement_commands`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -24,13 +25,16 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use cupboard_bus::Bus;
 use cupboard_domain::push::{
-    PushBatch, PushEvent, PushResponse, MAX_EVENTS_PER_BATCH, PUSH_SCHEMA_VERSION,
+    PushAction, PushBatch, PushCommand, PushEvent, PushResponse, MAX_EVENTS_PER_BATCH,
+    PUSH_SCHEMA_VERSION,
 };
 use cupboard_domain::{
-    ChatEvent, ServerId, SessionEdge, SessionEvent, TenantId, CHAT_STREAM, SESSION_STREAM,
+    ChatEvent, ObservedPlayer, RosterEvent, ServerId, SessionEdge, SessionEvent, TenantId,
+    CHAT_STREAM, ROSTER_STREAM, SESSION_STREAM,
 };
 use serde_json::json;
 
+use crate::identity_client::IdentityClient;
 use crate::registry::{PushIdentity, TokenRegistry};
 
 /// Push timestamps further than this from the Collector clock are clamped to "now" —
@@ -45,6 +49,9 @@ pub struct IngestState {
     pub limiter: RateLimiter,
     /// `XADD MAXLEN ~` cap per stream.
     pub stream_maxlen: usize,
+    /// Ban-enforcement lookup: connects/rosters in a batch are checked and the response
+    /// carries kick commands for the hits (the plugin-path replacement for RCON kicks).
+    pub identity: IdentityClient,
 }
 
 /// Fixed-window per-server request limiter. Windows are 60s; coarse but cheap, and the
@@ -134,12 +141,18 @@ pub async fn post_events(
     let mut bus = state.bus.clone();
     let mut accepted = 0usize;
     let mut dropped_unknown = 0usize;
+    // Steam IDs seen online in this batch (connects + roster snapshots) — the
+    // enforcement sweep below turns ban hits among them into kick commands.
+    let mut online: Vec<String> = Vec::new();
     for event in batch.events {
         // Redis unavailable = genuine backpressure: 503 tells the plugin to buffer and
         // re-send the whole batch (at-least-once is the contract; ingestion tolerates
         // replays).
         match translate(&who, event, now) {
             Translated::Session(ev) => {
+                if ev.edge == SessionEdge::Connected {
+                    online.push(ev.steam_id.clone());
+                }
                 match publish_one(&mut bus, SESSION_STREAM, state.stream_maxlen, &ev, &who).await {
                     Ok(()) => accepted += 1,
                     Err(resp) => return resp,
@@ -151,22 +164,67 @@ pub async fn post_events(
                     Err(resp) => return resp,
                 }
             }
+            Translated::Roster(ev) => {
+                online.extend(ev.players.iter().map(|p| p.steam_id.clone()));
+                match publish_one(&mut bus, ROSTER_STREAM, state.stream_maxlen, &ev, &who).await {
+                    Ok(()) => accepted += 1,
+                    Err(resp) => return resp,
+                }
+            }
             Translated::Accepted => accepted += 1,
             Translated::Unknown => dropped_unknown += 1,
         }
     }
+
+    let commands = enforcement_commands(&state.identity, &who, online).await;
 
     (
         StatusCode::OK,
         Json(PushResponse {
             accepted,
             dropped_unknown,
-            // The command queue arrives with the plugin PRs; the response shape is the
-            // contract the plugin is built against.
-            commands: Vec::new(),
+            commands,
         }),
     )
         .into_response()
+}
+
+/// Derive kick commands for banned players among the batch's online Steam IDs.
+///
+/// Stateless by design: commands are re-derived from bans on every batch (a missed
+/// response is healed by the next roster sweep), so no queue table or ack tracking is
+/// needed. A persistent queue only becomes necessary for one-shot actions (entitlement
+/// grants, Phase 5+). An identity outage degrades to "no commands this batch" — never a
+/// failed push.
+async fn enforcement_commands(
+    identity: &IdentityClient,
+    who: &PushIdentity,
+    mut online: Vec<String>,
+) -> Vec<PushCommand> {
+    online.sort();
+    online.dedup();
+    if online.is_empty() {
+        return Vec::new();
+    }
+    match identity
+        .enforce(who.tenant_id, who.server_id, &online)
+        .await
+    {
+        Ok(hits) => hits
+            .into_iter()
+            .map(|hit| PushCommand {
+                id: uuid::Uuid::new_v4().to_string(),
+                action: PushAction::Kick {
+                    steam_id: hit.steam_id,
+                    reason: hit.reason.unwrap_or_else(|| "banned".to_string()),
+                },
+            })
+            .collect(),
+        Err(e) => {
+            tracing::warn!(server_id = %who.server_id, error = %e, "enforcement lookup failed; no commands this batch");
+            Vec::new()
+        }
+    }
 }
 
 /// Publish one translated event with the stream cap; a Redis failure becomes the 503
@@ -190,6 +248,7 @@ async fn publish_one<T: serde::Serialize>(
 enum Translated {
     Session(SessionEvent),
     Chat(ChatEvent),
+    Roster(RosterEvent),
     /// Consumed with no stream side effect (heartbeats, command results for now).
     Accepted,
     Unknown,
@@ -248,6 +307,25 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             steam_id,
             name,
             message,
+        }),
+        PushEvent::Roster { at, players } => Translated::Roster(RosterEvent {
+            server_id,
+            tenant_id,
+            observed_at: clamp(at, now),
+            players: players
+                .into_iter()
+                .map(|p| ObservedPlayer {
+                    // Owner == self / "0" isn't a family share — same rule as the RCON
+                    // mapping.
+                    owner_steam_id: p
+                        .owner_steam_id
+                        .filter(|o| !o.is_empty() && o != "0" && *o != p.steam_id),
+                    steam_id: p.steam_id,
+                    name: p.name,
+                    ip: p.ip.filter(|ip| !ip.is_empty()),
+                    connected_seconds: p.connected_seconds.max(0),
+                })
+                .collect(),
         }),
         PushEvent::CommandResult { command_id, ok, .. } => {
             tracing::info!(server_id = %who.server_id, command_id, ok, "plugin command result");
