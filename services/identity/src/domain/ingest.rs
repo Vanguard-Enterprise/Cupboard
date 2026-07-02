@@ -215,6 +215,11 @@ pub async fn ingest_chat(pool: &PgPool, pepper: &[u8], event: &ChatEvent) -> any
 
 /// Find the player owning this Steam identifier, or create a fresh Cupboard Player ID +
 /// the identifier. Refreshes `players.last_seen_at` either way.
+///
+/// Race-safe: the roster/session/chat consumers run concurrently and can all see the
+/// same brand-new player in the same instant. Creation is claimed through
+/// `ON CONFLICT (type, value_hash) DO UPDATE … RETURNING player_id` — the loser blocks
+/// until the winner commits, adopts the winner's player, and deletes its own orphan row.
 async fn resolve_or_create_player(
     tx: &mut Transaction<'_, Postgres>,
     steam_id: &str,
@@ -240,35 +245,46 @@ async fn resolve_or_create_player(
         return Ok(id);
     }
 
-    let id: Uuid = sqlx::query_scalar(
+    let fresh: Uuid = sqlx::query_scalar(
         "INSERT INTO players (first_seen_at, last_seen_at) VALUES ($1, $1) RETURNING id",
     )
     .bind(obs)
     .fetch_one(&mut **tx)
     .await?;
-    sqlx::query(
+    // Claim the identifier. On a lost race this returns the WINNER's player_id (and
+    // bumps its last_seen), not ours.
+    let claimed: Uuid = sqlx::query_scalar(
         "INSERT INTO player_identifiers (player_id, type, value, value_hash, first_seen_at, last_seen_at) \
-         VALUES ($1, 'steam', $2, $3, $4, $4)",
+         VALUES ($1, 'steam', $2, $3, $4, $4) \
+         ON CONFLICT (type, value_hash) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at \
+         RETURNING player_id",
     )
-    .bind(id)
+    .bind(fresh)
     .bind(steam_id)
     .bind(steam_hash)
     .bind(obs)
-    .execute(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
+    if claimed != fresh {
+        // Lost the creation race: drop our orphan player row and use the winner's.
+        sqlx::query("DELETE FROM players WHERE id = $1")
+            .bind(fresh)
+            .execute(&mut **tx)
+            .await?;
+    }
 
     // Backfill any pre-emptive bans on this Steam ID (created before the player was ever
     // seen, so their player_id was left NULL) — otherwise evasion detection, which keys off
-    // bans.player_id, would never fire for them.
+    // bans.player_id, would never fire for them. Idempotent, so safe on both race outcomes.
     sqlx::query(
         "UPDATE bans SET player_id = $1 \
          WHERE subject_type = 'steam' AND subject_hash = $2 AND player_id IS NULL",
     )
-    .bind(id)
+    .bind(claimed)
     .bind(steam_hash)
     .execute(&mut **tx)
     .await?;
-    Ok(id)
+    Ok(claimed)
 }
 
 async fn upsert_signal(
@@ -751,6 +767,74 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names, 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_consumers_create_one_player_without_failures() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP concurrent_consumers_create_one_player_without_failures: unset");
+            return;
+        };
+        let pepper = b"race-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam = uniq_digits(43);
+        let at = Utc::now();
+
+        // The exact production shape: one brand-new player arrives on the sessions,
+        // chat, AND roster streams in the same instant (three concurrent consumers).
+        let session_ev = cupboard_domain::SessionEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at,
+            edge: cupboard_domain::SessionEdge::Connected,
+            steam_id: steam.clone(),
+            name: "Racer".into(),
+            ip: Some("203.0.113.77".into()),
+            owner_steam_id: None,
+            reason: None,
+        };
+        let chat_ev = cupboard_domain::ChatEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at,
+            channel: 0,
+            steam_id: steam.clone(),
+            name: "Racer".into(),
+            message: "first!".into(),
+        };
+        let roster_ev = RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            observed_at: at,
+            players: vec![player(&steam, None, Some("203.0.113.77"), 5)],
+        };
+        let (a, b, c) = tokio::join!(
+            ingest_session_edge(&pool, pepper, &session_ev),
+            ingest_chat(&pool, pepper, &chat_ev),
+            ingest_roster(&pool, pepper, &roster_ev),
+        );
+        a.expect("session edge must survive the creation race");
+        b.expect("chat must survive the creation race");
+        c.expect("roster must survive the creation race");
+
+        // Exactly one player owns the identifier; no orphan players carry its name.
+        let hash = hmac_sha256(steam.as_bytes(), pepper).to_vec();
+        let ids: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM player_identifiers WHERE value_hash=$1")
+                .bind(&hash)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(ids, 1, "one identifier row");
+        let chat_rows: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM chat_messages WHERE tenant_id=$1 AND player_id IS NOT NULL",
+        )
+        .bind(tenant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(chat_rows, 1, "the chat line survived and is linked");
     }
 
     #[tokio::test]

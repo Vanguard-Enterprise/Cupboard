@@ -27,6 +27,10 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// How long a `playerlist` reply may take before the connection is declared dead.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bound on the dial + WS handshake. A *filtered* port (firewall drops SYNs — exactly
+/// what a down game server behind NAT looks like) otherwise hangs the connect for the
+/// OS TCP timeout (minutes), starving the supervisor's backoff loop.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Run forever (until the task is aborted by the manager): (re)connect and poll.
 pub async fn run(
@@ -38,13 +42,22 @@ pub async fn run(
 ) {
     let mut backoff = INITIAL_BACKOFF;
     loop {
-        match RconClient::connect(
-            &config.rcon_host,
-            config.rcon_port as u16,
-            &config.rcon_password,
+        let dial = match tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            RconClient::connect(
+                &config.rcon_host,
+                config.rcon_port as u16,
+                &config.rcon_password,
+            ),
         )
         .await
         {
+            Ok(result) => result,
+            Err(_elapsed) => Err(GameconnError::Connect(format!(
+                "connect timed out after {CONNECT_TIMEOUT:?}"
+            ))),
+        };
+        match dial {
             Ok(client) => {
                 backoff = INITIAL_BACKOFF; // reset on a good connection
                 tracing::info!(server = %config.name, server_id = %config.id, "rcon connected");
