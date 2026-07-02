@@ -20,6 +20,9 @@ pub const SESSION_STREAM: &str = "cupboard:sessions";
 /// The Redis Stream key for F7 player reports (plugin push only — RCON can't see them).
 pub const REPORT_STREAM: &str = "cupboard:reports";
 
+/// The Redis Stream key for perf samples (plugin sampler / perf mod → Metrics → Mimir).
+pub const PERF_STREAM: &str = "cupboard:perf";
+
 /// Which ingestion mechanism observed an event. Chat needs this for cross-source
 /// dedupe (a server with RCON *and* the plugin reports every message twice).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +119,43 @@ pub struct SessionEvent {
     pub eac_id: Option<String>,
     /// Disconnect reason, on `Disconnected` edges that reported one.
     pub reason: Option<String>,
+}
+
+/// One server performance sample (Metrics consumes these into Mimir; ARCHITECTURE
+/// Decision 5). Sampled every ~30s by the plugin's timer (cheap tier) or the Harmony
+/// perf mod (deep tier: adds frame-time distribution).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerfEvent {
+    pub server_id: ServerId,
+    pub tenant_id: TenantId,
+    pub at: DateTime<Utc>,
+    /// Server framerate at sample time.
+    pub fps: f64,
+    /// Networked entity count (the main long-term FPS driver on Rust servers).
+    pub entities: i64,
+    pub players: i64,
+    /// Managed-heap megabytes.
+    pub memory_mb: f64,
+    /// Cumulative GC collection counts per generation (counters — rate them).
+    pub gc_gen0: i64,
+    pub gc_gen1: i64,
+    pub gc_gen2: i64,
+    /// Frame-time stats over the sample window (perf-mod tier; the plugin sampler
+    /// leaves them unset).
+    #[serde(default)]
+    pub frame_ms_avg: Option<f64>,
+    #[serde(default)]
+    pub frame_ms_max: Option<f64>,
+    /// Per-plugin cumulative hook time (top-N by cost; bounded for Mimir cardinality).
+    #[serde(default)]
+    pub hooks: Vec<HookTiming>,
+}
+
+/// One plugin's cumulative hook-time total (a counter — dashboards rate it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookTiming {
+    pub plugin: String,
+    pub total_ms: f64,
 }
 
 /// One F7 report: a player reporting another for cheating/abuse. Plugin-only fidelity;

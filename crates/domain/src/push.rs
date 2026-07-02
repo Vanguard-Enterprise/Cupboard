@@ -19,6 +19,10 @@ pub const PUSH_SCHEMA_VERSION: u32 = 1;
 /// Hard cap on events per batch; bigger batches are rejected outright (413).
 pub const MAX_EVENTS_PER_BATCH: usize = 500;
 
+/// Per-plugin hook timings kept per perf sample (top-N by cost; the rest truncate).
+/// Bounds the `plugin` label's cardinality in Mimir.
+pub const MAX_HOOK_TIMINGS: usize = 20;
+
 /// One POST body: a batch of events from one server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushBatch {
@@ -86,6 +90,25 @@ pub enum PushEvent {
         message: String,
         #[serde(default)]
         report_type: String,
+    },
+    /// A server performance sample (plugin sampler or perf mod). Field semantics match
+    /// [`crate::PerfEvent`]; hooks beyond [`MAX_HOOK_TIMINGS`] are truncated, not
+    /// rejected (Mimir cardinality discipline).
+    Perf {
+        at: DateTime<Utc>,
+        fps: f64,
+        entities: i64,
+        players: i64,
+        memory_mb: f64,
+        gc_gen0: i64,
+        gc_gen1: i64,
+        gc_gen2: i64,
+        #[serde(default)]
+        frame_ms_avg: Option<f64>,
+        #[serde(default)]
+        frame_ms_max: Option<f64>,
+        #[serde(default)]
+        hooks: Vec<crate::HookTiming>,
     },
     /// The plugin's acknowledgement of an executed (or failed) inbound command.
     CommandResult {

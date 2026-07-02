@@ -26,11 +26,12 @@ use chrono::{DateTime, Utc};
 use cupboard_bus::Bus;
 use cupboard_domain::push::{
     PushAction, PushBatch, PushCommand, PushEvent, PushResponse, MAX_EVENTS_PER_BATCH,
-    PUSH_SCHEMA_VERSION,
+    MAX_HOOK_TIMINGS, PUSH_SCHEMA_VERSION,
 };
 use cupboard_domain::{
-    ChatEvent, EventSource, ObservedPlayer, ReportEvent, RosterEvent, ServerId, SessionEdge,
-    SessionEvent, TenantId, CHAT_STREAM, REPORT_STREAM, ROSTER_STREAM, SESSION_STREAM,
+    ChatEvent, EventSource, ObservedPlayer, PerfEvent, ReportEvent, RosterEvent, ServerId,
+    SessionEdge, SessionEvent, TenantId, CHAT_STREAM, PERF_STREAM, REPORT_STREAM, ROSTER_STREAM,
+    SESSION_STREAM,
 };
 use serde_json::json;
 
@@ -177,6 +178,12 @@ pub async fn post_events(
                     Err(resp) => return resp,
                 }
             }
+            Translated::Perf(ev) => {
+                match publish_one(&mut bus, PERF_STREAM, state.stream_maxlen, &ev, &who).await {
+                    Ok(()) => accepted += 1,
+                    Err(resp) => return resp,
+                }
+            }
             Translated::Accepted => accepted += 1,
             Translated::Unknown => dropped_unknown += 1,
         }
@@ -256,6 +263,7 @@ enum Translated {
     Chat(ChatEvent),
     Roster(RosterEvent),
     Report(ReportEvent),
+    Perf(Box<PerfEvent>),
     /// Consumed with no stream side effect (heartbeats, command results for now).
     Accepted,
     Unknown,
@@ -360,6 +368,39 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
                 })
                 .collect(),
         }),
+        PushEvent::Perf {
+            at,
+            fps,
+            entities,
+            players,
+            memory_mb,
+            gc_gen0,
+            gc_gen1,
+            gc_gen2,
+            frame_ms_avg,
+            frame_ms_max,
+            mut hooks,
+        } => {
+            // Bound the per-plugin label set (Mimir cardinality): keep the top-N by
+            // cumulative cost, drop the tail.
+            hooks.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
+            hooks.truncate(MAX_HOOK_TIMINGS);
+            Translated::Perf(Box::new(PerfEvent {
+                server_id,
+                tenant_id,
+                at: clamp(at, now),
+                fps,
+                entities,
+                players,
+                memory_mb,
+                gc_gen0,
+                gc_gen1,
+                gc_gen2,
+                frame_ms_avg,
+                frame_ms_max,
+                hooks,
+            }))
+        }
         PushEvent::CommandResult { command_id, ok, .. } => {
             tracing::info!(server_id = %who.server_id, command_id, ok, "plugin command result");
             Translated::Accepted

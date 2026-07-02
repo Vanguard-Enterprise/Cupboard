@@ -603,6 +603,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupboard-metrics"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "cupboard-bus",
+ "cupboard-domain",
+ "cupboard-telemetry",
+ "opentelemetry",
+ "serde_json",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "cupboard-telemetry"
 version = "0.1.0"
 dependencies = [
