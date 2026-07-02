@@ -51,11 +51,13 @@ impl Running {
     }
 }
 
-/// Reconcile loop; runs until aborted.
+/// Reconcile loop; runs until aborted. Also refreshes the push-token registry on every
+/// fetch, so token issue/rotate/revoke propagate within one reconcile interval.
 pub async fn run(
     fleet: FleetClient,
     identity: crate::identity_client::IdentityClient,
     bus: Bus,
+    registry: crate::registry::TokenRegistry,
     poll_interval: Duration,
     reconcile_interval: Duration,
     a2s_interval: Duration,
@@ -73,6 +75,7 @@ pub async fn run(
                 continue;
             }
         };
+        registry.update(&configs);
         let desired: HashMap<Uuid, ServerConfig> = configs.into_iter().map(|c| (c.id, c)).collect();
 
         // Stop tasks whose server vanished or whose connection details changed.

@@ -100,6 +100,8 @@ pub fn to_session_event(
         steam_id,
         name,
         ip,
+        // Console join lines don't expose the owning Steam ID; the plugin path does.
+        owner_steam_id: None,
         reason,
     }
 }

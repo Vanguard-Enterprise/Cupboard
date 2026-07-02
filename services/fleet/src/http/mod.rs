@@ -29,6 +29,10 @@ pub fn router(state: AppState) -> Router {
                 .patch(servers::update)
                 .delete(servers::delete),
         )
+        .route(
+            "/fleet/servers/{id}/ingest-token",
+            axum::routing::post(servers::issue_ingest_token).delete(servers::revoke_ingest_token),
+        )
         // Cross-tenant, token-guarded endpoints for the Collector (not via the gateway).
         .route("/internal/servers", get(internal::list_configs))
         .route(

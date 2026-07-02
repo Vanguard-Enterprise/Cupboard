@@ -129,9 +129,16 @@ pub async fn ingest_session_edge(
     let mut tx = pool.begin().await?;
     match event.edge {
         SessionEdge::Connected => {
+            // Owner arrives from plugin connects (family share); console joins send None.
+            // Owner == self isn't a share — drop it like the roster mapping does.
+            let owner = event
+                .owner_steam_id
+                .as_ref()
+                .filter(|o| !o.is_empty() && *o != "0" && **o != event.steam_id)
+                .cloned();
             let observed = cupboard_domain::ObservedPlayer {
                 steam_id: event.steam_id.clone(),
-                owner_steam_id: None, // console join lines don't carry the owner
+                owner_steam_id: owner,
                 name: event.name.clone(),
                 ip: event.ip.clone(),
                 connected_seconds: 0,
@@ -589,6 +596,7 @@ mod tests {
             steam_id: steam.clone(),
             name: "EdgeCase".into(),
             ip: Some("203.0.113.99".into()),
+            owner_steam_id: None,
             reason: None,
         };
 

@@ -1,32 +1,25 @@
-//! Cupboard Collector — connection-heavy ingestion (Phase 2).
-//!
-//! Dials *out* to each enabled server's RCON (config pulled from fleet's internal API),
-//! polls the roster on a cadence, and publishes snapshots to Redis Streams for Identity to
-//! consume. Does no business logic — it ingests and publishes. This is the one service
-//! designed to scale horizontally; Phase 2 runs a single replica.
-
-mod a2s_task;
-mod config;
-mod fleet_client;
-mod identity_client;
-mod manager;
-mod mapping;
-mod rcon_task;
+//! Cupboard Collector binary — see the crate docs (`lib.rs`) for the architecture.
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use config::Config;
 use cupboard_bus::Bus;
-use fleet_client::FleetClient;
-use identity_client::IdentityClient;
+use cupboard_collector::config::Config;
+use cupboard_collector::fleet_client::FleetClient;
+use cupboard_collector::identity_client::IdentityClient;
+use cupboard_collector::ingest::{self, IngestState, RateLimiter};
+use cupboard_collector::manager;
+use cupboard_collector::registry::TokenRegistry;
 use serde_json::json;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
+
+/// Push request bodies are capped hard; the plugin batches small and often.
+const PUSH_BODY_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone)]
 struct HealthState {
@@ -41,7 +34,8 @@ async fn main() -> anyhow::Result<()> {
         cupboard_telemetry::init("cupboard-collector", config.otel_endpoint.as_deref());
     tracing::info!(env = %config.environment, "starting cupboard-collector");
 
-    // Bus connection for producers (XADD only) — cloned into each per-server task.
+    // Bus connection for producers (XADD only) — cloned into each per-server task and
+    // the push handlers.
     let bus = Bus::connect(&config.redis_url).await?;
 
     let http = reqwest::Client::builder().build()?;
@@ -56,29 +50,46 @@ async fn main() -> anyhow::Result<()> {
         config.internal_api_token.clone(),
     );
 
-    // Supervisor: reconciles per-server RCON connections against fleet's config feed.
+    // The push-token registry is fed by the manager's config fetches and read by the
+    // ingest handlers.
+    let registry = TokenRegistry::default();
+
+    // Supervisor: reconciles per-server RCON/A2S connections against fleet's config feed.
     let manager = tokio::spawn(manager::run(
         fleet,
         identity,
-        bus,
+        bus.clone(),
+        registry.clone(),
         Duration::from_secs(config.poll_interval_secs),
         Duration::from_secs(config.reconcile_interval_secs),
         Duration::from_secs(config.a2s_interval_secs),
     ));
 
-    // Minimal health server for Kubernetes probes.
-    let app = Router::new()
+    let ingest_state = IngestState {
+        registry,
+        bus,
+        limiter: RateLimiter::new(config.push_rate_limit_per_min),
+        stream_maxlen: config.push_stream_maxlen,
+    };
+
+    // Health probes + the push-ingestion endpoint (reached via the gateway's /ingest
+    // route; token-authenticated here).
+    let health = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
-        .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
-        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
         .with_state(HealthState {
             environment: config.environment.clone(),
         });
+    let app = health
+        .merge(ingest::router(ingest_state).layer(DefaultBodyLimit::max(PUSH_BODY_LIMIT)))
+        .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)),
+        );
 
     let addr: SocketAddr = config.bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "collector health server listening");
+    tracing::info!(%addr, "collector http server listening");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

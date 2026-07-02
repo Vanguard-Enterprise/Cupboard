@@ -1,6 +1,7 @@
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
 import { deleteServerAction } from "@/lib/actions";
+import { IngestToken } from "./ingest-token";
 import { ServerForm } from "./server-form";
 
 type Server = {
@@ -19,6 +20,8 @@ type Server = {
   info_max_players: number | null;
   info_queued: number | null;
   info_updated_at: string | null;
+  has_ingest_token: boolean;
+  ingest_token_created_at: string | null;
 };
 
 async function fetchServers(): Promise<Server[]> {
@@ -76,6 +79,7 @@ export default async function ServersPage() {
                   <th className="px-3 py-2">Map</th>
                   <th className="px-3 py-2">Last seen</th>
                   <th className="px-3 py-2">Enabled</th>
+                  {manage && <th className="px-3 py-2">Push ingest</th>}
                   {manage && <th className="px-3 py-2"></th>}
                 </tr>
               </thead>
@@ -110,6 +114,11 @@ export default async function ServersPage() {
                       {s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : "—"}
                     </td>
                     <td className="px-3 py-2 text-neutral-400">{s.enabled ? "yes" : "no"}</td>
+                    {manage && (
+                      <td className="px-3 py-2">
+                        <IngestToken serverId={s.id} hasToken={s.has_ingest_token} />
+                      </td>
+                    )}
                     {manage && (
                       <td className="px-3 py-2 text-right">
                         <form action={deleteServerAction}>

@@ -79,6 +79,10 @@ pub struct SessionEvent {
     pub name: String,
     /// Connecting IP, when the mechanism exposed it (console join lines carry it).
     pub ip: Option<String>,
+    /// The Steam ID owning the game copy when family-shared (plugin connects carry it;
+    /// console join lines don't).
+    #[serde(default)]
+    pub owner_steam_id: Option<String>,
     /// Disconnect reason, on `Disconnected` edges that reported one.
     pub reason: Option<String>,
 }

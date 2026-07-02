@@ -18,6 +18,10 @@ pub struct ServerConfig {
     pub rcon_password: String,
     /// A2S/UDP query port; servers without one simply get no A2S task.
     pub query_port: Option<i32>,
+    /// Hex SHA-256 of the server's push-ingest token; `None` = push disabled. Feeds the
+    /// token registry — never logged.
+    #[serde(default)]
+    pub ingest_token_hash: Option<String>,
 }
 
 #[derive(Clone)]

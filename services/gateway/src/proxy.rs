@@ -41,6 +41,16 @@ pub async fn proxy_identity(
     proxy_to(&base, state, req).await
 }
 
+/// Reverse-proxy `/ingest/*` to the collector. Deliberately NOT behind the JWT gate:
+/// callers are game servers, authenticated by per-server ingest tokens at the collector.
+pub async fn proxy_ingest(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.collector_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
 /// Shared reverse-proxy: forward the request to `base_url` + original path/query.
 async fn proxy_to(
     base_url: &str,

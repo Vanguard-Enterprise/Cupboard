@@ -7,6 +7,8 @@
 mod permission;
 pub use permission::{Permission, RoleTemplate, DEFAULT_ROLE_TEMPLATES};
 
+pub mod push;
+
 pub mod events;
 pub use events::{
     ChatEvent, ObservedPlayer, RosterEvent, SessionEdge, SessionEvent, CHAT_STREAM, ROSTER_STREAM,

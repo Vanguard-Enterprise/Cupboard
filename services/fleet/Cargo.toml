@@ -29,6 +29,7 @@ thiserror.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 base64.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 cupboard-db.workspace = true

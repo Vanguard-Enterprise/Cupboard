@@ -24,6 +24,9 @@ pub struct Config {
     pub fleet_service_url: String,
     /// Base URL of the internal identity service, for reverse-proxying `/players/*`.
     pub identity_service_url: String,
+    /// Base URL of the internal collector service, for reverse-proxying `/ingest/*`
+    /// (plugin/perf-mod pushes; token-authenticated by the collector, not by JWT).
+    pub collector_service_url: String,
 }
 
 impl Config {
@@ -47,6 +50,8 @@ impl Config {
                 .unwrap_or_else(|_| "http://127.0.0.1:8082".into()),
             identity_service_url: env::var("IDENTITY_SERVICE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8083".into()),
+            collector_service_url: env::var("COLLECTOR_SERVICE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8084".into()),
         })
     }
 }
