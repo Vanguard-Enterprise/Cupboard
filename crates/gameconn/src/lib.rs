@@ -10,7 +10,13 @@
 //! Collector needs for cadence-based `playerlist` polling. Unsolicited console/chat
 //! frames (a separate, push-shaped concern) are ignored by [`rcon::RconClient::command`]
 //! and will get a dedicated reader loop when console tailing lands with the Collector.
+//!
+//! [`a2s`] adds the second pull mechanism: the Source A2S_INFO query (UDP) for server
+//! metadata — hostname, map, live/max/queued player counts — independent of RCON, so it
+//! keeps reporting even when RCON credentials are wrong or the console is unreachable.
 
+pub mod a2s;
 pub mod rcon;
 
+pub use a2s::{A2sError, ServerInfo};
 pub use rcon::{GameconnError, PlayerEntry, RconClient};

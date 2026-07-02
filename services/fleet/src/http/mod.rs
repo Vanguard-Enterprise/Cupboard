@@ -35,6 +35,10 @@ pub fn router(state: AppState) -> Router {
             "/internal/servers/{id}/status",
             axum::routing::post(internal::update_status),
         )
+        .route(
+            "/internal/servers/{id}/info",
+            axum::routing::post(internal::update_info),
+        )
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))

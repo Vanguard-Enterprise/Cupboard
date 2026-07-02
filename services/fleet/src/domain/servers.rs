@@ -24,13 +24,21 @@ pub struct Server {
     pub connection_status: String,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    // A2S_INFO snapshot, heartbeated by the Collector; null until the first query lands.
+    pub info_hostname: Option<String>,
+    pub info_map: Option<String>,
+    pub info_players: Option<i32>,
+    pub info_max_players: Option<i32>,
+    pub info_queued: Option<i32>,
+    pub info_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 /// Non-secret columns of `servers`, reused across selects and `RETURNING`.
 const COLS: &str = "id, tenant_id, name, game, rcon_host, rcon_port, query_port, enabled, \
-     connection_status, last_seen_at, last_error, created_at, updated_at";
+     connection_status, last_seen_at, last_error, info_hostname, info_map, info_players, \
+     info_max_players, info_queued, info_updated_at, created_at, updated_at";
 
 /// Fields for creating a server. `rcon_password` is plaintext here and sealed before it
 /// touches the database.
@@ -187,6 +195,41 @@ pub async fn update_status(
     .bind(status)
     .bind(error)
     .bind(mark_seen)
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
+/// An A2S_INFO snapshot as reported by the Collector.
+pub struct InfoUpdate {
+    pub hostname: String,
+    pub map: String,
+    pub players: i32,
+    pub max_players: i32,
+    pub queued: Option<i32>,
+}
+
+/// Store a server's latest A2S snapshot. Cross-tenant (owner pool), same trust boundary
+/// as `update_status`. Strings are length-bounded here — A2S hostnames are
+/// server-operator-controlled input.
+pub async fn update_info(owner_pool: &PgPool, id: Uuid, info: &InfoUpdate) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE servers SET \
+         info_hostname = left($2, 256), \
+         info_map = left($3, 128), \
+         info_players = $4, \
+         info_max_players = $5, \
+         info_queued = $6, \
+         info_updated_at = now(), \
+         updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&info.hostname)
+    .bind(&info.map)
+    .bind(info.players.max(0))
+    .bind(info.max_players.max(0))
+    .bind(info.queued.map(|q| q.max(0)))
     .execute(owner_pool)
     .await?;
     Ok(())

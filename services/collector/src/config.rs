@@ -23,6 +23,8 @@ pub struct Config {
     pub poll_interval_secs: u64,
     /// How often to re-fetch the server list from fleet and reconcile connections.
     pub reconcile_interval_secs: u64,
+    /// How often to query each server's A2S_INFO (servers with a `query_port` only).
+    pub a2s_interval_secs: u64,
 }
 
 impl Config {
@@ -47,6 +49,10 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(15),
+            a2s_interval_secs: env::var("A2S_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
         })
     }
 }

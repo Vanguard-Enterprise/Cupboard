@@ -5,6 +5,7 @@
 //! consume. Does no business logic — it ingests and publishes. This is the one service
 //! designed to scale horizontally; Phase 2 runs a single replica.
 
+mod a2s_task;
 mod config;
 mod fleet_client;
 mod identity_client;
@@ -62,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         bus,
         Duration::from_secs(config.poll_interval_secs),
         Duration::from_secs(config.reconcile_interval_secs),
+        Duration::from_secs(config.a2s_interval_secs),
     ));
 
     // Minimal health server for Kubernetes probes.

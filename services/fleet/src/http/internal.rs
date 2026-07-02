@@ -75,3 +75,37 @@ pub async fn update_status(
     .await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Deserialize)]
+pub struct InfoUpdate {
+    pub hostname: String,
+    pub map: String,
+    pub players: i32,
+    pub max_players: i32,
+    #[serde(default)]
+    pub queued: Option<i32>,
+}
+
+/// Collector heartbeat: store a server's latest A2S_INFO snapshot (hostname, map, player
+/// counts).
+pub async fn update_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(body): Json<InfoUpdate>,
+) -> Result<StatusCode, AppError> {
+    check_internal_token(&state, &headers)?;
+    servers::update_info(
+        &state.owner_pool,
+        id,
+        &servers::InfoUpdate {
+            hostname: body.hostname,
+            map: body.map,
+            players: body.players,
+            max_players: body.max_players,
+            queued: body.queued,
+        },
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
