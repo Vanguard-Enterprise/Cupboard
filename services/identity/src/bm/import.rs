@@ -51,6 +51,15 @@ enum ExecError {
     LostClaim,
 }
 
+/// What the runner should do after this job attempt.
+pub enum RunnerSignal {
+    /// Look for the next live job as usual.
+    Continue,
+    /// Stop the runner: the lease is gone or its in-memory state (token) is stale;
+    /// the supervisor's next claim resumes with a fresh row.
+    Stop,
+}
+
 impl From<BmError> for ExecError {
     fn from(e: BmError) -> Self {
         ExecError::Bm(e)
@@ -68,7 +77,8 @@ impl From<sqlx::Error> for ExecError {
 }
 
 /// Run `job` to a terminal state (or until the claim is lost). Never returns an error:
-/// failures land in the job row / connection status where the wizard can see them.
+/// failures land in the job row / connection status where the wizard can see them. All
+/// job/connection writes are fenced on `claimer` still holding the lease.
 pub async fn execute_job(
     pool: &sqlx::PgPool,
     client: &BmClient,
@@ -76,23 +86,51 @@ pub async fn execute_job(
     job: ImportJob,
     pepper: &[u8],
     lost_claim: &AtomicBool,
-) {
+    claimer: &str,
+) -> RunnerSignal {
     let job_id = job.id;
-    match run_phases(pool, client, conn, job, pepper, lost_claim).await {
-        Ok(()) => {}
+    match run_phases(pool, client, conn, job, pepper, lost_claim, claimer).await {
+        Ok(()) => RunnerSignal::Continue,
         Err(ExecError::LostClaim) => {
             tracing::info!(job = %job_id, "claim lost mid-import; new owner resumes from cursor");
+            RunnerSignal::Stop
         }
         Err(ExecError::Bm(e)) if e.is_auth() => {
-            tracing::warn!(job = %job_id, error = %e, "BM auth failure; connection marked errored");
-            let _ = bm::set_connection_error(pool, conn.id, &e.to_string()).await;
-            let _ = bm::finish_job(pool, job_id, "failed", Some(&e.to_string())).await;
+            // Only fail things if the stored token is still the one we decrypted; a
+            // tenant may have reconnected mid-run, in which case the auth failure is
+            // ours alone and a fresh claim will pick up the new token.
+            match bm::set_connection_error_if_token_unchanged(
+                pool,
+                conn.id,
+                &conn.token_enc,
+                &e.to_string(),
+            )
+            .await
+            {
+                Ok(true) => {
+                    tracing::warn!(job = %job_id, error = %e,
+                        "BM auth failure; connection marked errored");
+                    let _ =
+                        bm::finish_job(pool, job_id, "failed", Some(&e.to_string()), claimer).await;
+                    RunnerSignal::Continue
+                }
+                Ok(false) => {
+                    tracing::info!(job = %job_id,
+                        "BM auth failure with a rotated token; runner restarts for re-claim");
+                    RunnerSignal::Stop
+                }
+                Err(err) => {
+                    tracing::warn!(job = %job_id, error = ?err, "token fence check failed");
+                    RunnerSignal::Stop
+                }
+            }
         }
         Err(ExecError::Bm(e)) => {
             // The client already retried; this is persistent BM trouble. Cursor stays
             // where the last page left it.
             tracing::warn!(job = %job_id, error = %e, "import failed on BM error; cursor kept");
-            let _ = bm::finish_job(pool, job_id, "failed", Some(&e.to_string())).await;
+            let _ = bm::finish_job(pool, job_id, "failed", Some(&e.to_string()), claimer).await;
+            RunnerSignal::Continue
         }
         Err(ExecError::App(e)) => {
             tracing::error!(job = %job_id, error = ?e, "import failed on internal error");
@@ -101,10 +139,29 @@ pub async fn execute_job(
                 job_id,
                 "failed",
                 Some("internal error; see service logs"),
+                claimer,
             )
             .await;
+            RunnerSignal::Continue
         }
     }
+}
+
+/// A unique-violation on the sync map means another runner is importing the same
+/// connection concurrently (our lease was taken over but we have not observed it yet):
+/// treat it as a lost claim, not a job failure.
+fn map_upsert_err(e: AppError) -> ExecError {
+    if let AppError::Internal(any) = &e {
+        if let Some(sqlx::Error::Database(db)) = any.downcast_ref::<sqlx::Error>() {
+            if db
+                .constraint()
+                .is_some_and(|c| c.starts_with("bm_sync_map"))
+            {
+                return ExecError::LostClaim;
+            }
+        }
+    }
+    ExecError::App(e)
 }
 
 async fn run_phases(
@@ -114,8 +171,11 @@ async fn run_phases(
     job: ImportJob,
     pepper: &[u8],
     lost_claim: &AtomicBool,
+    claimer: &str,
 ) -> Result<(), ExecError> {
-    bm::mark_job_running(pool, job.id).await?;
+    if !bm::mark_job_running(pool, job.id, claimer).await? {
+        return Err(ExecError::LostClaim);
+    }
     let mut phase = job.phase.clone();
     let mut cursor: Cursor = serde_json::from_value(job.cursor.clone()).unwrap_or_default();
     let mut counts = Counts::from_value(&job.phase_counts);
@@ -160,7 +220,7 @@ async fn run_phases(
                         "done".into()
                     };
                 }
-                save(&mut tx, job.id, &phase, &cursor, &counts).await?;
+                save(&mut tx, job.id, &phase, &cursor, &counts, claimer).await?;
                 tx.commit().await?;
             }
 
@@ -181,7 +241,8 @@ async fn run_phases(
                     match imported_ban(res, &ids_map, &list_id) {
                         Some(ban) => {
                             match bm::upsert_imported_ban(&mut tx, conn.tenant_id, pepper, &ban)
-                                .await?
+                                .await
+                                .map_err(map_upsert_err)?
                             {
                                 ImportOutcome::Inserted => counts.inc("bans_imported"),
                                 ImportOutcome::Updated => counts.inc("bans_updated"),
@@ -198,13 +259,15 @@ async fn run_phases(
                         phase = "done".into();
                     }
                 }
-                save(&mut tx, job.id, &phase, &cursor, &counts).await?;
+                save(&mut tx, job.id, &phase, &cursor, &counts, claimer).await?;
                 tx.commit().await?;
             }
 
             _ => {
                 // "done" (or anything unknown, defensively): terminal.
-                bm::finish_job(pool, job.id, "completed", None).await?;
+                if !bm::finish_job(pool, job.id, "completed", None, claimer).await? {
+                    return Err(ExecError::LostClaim);
+                }
                 tracing::info!(job = %job.id, tenant = %conn.tenant_id, counts = %counts.value(),
                     "BM import completed");
                 return Ok(());
@@ -219,10 +282,15 @@ async fn save(
     phase: &str,
     cursor: &Cursor,
     counts: &Counts,
+    claimer: &str,
 ) -> Result<(), ExecError> {
     let cursor_v =
         serde_json::to_value(cursor).map_err(|e| ExecError::App(AppError::Internal(e.into())))?;
-    bm::save_job_progress(tx, job_id, phase, &cursor_v, &counts.value()).await?;
+    // A fence miss means the lease moved: error out BEFORE the caller commits, so the
+    // whole page rolls back instead of racing the new owner's writes.
+    if !bm::save_job_progress(tx, job_id, phase, &cursor_v, &counts.value(), claimer).await? {
+        return Err(ExecError::LostClaim);
+    }
     Ok(())
 }
 
@@ -345,6 +413,8 @@ mod e2e_tests {
 
     const TOKEN: &str = "stub-token";
     const PEPPER: &[u8] = b"bm-import-pepper";
+    /// All e2e tests claim as this runner so the fenced job writes go through.
+    const CLAIMER: &str = "e2e-runner";
 
     async fn setup() -> Option<sqlx::PgPool> {
         let url = std::env::var("TEST_DATABASE_URL").ok()?;
@@ -399,6 +469,17 @@ mod e2e_tests {
         )
         .await
         .expect("connect");
+        // Claim BEFORE enqueueing: with no live job the connection is invisible to
+        // other tests' claim_ready sweeps, and once claimed (fresh) it can't be
+        // stolen, so the fenced writes below are deterministic.
+        sqlx::query(
+            "UPDATE bm_connections SET claimed_by = $2, heartbeat_at = now() WHERE id = $1",
+        )
+        .bind(view.id)
+        .bind(CLAIMER)
+        .execute(pool)
+        .await
+        .expect("claim");
         bmdom::enqueue_import(pool, tenant, Uuid::new_v4())
             .await
             .expect("enqueue");
@@ -444,7 +525,16 @@ mod e2e_tests {
         let (conn, job) = seed_job(&pool, tenant).await;
         let job_id = job.id;
 
-        execute_job(&pool, &client, &conn, job, PEPPER, &AtomicBool::new(false)).await;
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+        )
+        .await;
 
         let (status, phase, counts) = job_row(&pool, job_id).await;
         assert_eq!((status.as_str(), phase.as_str()), ("completed", "done"));
@@ -475,6 +565,7 @@ mod e2e_tests {
             rerun,
             PEPPER,
             &AtomicBool::new(false),
+            CLAIMER,
         )
         .await;
         let (status, _, counts) = job_row(&pool, rerun_id).await;
@@ -505,6 +596,7 @@ mod e2e_tests {
             job_a,
             PEPPER,
             &AtomicBool::new(false),
+            CLAIMER,
         )
         .await;
         assert_eq!(ban_count(&pool, tenant_a).await, 250);
@@ -544,6 +636,7 @@ mod e2e_tests {
             job_b,
             PEPPER,
             &AtomicBool::new(false),
+            CLAIMER,
         )
         .await;
         assert_eq!(
@@ -576,7 +669,16 @@ mod e2e_tests {
         let (conn, job) = seed_job(&pool, tenant).await;
         let job_id = job.id;
 
-        execute_job(&pool, &client, &conn, job, PEPPER, &AtomicBool::new(false)).await;
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+        )
+        .await;
 
         let (status, _, _) = job_row(&pool, job_id).await;
         assert_eq!(status, "failed");

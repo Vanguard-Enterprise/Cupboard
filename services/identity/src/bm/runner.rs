@@ -27,13 +27,26 @@ pub async fn run(
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok());
     let Some(token) = token else {
-        tracing::error!(connection = %conn.id, "BM token decrypt failed (master key changed?)");
         let msg = "stored token cannot be decrypted; reconnect with a fresh token";
-        let _ = bm::set_connection_error(&pool, conn.id, msg).await;
-        // A live job can never progress with an unreadable token; fail it now rather
-        // than letting claims bounce forever.
-        if let Ok(Some(job)) = bm::next_live_job(&pool, conn.id).await {
-            let _ = bm::finish_job(&pool, job.id, "failed", Some(msg)).await;
+        // Fenced on the token bytes we tried: if the tenant reconnected between claim
+        // and decrypt, the failure is stale and the next claim reads the fresh row.
+        match bm::set_connection_error_if_token_unchanged(&pool, conn.id, &conn.token_enc, msg)
+            .await
+        {
+            Ok(true) => {
+                tracing::error!(connection = %conn.id,
+                    "BM token decrypt failed (master key changed?)");
+                // A live job can never progress with an unreadable token; fail it now
+                // rather than letting claims bounce forever.
+                if let Ok(Some(job)) = bm::next_live_job(&pool, conn.id).await {
+                    let _ = bm::finish_job(&pool, job.id, "failed", Some(msg), &claimer).await;
+                }
+            }
+            Ok(false) => {
+                tracing::info!(connection = %conn.id,
+                    "token rotated between claim and decrypt; runner exits for re-claim");
+            }
+            Err(e) => tracing::warn!(connection = %conn.id, error = ?e, "token fence failed"),
         }
         let _ = bm::release_claim(&pool, conn.id, &claimer).await;
         return;
@@ -53,7 +66,13 @@ pub async fn run(
     while !lost.load(Ordering::Relaxed) {
         match bm::next_live_job(&pool, conn.id).await {
             Ok(Some(job)) => {
-                super::import::execute_job(&pool, &client, &conn, job, &pepper, &lost).await;
+                let signal = super::import::execute_job(
+                    &pool, &client, &conn, job, &pepper, &lost, &claimer,
+                )
+                .await;
+                if matches!(signal, super::import::RunnerSignal::Stop) {
+                    break;
+                }
             }
             Ok(None) => break,
             Err(e) => {

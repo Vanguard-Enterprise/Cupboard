@@ -8,15 +8,27 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 
+/// `null` decodes as `T::default()`; combined with `#[serde(default)]` this makes a
+/// field tolerate both an absent key AND an explicit JSON null. A decode failure is
+/// fatal in the client (no retry can fix it), so every structural field here must be
+/// null-tolerant or one odd record wedges a tenant's import permanently.
+fn null_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 /// A JSON:API list document (`data` is an array). Follow `links.next` until absent.
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "A: serde::de::DeserializeOwned + Default"))]
 pub struct ListDoc<A> {
-    #[serde(default = "Vec::new")]
+    #[serde(default, deserialize_with = "null_default")]
     pub data: Vec<Resource<A>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub included: Vec<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub links: Links,
 }
 
@@ -36,9 +48,9 @@ pub struct Resource<A> {
     pub id: String,
     #[serde(rename = "type")]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub attributes: A,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub relationships: HashMap<String, Relationship>,
 }
 
@@ -96,10 +108,20 @@ pub struct BanAttrs {
     /// `None` = permanent.
     #[serde(deserialize_with = "lenient_ts")]
     pub expires: Option<DateTime<Utc>>,
+    /// Fully lenient: `null` or an unexpected shape decodes to empty (the ban is then
+    /// counted as skipped by the import) rather than sinking the page.
+    #[serde(default, deserialize_with = "lenient_identifiers")]
     pub identifiers: Vec<BanIdentifier>,
     pub org_wide: Option<bool>,
     pub auto_add_enabled: Option<bool>,
     pub native_enabled: Option<bool>,
+}
+
+/// Any-shape tolerance for the identifiers array: element-level oddities are already
+/// absorbed by [`BanIdentifier::Other`], and a non-array value decodes to empty.
+fn lenient_identifiers<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<BanIdentifier>, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(raw).unwrap_or_default())
 }
 
 /// One entry of a ban's `identifiers` array: either a numeric reference to a stored
@@ -237,5 +259,32 @@ mod tests {
         let doc: ListDoc<BanListAttrs> = serde_json::from_value(raw).expect("decode");
         assert!(doc.data[0].attributes.name.is_none());
         assert!(doc.links.next.is_none());
+    }
+
+    #[test]
+    fn explicit_nulls_do_not_sink_a_page() {
+        // Every structural field as explicit null: attributes, relationships,
+        // identifiers, links, included. One odd record must never wedge an import.
+        let raw = serde_json::json!({
+            "data": [
+                {"type": "ban", "id": "1", "attributes": null, "relationships": null},
+                {"type": "ban", "id": "2", "attributes": {"identifiers": null, "reason": "x"}},
+                {"type": "ban", "id": "3", "attributes": {"identifiers": "not-an-array"}}
+            ],
+            "included": null,
+            "links": null
+        });
+        let doc: ListDoc<BanAttrs> = serde_json::from_value(raw).expect("must decode");
+        assert_eq!(doc.data.len(), 3);
+        assert!(doc.data[0].attributes.reason.is_none());
+        assert_eq!(doc.data[1].attributes.reason.as_deref(), Some("x"));
+        assert!(doc.data[1].attributes.identifiers.is_empty());
+        assert!(doc.data[2].attributes.identifiers.is_empty());
+        assert!(doc.links.next.is_none());
+
+        // data: null = empty page, not an error.
+        let empty: ListDoc<BanAttrs> =
+            serde_json::from_value(serde_json::json!({ "data": null })).expect("decode");
+        assert!(empty.data.is_empty());
     }
 }

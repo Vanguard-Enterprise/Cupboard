@@ -161,6 +161,10 @@ pub struct EnforcementHit {
 /// Which of `steam_ids` are currently banned on this tenant for `server_id` (network-scope
 /// bans always apply; server-scope only on their server). Runs on the owner pool
 /// (RLS-exempt) filtering `tenant_id` explicitly — the Collector isn't a tenant principal.
+///
+/// Matching is `(subject_type, subject_hash)`, never hash alone: since Phase 4 widened
+/// subject types (imported `name`/`ip`/... bans), the hash space is no longer type-pure.
+/// A name ban whose value happens to be a 17-digit string must not match that Steam ID.
 pub async fn enforce(
     owner_pool: &PgPool,
     pepper: &[u8],
@@ -185,6 +189,7 @@ pub async fn enforce(
         // deterministic (the most recent applicable ban wins) rather than arbitrary.
         "SELECT DISTINCT ON (subject_hash) subject_hash, reason FROM bans \
          WHERE tenant_id = $1 AND status = 'active' \
+           AND subject_type = 'steam' \
            AND (expires_at IS NULL OR expires_at > now()) \
            AND (scope = 'network' OR (scope = 'server' AND server_id = $2)) \
            AND subject_hash = ANY($3) \
@@ -342,6 +347,38 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "server ban must not enforce on a different server"
+        );
+    }
+
+    #[tokio::test]
+    async fn name_ban_with_steamid_shaped_value_does_not_enforce() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP name_ban_with_steamid_shaped_value_does_not_enforce: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let pepper = b"ban-pepper";
+        let tenant = TenantId(Uuid::new_v4());
+        // An imported BM name ban whose value happens to look like a SteamID64 (a
+        // griefer's rename). HMAC(value) collides with HMAC(steam_id) by construction;
+        // the type filter must keep it from kicking the innocent Steam player.
+        let mut ban = new_ban("76561198012345678", "network", None);
+        ban.subject_type = "name".into();
+        create(&pool, tenant, pepper, ban).await.expect("create");
+
+        let hits = enforce(
+            &pool,
+            pepper,
+            tenant.0,
+            Uuid::new_v4(),
+            &["76561198012345678".into()],
+        )
+        .await
+        .unwrap();
+        assert!(
+            hits.is_empty(),
+            "a name ban must never match a steam identifier"
         );
     }
 

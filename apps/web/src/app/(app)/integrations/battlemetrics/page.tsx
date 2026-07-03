@@ -43,10 +43,14 @@ type BmStatus = {
   ban_lists: BmBanList[];
 };
 
-async function fetchStatus(): Promise<BmStatus | null> {
-  const res = await apiFetch("/integrations/bm");
-  if (!res.ok) return null;
-  return res.json();
+async function fetchStatus(): Promise<BmStatus | "error"> {
+  try {
+    const res = await apiFetch("/integrations/bm");
+    if (!res.ok) return "error";
+    return res.json();
+  } catch {
+    return "error";
+  }
 }
 
 const CONNECTION_STATUS_STYLES: Record<BmConnection["status"], string> = {
@@ -81,7 +85,9 @@ export default async function BattlemetricsPage() {
     );
   }
 
-  const status = await fetchStatus();
+  const statusResult = await fetchStatus();
+  const loadFailed = statusResult === "error";
+  const status = loadFailed ? null : statusResult;
   const connection = status?.connection ?? null;
   const latestJob = status?.latest_job ?? null;
   const banLists = status?.ban_lists ?? [];
@@ -90,7 +96,7 @@ export default async function BattlemetricsPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <AutoRefresh active={jobActive} />
+      <AutoRefresh active={jobActive || loadFailed} />
 
       <div>
         <h1 className="text-2xl font-semibold">BattleMetrics</h1>
@@ -99,7 +105,13 @@ export default async function BattlemetricsPage() {
         </p>
       </div>
 
-      {(!status || !status.configured) && (
+      {loadFailed && (
+        <p className="rounded border border-red-900 bg-red-950 px-3 py-2 text-sm text-red-300">
+          Could not load the integration status right now (service error). This page
+          retries automatically.
+        </p>
+      )}
+      {!loadFailed && (!status || !status.configured) && (
         <p className="rounded border border-yellow-900 bg-yellow-950 px-3 py-2 text-sm text-yellow-300">
           The BattleMetrics integration is not configured on this deployment.
         </p>

@@ -279,20 +279,26 @@ pub async fn release_claim(
     Ok(())
 }
 
-pub async fn set_connection_error(
+/// Mark the connection errored, fenced on the sealed token still being the one this
+/// runner decrypted. A tenant who reconnected with a fresh token mid-run must not have
+/// their healthy connection flipped back to error by a runner still holding the old
+/// one. Returns whether the row was actually errored.
+pub async fn set_connection_error_if_token_unchanged(
     owner_pool: &PgPool,
     connection_id: Uuid,
+    token_enc: &[u8],
     message: &str,
-) -> Result<(), AppError> {
-    sqlx::query(
+) -> Result<bool, AppError> {
+    let res = sqlx::query(
         "UPDATE bm_connections SET status = 'error', last_error = $2, updated_at = now() \
-         WHERE id = $1",
+         WHERE id = $1 AND token_enc = $3",
     )
     .bind(connection_id)
     .bind(message)
+    .bind(token_enc)
     .execute(owner_pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 /// The oldest live job for a connection, if any (queued, or running from a previous
@@ -312,15 +318,28 @@ pub async fn next_live_job(
     Ok(job)
 }
 
-pub async fn mark_job_running(owner_pool: &PgPool, job_id: Uuid) -> Result<(), AppError> {
-    sqlx::query(
+/// Fence fragment shared by every job write: the job's connection must still be leased
+/// to this claimer. A taken-over runner that has not yet noticed (heartbeat is every
+/// 30s) must not flip the shared job's status or rewind the cursor the new owner has
+/// advanced. `rows_affected == 0` = fence miss = stop writing.
+const JOB_CLAIM_FENCE: &str = "connection_id IN \
+     (SELECT id FROM bm_connections WHERE claimed_by = $CLAIMER)";
+
+pub async fn mark_job_running(
+    owner_pool: &PgPool,
+    job_id: Uuid,
+    claimer: &str,
+) -> Result<bool, AppError> {
+    let res = sqlx::query(&format!(
         "UPDATE bm_import_jobs SET status = 'running', \
-         started_at = COALESCE(started_at, now()) WHERE id = $1",
-    )
+         started_at = COALESCE(started_at, now()) WHERE id = $1 AND {}",
+        JOB_CLAIM_FENCE.replace("$CLAIMER", "$2")
+    ))
     .bind(job_id)
+    .bind(claimer)
     .execute(owner_pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 pub async fn finish_job(
@@ -328,39 +347,47 @@ pub async fn finish_job(
     job_id: Uuid,
     status: &str,
     error: Option<&str>,
-) -> Result<(), AppError> {
-    sqlx::query(
+    claimer: &str,
+) -> Result<bool, AppError> {
+    let res = sqlx::query(&format!(
         "UPDATE bm_import_jobs SET status = $2, error = $3, finished_at = now(), \
          phase = CASE WHEN $2 = 'completed' THEN 'done' ELSE phase END \
-         WHERE id = $1",
-    )
+         WHERE id = $1 AND {}",
+        JOB_CLAIM_FENCE.replace("$CLAIMER", "$4")
+    ))
     .bind(job_id)
     .bind(status)
     .bind(error)
+    .bind(claimer)
     .execute(owner_pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 /// Persist a page's progress inside that page's tx: phase, cursor, and counts move
 /// together with the rows they describe, so a crash never double-imports a page.
+/// `false` = the lease was taken over; the caller must roll the page back.
 pub async fn save_job_progress(
     tx: &mut Transaction<'_, Postgres>,
     job_id: Uuid,
     phase: &str,
     cursor: &serde_json::Value,
     phase_counts: &serde_json::Value,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE bm_import_jobs SET phase = $2, cursor = $3, phase_counts = $4 WHERE id = $1",
-    )
+    claimer: &str,
+) -> Result<bool, AppError> {
+    let res = sqlx::query(&format!(
+        "UPDATE bm_import_jobs SET phase = $2, cursor = $3, phase_counts = $4 \
+         WHERE id = $1 AND {}",
+        JOB_CLAIM_FENCE.replace("$CLAIMER", "$5")
+    ))
     .bind(job_id)
     .bind(phase)
     .bind(cursor)
     .bind(phase_counts)
+    .bind(claimer)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -558,10 +585,15 @@ pub async fn upsert_imported_ban(
             Ok(ImportOutcome::Unchanged)
         }
         Some((local_id, _)) => {
+            // The subject may have changed (BM-side identifier edit), so player_id is
+            // re-resolved from the new identifier; keeping the old link would pin the
+            // ban to the wrong player's profile.
             sqlx::query(
                 "UPDATE bans SET subject_type = $2, subject_value = $3, subject_hash = $4, \
                    reason = $5, expires_at = $6, \
-                   status = CASE WHEN status = 'revoked' THEN status ELSE $7 END \
+                   status = CASE WHEN status = 'revoked' THEN status ELSE $7 END, \
+                   player_id = (SELECT player_id FROM player_identifiers \
+                                WHERE type = $2 AND value_hash = $4) \
                  WHERE id = $1",
             )
             .bind(local_id)
@@ -696,14 +728,16 @@ mod tests {
             .await
             .expect("enqueue");
 
-        let mine = claim_ready(&pool, "runner-a", 10).await.expect("claim");
+        // Large limit: the shared test DB accumulates claimable connections from
+        // other suites/runs, and ours must be inside the batch.
+        let mine = claim_ready(&pool, "runner-a", 1000).await.expect("claim");
         let conn = mine
             .iter()
             .find(|c| c.tenant_id == tenant.0)
             .expect("claimed our connection");
 
         // Another claimer can't steal a fresh claim...
-        let stolen = claim_ready(&pool, "runner-b", 10).await.expect("claim2");
+        let stolen = claim_ready(&pool, "runner-b", 1000).await.expect("claim2");
         assert!(
             !stolen.iter().any(|c| c.id == conn.id),
             "fresh claim must not be taken over"
@@ -720,7 +754,7 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        let stolen = claim_ready(&pool, "runner-b", 10).await.expect("claim3");
+        let stolen = claim_ready(&pool, "runner-b", 1000).await.expect("claim3");
         assert!(
             stolen.iter().any(|c| c.id == conn.id),
             "stale claim must be taken over"
@@ -799,6 +833,127 @@ mod tests {
         .unwrap();
         assert_eq!(hits.len(), 1, "imported ban must enforce");
         assert_eq!(hits[0].reason.as_deref(), Some("toxicity"));
+    }
+
+    #[tokio::test]
+    async fn job_writes_are_fenced_on_the_lease() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP job_writes_are_fenced_on_the_lease: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let view = connect_tenant(&pool, tenant).await;
+        sqlx::query(
+            "UPDATE bm_connections SET claimed_by = 'fence-a', heartbeat_at = now() WHERE id = $1",
+        )
+        .bind(view.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let job = enqueue_import(&pool, tenant, Uuid::new_v4())
+            .await
+            .expect("enqueue");
+
+        assert!(
+            !mark_job_running(&pool, job.id, "fence-b").await.unwrap(),
+            "a non-holder must not flip the job running"
+        );
+        assert!(mark_job_running(&pool, job.id, "fence-a").await.unwrap());
+
+        let mut tx = pool.begin().await.unwrap();
+        let cursor = serde_json::json!({});
+        assert!(
+            !save_job_progress(&mut tx, job.id, "bans", &cursor, &cursor, "fence-b")
+                .await
+                .unwrap(),
+            "a non-holder must not move the cursor"
+        );
+        assert!(
+            save_job_progress(&mut tx, job.id, "bans", &cursor, &cursor, "fence-a")
+                .await
+                .unwrap()
+        );
+        tx.commit().await.unwrap();
+
+        assert!(
+            !finish_job(&pool, job.id, "failed", Some("x"), "fence-b")
+                .await
+                .unwrap(),
+            "a non-holder must not fail the job"
+        );
+        assert!(finish_job(&pool, job.id, "completed", None, "fence-a")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn update_repoints_player_link_when_subject_changes() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP update_repoints_player_link_when_subject_changes: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let pepper = b"bm-pepper";
+        let subject_a = format!("7656119{}", rand_digits());
+        let subject_b = format!("7656119{}", rand_digits());
+
+        // Two known players, one per identifier.
+        let mut player_ids = Vec::new();
+        for subject in [&subject_a, &subject_b] {
+            let pid: Uuid = sqlx::query_scalar("INSERT INTO players DEFAULT VALUES RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .expect("player");
+            sqlx::query(
+                "INSERT INTO player_identifiers (player_id, type, value, value_hash) \
+                 VALUES ($1, 'steam', $2, $3)",
+            )
+            .bind(pid)
+            .bind(subject)
+            .bind(hmac_sha256(subject.as_bytes(), pepper).to_vec())
+            .execute(&pool)
+            .await
+            .expect("identifier");
+            player_ids.push(pid);
+        }
+
+        let mut tx = pool.begin().await.unwrap();
+        upsert_imported_ban(
+            &mut tx,
+            tenant.0,
+            pepper,
+            &imported_ban("bm-rp", &subject_a, "x"),
+        )
+        .await
+        .unwrap();
+        // BM-side identifier correction: the ban now targets subject B.
+        assert_eq!(
+            upsert_imported_ban(
+                &mut tx,
+                tenant.0,
+                pepper,
+                &imported_ban("bm-rp", &subject_b, "x"),
+            )
+            .await
+            .unwrap(),
+            ImportOutcome::Updated
+        );
+        let linked: Option<Uuid> = sqlx::query_scalar(
+            "SELECT player_id FROM bans WHERE tenant_id = $1 AND subject_value = $2",
+        )
+        .bind(tenant.0)
+        .bind(&subject_b)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(
+            linked,
+            Some(player_ids[1]),
+            "the ban must repoint to the corrected identifier's player"
+        );
+        tx.commit().await.unwrap();
     }
 
     #[tokio::test]

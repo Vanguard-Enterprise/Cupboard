@@ -20,6 +20,9 @@ const MAX_GET_ATTEMPTS: u32 = 5;
 const BACKOFF_BASE_MS: u64 = 1_000;
 const BACKOFF_CAP_MS: u64 = 60_000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Probe budget: it runs on a request path (connection setup), where the background
+/// retry policy's worst case (minutes) would park the caller's HTTP request.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 /// Cap a server-supplied Retry-After so a hostile/broken header can't park a runner.
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(120);
 
@@ -106,11 +109,19 @@ impl BmClient {
         ))
     }
 
-    /// Cheap token validation: one minimal authenticated read.
+    /// Cheap token validation: one minimal authenticated read, exactly one attempt,
+    /// tight timeout. Unlike the paginating reads this is called on a request path,
+    /// so a transient 429/5xx surfaces to the caller instead of being retried for
+    /// minutes.
     pub async fn probe(&self) -> Result<(), BmError> {
-        self.get_value(&self.url("/ban-lists?page[size]=1"))
+        self.limiter.acquire().await;
+        match self
+            .try_get_with(&self.url("/ban-lists?page[size]=1"), Some(PROBE_TIMEOUT))
             .await
-            .map(|_| ())
+        {
+            Attempt::Done(_) => Ok(()),
+            Attempt::Fatal(e) | Attempt::Retry(e, _) => Err(e),
+        }
     }
 
     /// GET one JSON:API list page. `url` is absolute: first pages come from the
@@ -151,13 +162,19 @@ impl BmClient {
     }
 
     async fn try_get(&self, url: &str) -> Attempt {
-        let sent = self
+        self.try_get_with(url, None).await
+    }
+
+    async fn try_get_with(&self, url: &str, timeout: Option<Duration>) -> Attempt {
+        let mut req = self
             .http
             .get(url)
             .header("Accept", "application/json")
-            .bearer_auth(&self.token)
-            .send()
-            .await;
+            .bearer_auth(&self.token);
+        if let Some(t) = timeout {
+            req = req.timeout(t);
+        }
+        let sent = req.send().await;
         let res = match sent {
             Ok(r) => r,
             Err(e) => return Attempt::Retry(BmError::Transport(e.to_string()), None),
