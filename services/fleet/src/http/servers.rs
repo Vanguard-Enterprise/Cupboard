@@ -58,6 +58,35 @@ fn check_port(port: i32, field: &str) -> Result<(), AppError> {
     }
 }
 
+/// Issue (or rotate) the push-ingest token for a server. The plaintext is returned
+/// exactly once — it is never stored or re-shown.
+pub async fn issue_ingest_token(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::ServersManage)?;
+    match servers::issue_ingest_token(&state.app_pool, TenantId::from(org), id).await? {
+        Some(token) => Ok(Json(serde_json::json!({ "token": token }))),
+        None => Err(AppError::NotFound("server not found".into())),
+    }
+}
+
+/// Revoke a server's push-ingest token (push ingestion stops on the Collector's next
+/// config refresh).
+pub async fn revoke_ingest_token(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let org = claims.require(Permission::ServersManage)?;
+    if servers::revoke_ingest_token(&state.app_pool, TenantId::from(org), id).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound("server not found".into()))
+    }
+}
+
 pub async fn create(
     State(state): State<AppState>,
     claims: AuthClaims,

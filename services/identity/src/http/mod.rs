@@ -1,9 +1,11 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
 mod bans;
+mod chat;
 mod evasion;
 mod internal;
 mod players;
+mod reports;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -26,6 +28,10 @@ pub fn router(state: AppState) -> Router {
         .route("/players", get(players::list))
         .route("/players/{id}", get(players::get))
         .route("/players/{id}/merge", axum::routing::post(players::merge))
+        // Chat logs (tenant-scoped, JWT + RBAC).
+        .route("/chat", get(chat::list))
+        // F7 reports (tenant-scoped, JWT + RBAC).
+        .route("/reports", get(reports::list))
         // Bans (tenant-scoped, JWT + RBAC).
         .route("/bans", get(bans::list).post(bans::create))
         .route("/bans/{id}/revoke", axum::routing::post(bans::revoke))

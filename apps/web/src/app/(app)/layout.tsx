@@ -28,9 +28,24 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Servers
             </Link>
           )}
+          {can(perms, Permission.ServersView) && (
+            <Link href="/perf" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Performance
+            </Link>
+          )}
           {can(perms, Permission.PlayersView) && (
             <Link href="/players" className="rounded px-2 py-1 hover:bg-neutral-900">
               Players
+            </Link>
+          )}
+          {can(perms, Permission.PlayersView) && (
+            <Link href="/chat" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Chat
+            </Link>
+          )}
+          {can(perms, Permission.PlayersView) && (
+            <Link href="/reports" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Reports
             </Link>
           )}
           {can(perms, Permission.BansView) && (

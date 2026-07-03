@@ -56,14 +56,35 @@ async fn main() -> anyhow::Result<()> {
     let keys = Keys::verifier_from_ed_pem(&config.jwt_public_key_pem)
         .context("load Ed25519 JWT verifier")?;
 
-    // Spawn the ingestion consumer on its own bus connection (blocking XREADGROUP).
-    let bus = Bus::connect(&config.redis_url).await?;
-    let consumer = tokio::spawn(consumer::run(
-        bus,
-        owner_pool.clone(),
-        config.value_pepper.as_bytes().to_vec(),
-        config.consumer_name.clone(),
-    ));
+    // Spawn one ingestion consumer per stream, each on its own bus connection (a
+    // blocking XREADGROUP occupies the whole connection).
+    let pepper = config.value_pepper.as_bytes().to_vec();
+    let consumers = vec![
+        tokio::spawn(consumer::run_roster(
+            Bus::connect(&config.redis_url).await?,
+            owner_pool.clone(),
+            pepper.clone(),
+            config.consumer_name.clone(),
+        )),
+        tokio::spawn(consumer::run_sessions(
+            Bus::connect(&config.redis_url).await?,
+            owner_pool.clone(),
+            pepper.clone(),
+            config.consumer_name.clone(),
+        )),
+        tokio::spawn(consumer::run_chat(
+            Bus::connect(&config.redis_url).await?,
+            owner_pool.clone(),
+            pepper.clone(),
+            config.consumer_name.clone(),
+        )),
+        tokio::spawn(consumer::run_reports(
+            Bus::connect(&config.redis_url).await?,
+            owner_pool.clone(),
+            pepper,
+            config.consumer_name.clone(),
+        )),
+    ];
 
     let state = AppState {
         owner_pool,
@@ -81,7 +102,9 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    consumer.abort();
+    for c in &consumers {
+        c.abort();
+    }
     tracing::info!("identity stopped; flushing telemetry");
     Ok(())
 }

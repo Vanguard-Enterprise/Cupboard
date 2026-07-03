@@ -112,6 +112,14 @@ pub struct LinkRow {
     pub signals: String,
 }
 
+/// Time played on one server (seconds), from this tenant's observed sessions.
+#[derive(Debug, sqlx::FromRow, serde::Serialize)]
+pub struct PlaytimeRow {
+    pub server_id: Uuid,
+    pub total_secs: i64,
+    pub sessions: i64,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct PlayerProfile {
     pub player: PlayerHeader,
@@ -119,6 +127,10 @@ pub struct PlayerProfile {
     pub names: Vec<NameRow>,
     pub recent_sessions: Vec<SessionRow>,
     pub links: Vec<LinkRow>,
+    /// Per-server playtime, largest first; sum for the tenant-wide total.
+    pub playtime: Vec<PlaytimeRow>,
+    /// Recent F7 reports filed against this player (moderation review signal).
+    pub reports_against: Vec<crate::domain::reports::ReportRow>,
 }
 
 /// Full profile for one player, but only if this tenant has actually observed them (they
@@ -184,6 +196,31 @@ pub async fn profile(
     .fetch_all(&mut *tx)
     .await?;
 
+    // Playtime per server: exact bounds where a session is closed, last-seen for open
+    // ones. Sessions under RLS, so this is the tenant's own observation only.
+    let playtime = sqlx::query_as::<_, PlaytimeRow>(
+        "SELECT server_id, \
+                COALESCE(SUM(EXTRACT(EPOCH FROM \
+                    (COALESCE(disconnected_at, last_seen_at) - connected_at))), 0)::bigint \
+                    AS total_secs, \
+                COUNT(*) AS sessions \
+         FROM player_sessions WHERE player_id = $1 \
+         GROUP BY server_id ORDER BY total_secs DESC",
+    )
+    .bind(player_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let reports_against = sqlx::query_as::<_, crate::domain::reports::ReportRow>(
+        "SELECT id, server_id, reporter_player_id, target_player_id, reporter_name, \
+                target_name, subject, message, report_type, reported_at \
+         FROM player_reports WHERE target_player_id = $1 \
+         ORDER BY reported_at DESC LIMIT 10",
+    )
+    .bind(player_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
     tx.commit().await?;
 
     let mut profile = PlayerProfile {
@@ -192,6 +229,8 @@ pub async fn profile(
         names,
         recent_sessions,
         links,
+        playtime,
+        reports_against,
     };
     if !include_ip {
         for s in &mut profile.recent_sessions {

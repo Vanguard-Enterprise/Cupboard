@@ -12,3 +12,6 @@ thiserror.workspace = true
 # Timestamps on the cross-service event contract (RosterEvent). Kept to serde-friendly
 # types so the domain crate stays light.
 chrono.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

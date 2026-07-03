@@ -30,6 +30,16 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U cupboard"
           --health-interval 10s --health-timeout 5s --health-retries 5
+      # Redis for the collector push-ingest integration tests (services/collector/
+      # tests/ingest.rs). Without TEST_REDIS_URL those tests silently SKIP, so the
+      # push auth/backpressure suite would never actually run in CI.
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -48,6 +58,7 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://cupboard:cupboard@localhost:5432/cupboard_test
           TEST_DATABASE_URL_APP: postgres://cupboard_app:cupboard_app@localhost:5432/cupboard_test
+          TEST_REDIS_URL: redis://localhost:6379
         run: cargo test --workspace
 
   build-push:
@@ -59,7 +70,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        service: [cupboard-gateway, cupboard-auth, cupboard-fleet, cupboard-collector, cupboard-identity]   # add services here as they land
+        service: [cupboard-gateway, cupboard-auth, cupboard-fleet, cupboard-collector, cupboard-identity, cupboard-metrics]   # add services here as they land
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3

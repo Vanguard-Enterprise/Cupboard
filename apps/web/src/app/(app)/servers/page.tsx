@@ -1,6 +1,7 @@
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
 import { deleteServerAction } from "@/lib/actions";
+import { IngestToken } from "./ingest-token";
 import { ServerForm } from "./server-form";
 
 type Server = {
@@ -13,6 +14,14 @@ type Server = {
   enabled: boolean;
   connection_status: "unknown" | "connected" | "degraded" | "down";
   last_seen_at: string | null;
+  info_hostname: string | null;
+  info_map: string | null;
+  info_players: number | null;
+  info_max_players: number | null;
+  info_queued: number | null;
+  info_updated_at: string | null;
+  has_ingest_token: boolean;
+  ingest_token_created_at: string | null;
 };
 
 async function fetchServers(): Promise<Server[]> {
@@ -66,15 +75,25 @@ export default async function ServersPage() {
                   <th className="px-3 py-2">Name</th>
                   <th className="px-3 py-2">RCON</th>
                   <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Players</th>
+                  <th className="px-3 py-2">Map</th>
                   <th className="px-3 py-2">Last seen</th>
                   <th className="px-3 py-2">Enabled</th>
+                  {manage && <th className="px-3 py-2">Push ingest</th>}
                   {manage && <th className="px-3 py-2"></th>}
                 </tr>
               </thead>
               <tbody>
                 {servers.map((s) => (
                   <tr key={s.id} className="border-t border-neutral-800">
-                    <td className="px-3 py-2">{s.name}</td>
+                    <td className="px-3 py-2">
+                      {s.name}
+                      {s.info_hostname && (
+                        <div className="max-w-64 truncate text-xs text-neutral-500" title={s.info_hostname}>
+                          {s.info_hostname}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-neutral-400">
                       {s.rcon_host}:{s.rcon_port}
                     </td>
@@ -86,9 +105,20 @@ export default async function ServersPage() {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-neutral-400">
+                      {s.info_players !== null && s.info_max_players !== null
+                        ? `${s.info_players}/${s.info_max_players}${s.info_queued ? ` (+${s.info_queued} queued)` : ""}`
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-neutral-400">{s.info_map ?? "—"}</td>
+                    <td className="px-3 py-2 text-neutral-400">
                       {s.last_seen_at ? new Date(s.last_seen_at).toLocaleString() : "—"}
                     </td>
                     <td className="px-3 py-2 text-neutral-400">{s.enabled ? "yes" : "no"}</td>
+                    {manage && (
+                      <td className="px-3 py-2">
+                        <IngestToken serverId={s.id} hasToken={s.has_ingest_token} />
+                      </td>
+                    )}
                     {manage && (
                       <td className="px-3 py-2 text-right">
                         <form action={deleteServerAction}>

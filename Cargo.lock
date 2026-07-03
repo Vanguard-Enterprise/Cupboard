@@ -470,13 +470,18 @@ dependencies = [
  "axum",
  "chrono",
  "cupboard-bus",
+ "cupboard-crypto",
  "cupboard-domain",
  "cupboard-gameconn",
  "cupboard-telemetry",
+ "hex",
+ "http-body-util",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "uuid",
@@ -510,6 +515,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "uuid",
 ]
@@ -527,6 +533,7 @@ dependencies = [
  "cupboard-db",
  "cupboard-domain",
  "cupboard-telemetry",
+ "hex",
  "serde",
  "serde_json",
  "sqlx",
@@ -590,6 +597,26 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tower",
+ "tower-http",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cupboard-metrics"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "cupboard-auth-core",
+ "cupboard-bus",
+ "cupboard-domain",
+ "cupboard-telemetry",
+ "opentelemetry",
+ "serde",
+ "serde_json",
+ "tokio",
  "tower-http",
  "tracing",
  "uuid",

@@ -29,11 +29,19 @@ pub fn router(state: AppState) -> Router {
                 .patch(servers::update)
                 .delete(servers::delete),
         )
+        .route(
+            "/fleet/servers/{id}/ingest-token",
+            axum::routing::post(servers::issue_ingest_token).delete(servers::revoke_ingest_token),
+        )
         // Cross-tenant, token-guarded endpoints for the Collector (not via the gateway).
         .route("/internal/servers", get(internal::list_configs))
         .route(
             "/internal/servers/{id}/status",
             axum::routing::post(internal::update_status),
+        )
+        .route(
+            "/internal/servers/{id}/info",
+            axum::routing::post(internal::update_info),
         )
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))

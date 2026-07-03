@@ -1,9 +1,12 @@
-//! Pure translation from an RCON roster to the bus event contract. Kept separate so it's
-//! unit-testable without a live server or Redis.
+//! Pure translation from RCON frames (roster, chat, console edges) to the bus event
+//! contract. Kept separate so it's unit-testable without a live server or Redis.
 
 use chrono::{DateTime, Utc};
-use cupboard_domain::{ObservedPlayer, RosterEvent, ServerId, TenantId};
-use cupboard_gameconn::PlayerEntry;
+use cupboard_domain::{
+    ChatEvent, EventSource, ObservedPlayer, RosterEvent, ServerId, SessionEdge, SessionEvent,
+    TenantId,
+};
+use cupboard_gameconn::{ChatEntry, ConsoleEvent, PlayerEntry};
 use uuid::Uuid;
 
 /// Build a [`RosterEvent`] from one server's `playerlist` result.
@@ -31,6 +34,7 @@ pub fn to_roster_event(
                     Some(ip.to_string())
                 }
             },
+            eac_id: None, // RCON rosters don't expose the anti-cheat id
             connected_seconds: p.connected_seconds,
         })
         .collect();
@@ -40,6 +44,70 @@ pub fn to_roster_event(
         tenant_id: TenantId(tenant_id),
         observed_at,
         players,
+    }
+}
+
+/// Build a [`ChatEvent`] from one broadcast chat frame. Uses the Collector's clock for
+/// `at` (consistent with roster snapshots, immune to server clock skew).
+pub fn to_chat_event(
+    server_id: Uuid,
+    tenant_id: Uuid,
+    entry: &ChatEntry,
+    at: DateTime<Utc>,
+) -> ChatEvent {
+    ChatEvent {
+        server_id: ServerId(server_id),
+        tenant_id: TenantId(tenant_id),
+        at,
+        channel: entry.channel,
+        steam_id: entry.user_id.clone(),
+        name: entry.username.clone(),
+        message: entry.message.clone(),
+        source: Some(EventSource::Rcon),
+    }
+}
+
+/// Build a [`SessionEvent`] from one parsed console join/disconnect line.
+pub fn to_session_event(
+    server_id: Uuid,
+    tenant_id: Uuid,
+    edge: &ConsoleEvent,
+    at: DateTime<Utc>,
+) -> SessionEvent {
+    let (kind, steam_id, name, ip, reason) = match edge {
+        ConsoleEvent::Joined { ip, steam_id, name } => (
+            SessionEdge::Connected,
+            steam_id.clone(),
+            name.clone(),
+            Some(ip.clone()),
+            None,
+        ),
+        ConsoleEvent::Disconnected {
+            ip,
+            steam_id,
+            name,
+            reason,
+        } => (
+            SessionEdge::Disconnected,
+            steam_id.clone(),
+            name.clone(),
+            Some(ip.clone()),
+            Some(reason.clone()),
+        ),
+    };
+    SessionEvent {
+        server_id: ServerId(server_id),
+        tenant_id: TenantId(tenant_id),
+        at,
+        edge: kind,
+        steam_id,
+        name,
+        ip,
+        // Console join lines don't expose the owning Steam ID or EAC id; the plugin
+        // path does.
+        owner_steam_id: None,
+        eac_id: None,
+        reason,
     }
 }
 
@@ -81,5 +149,40 @@ mod tests {
         let players = vec![entry("111", "0", "")];
         let ev = to_roster_event(Uuid::nil(), Uuid::nil(), &players, Utc::now());
         assert_eq!(ev.players[0].ip, None);
+    }
+
+    #[test]
+    fn maps_chat_and_session_edges() {
+        let chat = ChatEntry {
+            channel: 1,
+            message: "on my way".into(),
+            user_id: "76561198000000001".into(),
+            username: "Alice".into(),
+            time: 0,
+        };
+        let ev = to_chat_event(Uuid::nil(), Uuid::nil(), &chat, Utc::now());
+        assert_eq!(ev.channel, 1);
+        assert_eq!(ev.steam_id, "76561198000000001");
+        assert_eq!(ev.message, "on my way");
+
+        let join = ConsoleEvent::Joined {
+            ip: "1.2.3.4".into(),
+            steam_id: "76561198000000001".into(),
+            name: "Alice".into(),
+        };
+        let ev = to_session_event(Uuid::nil(), Uuid::nil(), &join, Utc::now());
+        assert_eq!(ev.edge, SessionEdge::Connected);
+        assert_eq!(ev.ip.as_deref(), Some("1.2.3.4"));
+        assert_eq!(ev.reason, None);
+
+        let leave = ConsoleEvent::Disconnected {
+            ip: "1.2.3.4".into(),
+            steam_id: "76561198000000001".into(),
+            name: "Alice".into(),
+            reason: "closing".into(),
+        };
+        let ev = to_session_event(Uuid::nil(), Uuid::nil(), &leave, Utc::now());
+        assert_eq!(ev.edge, SessionEdge::Disconnected);
+        assert_eq!(ev.reason.as_deref(), Some("closing"));
     }
 }

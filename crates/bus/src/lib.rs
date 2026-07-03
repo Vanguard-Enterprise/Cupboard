@@ -81,6 +81,28 @@ impl Bus {
         Ok(id)
     }
 
+    /// `XADD stream MAXLEN ~ <maxlen> * data <json>` — append with an approximate length
+    /// cap, so a stalled consumer bounds memory instead of growing Redis without limit
+    /// (the push-ingestion backpressure floor: oldest entries shed first).
+    pub async fn publish_capped<T: Serialize>(
+        &mut self,
+        stream: &str,
+        maxlen: usize,
+        payload: &T,
+    ) -> Result<String, BusError> {
+        let json = serde_json::to_string(payload)?;
+        let id: String = self
+            .conn
+            .xadd_maxlen(
+                stream,
+                redis::streams::StreamMaxlen::Approx(maxlen),
+                "*",
+                &[(DATA_FIELD, json.as_str())],
+            )
+            .await?;
+        Ok(id)
+    }
+
     /// Ensure a consumer group exists on `stream`, creating the stream if needed. The
     /// group starts at `$` (only entries added after creation). Idempotent — an existing
     /// group is not an error.

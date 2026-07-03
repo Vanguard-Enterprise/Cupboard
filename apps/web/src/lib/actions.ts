@@ -164,6 +164,31 @@ export async function deleteServerAction(form: FormData): Promise<void> {
   }
 }
 
+export type IngestTokenState = { error?: string; token?: string };
+
+/** Issue (or rotate) a server's push-ingest token. The plaintext comes back exactly
+ * once — the UI must show it immediately; it is never retrievable again. */
+export async function issueIngestTokenAction(
+  _prev: IngestTokenState,
+  form: FormData,
+): Promise<IngestTokenState> {
+  const id = form.get("server_id");
+  if (typeof id !== "string" || !id) return { error: "missing server" };
+  const res = await apiFetch(`/fleet/servers/${id}/ingest-token`, { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  revalidatePath("/servers");
+  return { token: body.token };
+}
+
+export async function revokeIngestTokenAction(form: FormData): Promise<void> {
+  const id = form.get("server_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/fleet/servers/${id}/ingest-token`, { method: "DELETE" });
+    revalidatePath("/servers");
+  }
+}
+
 export type BanFormState = { error?: string; ok?: boolean };
 
 /// Create an identifier-level ban (Identity). `subject_value` is the Steam ID.

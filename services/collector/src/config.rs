@@ -23,6 +23,13 @@ pub struct Config {
     pub poll_interval_secs: u64,
     /// How often to re-fetch the server list from fleet and reconcile connections.
     pub reconcile_interval_secs: u64,
+    /// How often to query each server's A2S_INFO (servers with a `query_port` only).
+    pub a2s_interval_secs: u64,
+
+    /// `XADD MAXLEN ~` cap applied to push-ingested streams.
+    pub push_stream_maxlen: usize,
+    /// Per-server push request budget per minute (fixed window).
+    pub push_rate_limit_per_min: u32,
 }
 
 impl Config {
@@ -47,6 +54,18 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(15),
+            a2s_interval_secs: env::var("A2S_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
+            push_stream_maxlen: env::var("PUSH_STREAM_MAXLEN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(100_000),
+            push_rate_limit_per_min: env::var("PUSH_RATE_LIMIT_PER_MIN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(120),
         })
     }
 }

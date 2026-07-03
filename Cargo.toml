@@ -13,6 +13,7 @@ members = [
     "services/fleet",
     "services/collector",
     "services/identity",
+    "services/metrics",
 ]
 
 [workspace.package]
@@ -72,6 +73,7 @@ hmac = "0.12"
 sha2 = "0.10"
 rand = "0.8"
 base64 = "0.22"
+hex = "0.4"
 # Envelope encryption for tenant-supplied secrets at rest (RCON/panel creds): a random
 # per-secret data key encrypts the value; the master key (from Vault) wraps the data key.
 aes-gcm = "0.10"

@@ -24,13 +24,26 @@ pub struct Server {
     pub connection_status: String,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    // A2S_INFO snapshot, heartbeated by the Collector; null until the first query lands.
+    pub info_hostname: Option<String>,
+    pub info_map: Option<String>,
+    pub info_players: Option<i32>,
+    pub info_max_players: Option<i32>,
+    pub info_queued: Option<i32>,
+    pub info_updated_at: Option<DateTime<Utc>>,
+    /// Whether a push-ingest token is issued (the token itself is never re-shown).
+    pub has_ingest_token: bool,
+    pub ingest_token_created_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 /// Non-secret columns of `servers`, reused across selects and `RETURNING`.
 const COLS: &str = "id, tenant_id, name, game, rcon_host, rcon_port, query_port, enabled, \
-     connection_status, last_seen_at, last_error, created_at, updated_at";
+     connection_status, last_seen_at, last_error, info_hostname, info_map, info_players, \
+     info_max_players, info_queued, info_updated_at, \
+     (ingest_token_hash IS NOT NULL) AS has_ingest_token, ingest_token_created_at, \
+     created_at, updated_at";
 
 /// Fields for creating a server. `rcon_password` is plaintext here and sealed before it
 /// touches the database.
@@ -192,6 +205,109 @@ pub async fn update_status(
     Ok(())
 }
 
+/// Issue (or rotate) the push-ingest token for a server the tenant owns. Returns the
+/// plaintext token exactly once; only its SHA-256 is stored. Returns `None` when the
+/// server isn't visible to this tenant, and `Err(BadRequest)` for a disabled server.
+///
+/// The Collector's token registry is built from the enabled-server feed, so a token
+/// issued for a disabled server would silently never work. Rather than hand out a dead
+/// token, refuse — the operator enables the server first. (Disabling a server likewise
+/// stops its push ingestion within one reconcile, by design: `enabled` gates ingestion.)
+pub async fn issue_ingest_token(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let token = format!("cus_{}", cupboard_crypto::random_token());
+    let hash = cupboard_crypto::sha256(token.as_bytes()).to_vec();
+
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let updated = sqlx::query(
+        "UPDATE servers SET ingest_token_hash = $2, ingest_token_created_at = now(), \
+         updated_at = now() WHERE id = $1 AND enabled",
+    )
+    .bind(id)
+    .bind(&hash)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() > 0 {
+        tx.commit().await?;
+        return Ok(Some(token));
+    }
+    // No row updated: either the server doesn't exist (for this tenant) or it's disabled.
+    // Distinguish so the operator gets an actionable message instead of a bare 404.
+    let exists: Option<bool> = sqlx::query_scalar("SELECT enabled FROM servers WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    match exists {
+        Some(false) => Err(AppError::BadRequest(
+            "enable the server before issuing an ingest token (a disabled server can't \
+             ingest, so the token would never work)"
+                .into(),
+        )),
+        Some(true) => {
+            // Raced from enabled→? between UPDATE and SELECT; treat as transient.
+            Err(AppError::Unavailable("could not issue token; retry".into()))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Revoke a server's push-ingest token. Returns whether a row was touched.
+pub async fn revoke_ingest_token(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    id: Uuid,
+) -> Result<bool, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let res = sqlx::query(
+        "UPDATE servers SET ingest_token_hash = NULL, ingest_token_created_at = NULL, \
+         updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// An A2S_INFO snapshot as reported by the Collector.
+pub struct InfoUpdate {
+    pub hostname: String,
+    pub map: String,
+    pub players: i32,
+    pub max_players: i32,
+    pub queued: Option<i32>,
+}
+
+/// Store a server's latest A2S snapshot. Cross-tenant (owner pool), same trust boundary
+/// as `update_status`. Strings are length-bounded here — A2S hostnames are
+/// server-operator-controlled input.
+pub async fn update_info(owner_pool: &PgPool, id: Uuid, info: &InfoUpdate) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE servers SET \
+         info_hostname = left($2, 256), \
+         info_map = left($3, 128), \
+         info_players = $4, \
+         info_max_players = $5, \
+         info_queued = $6, \
+         info_updated_at = now(), \
+         updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&info.hostname)
+    .bind(&info.map)
+    .bind(info.players.max(0))
+    .bind(info.max_players.max(0))
+    .bind(info.queued.map(|q| q.max(0)))
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
 /// A decrypted connection config for the Collector. Carries the plaintext RCON password —
 /// only ever served over the cluster-internal, token-guarded `/internal` endpoint.
 #[derive(Debug, serde::Serialize)]
@@ -203,6 +319,9 @@ pub struct ServerConfig {
     pub rcon_port: i32,
     pub rcon_password: String,
     pub query_port: Option<i32>,
+    /// SHA-256 of the server's push-ingest token, hex-encoded; the Collector matches
+    /// presented bearer tokens against it. `None` = push disabled for this server.
+    pub ingest_token_hash: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -215,6 +334,7 @@ struct EncRow {
     rcon_password_enc: Vec<u8>,
     rcon_password_dek: Vec<u8>,
     query_port: Option<i32>,
+    ingest_token_hash: Option<Vec<u8>>,
 }
 
 /// Every enabled server across all tenants, with RCON credentials decrypted — the
@@ -225,7 +345,7 @@ pub async fn list_enabled_configs(
 ) -> Result<Vec<ServerConfig>, AppError> {
     let rows = sqlx::query_as::<_, EncRow>(
         "SELECT id, tenant_id, name, rcon_host, rcon_port, rcon_password_enc, \
-         rcon_password_dek, query_port FROM servers WHERE enabled",
+         rcon_password_dek, query_port, ingest_token_hash FROM servers WHERE enabled",
     )
     .fetch_all(owner_pool)
     .await?;
@@ -262,6 +382,7 @@ pub async fn list_enabled_configs(
             rcon_port: r.rcon_port,
             rcon_password,
             query_port: r.query_port,
+            ingest_token_hash: r.ingest_token_hash.map(hex::encode),
         });
     }
     Ok(configs)

@@ -107,6 +107,25 @@ pub async fn merge_players(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+
+    // Chat + F7 reports (Phase 3) hang off player_id — repoint them too, or the merged
+    // player's moderation history (chat log, reports filed and reports received) would
+    // vanish from the surviving profile. No per-player uniqueness, so plain repoint.
+    sqlx::query("UPDATE chat_messages SET player_id = $2 WHERE player_id = $1")
+        .bind(from)
+        .bind(into)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE player_reports SET target_player_id = $2 WHERE target_player_id = $1")
+        .bind(from)
+        .bind(into)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE player_reports SET reporter_player_id = $2 WHERE reporter_player_id = $1")
+        .bind(from)
+        .bind(into)
+        .execute(&mut *tx)
+        .await?;
     let bans = sqlx::query("UPDATE bans SET player_id = $2 WHERE player_id = $1")
         .bind(from)
         .bind(into)
@@ -243,8 +262,9 @@ mod tests {
         let pepper = b"merge-pepper";
         let tenant = Uuid::new_v4();
         let server = Uuid::new_v4();
-        let steam_a = format!("A{}", Utc::now().timestamp_nanos_opt().unwrap());
-        let steam_b = format!("B{}", Utc::now().timestamp_nanos_opt().unwrap());
+        // All-digit (roster ingestion validates SteamID64 shape); distinct prefixes.
+        let steam_a = format!("76561{}", Utc::now().timestamp_nanos_opt().unwrap());
+        let steam_b = format!("76562{}", Utc::now().timestamp_nanos_opt().unwrap());
 
         let ev = |sid: &str| RosterEvent {
             server_id: ServerId(server),
@@ -255,6 +275,7 @@ mod tests {
                 owner_steam_id: None,
                 name: "n".into(),
                 ip: Some("203.0.113.9".into()),
+                eac_id: None,
                 connected_seconds: 5,
             }],
         };

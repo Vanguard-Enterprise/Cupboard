@@ -16,10 +16,12 @@ pub struct ServerConfig {
     pub rcon_host: String,
     pub rcon_port: i32,
     pub rcon_password: String,
-    /// A2S/UDP query port; wired when A2S ingestion lands. Deserialized now so the config
-    /// contract with fleet is complete.
-    #[allow(dead_code)]
+    /// A2S/UDP query port; servers without one simply get no A2S task.
     pub query_port: Option<i32>,
+    /// Hex SHA-256 of the server's push-ingest token; `None` = push disabled. Feeds the
+    /// token registry — never logged.
+    #[serde(default)]
+    pub ingest_token_hash: Option<String>,
 }
 
 #[derive(Clone)]
@@ -49,6 +51,29 @@ impl FleetClient {
             .await?
             .error_for_status()?;
         Ok(resp.json().await?)
+    }
+
+    /// POST a server's latest A2S_INFO snapshot. Best-effort, like `post_status`.
+    pub async fn post_info(
+        &self,
+        server_id: Uuid,
+        info: &cupboard_gameconn::ServerInfo,
+    ) -> anyhow::Result<()> {
+        let url = format!("{}/internal/servers/{server_id}/info", self.base_url);
+        self.http
+            .post(&url)
+            .header(INTERNAL_TOKEN_HEADER, &self.token)
+            .json(&serde_json::json!({
+                "hostname": info.hostname,
+                "map": info.map,
+                "players": info.players,
+                "max_players": info.max_players,
+                "queued": info.queued,
+            }))
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(())
     }
 
     /// POST a connection-status heartbeat for one server. Best-effort; errors are logged
