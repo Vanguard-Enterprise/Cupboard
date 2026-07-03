@@ -22,7 +22,8 @@ fn master_key(state: &AppState) -> Result<[u8; 32], AppError> {
     })
 }
 
-/// Connection status + latest job + discovered ban lists (token never included).
+/// Connection status + latest job + discovered ban lists + recent sync conflicts
+/// (token never included).
 pub async fn status(
     State(state): State<AppState>,
     claims: AuthClaims,
@@ -32,12 +33,39 @@ pub async fn status(
     let connection = bm::get_view(&state.app_pool, tenant).await?;
     let latest_job = bm::latest_job(&state.app_pool, tenant).await?;
     let ban_lists = bm::list_ban_lists(&state.app_pool, tenant).await?;
+    let conflicts = bm::list_conflicts(&state.app_pool, tenant).await?;
     Ok(Json(json!({
         "configured": state.config.identity_master_key.is_some(),
         "connection": connection,
         "latest_job": latest_job,
         "ban_lists": ban_lists,
+        "conflicts": conflicts,
     })))
+}
+
+#[derive(Deserialize)]
+pub struct SyncToggleRequest {
+    pub sync_enabled: bool,
+}
+
+/// Toggle inbound sync. The runner notices within one tick (claim within ~15s when
+/// enabling; loop exit within ~5s when disabling).
+pub async fn update_sync(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Json(req): Json<SyncToggleRequest>,
+) -> Result<Json<bm::ConnectionView>, AppError> {
+    let org = claims.require(Permission::IntegrationsManage)?;
+    // Sync needs a runner, and runners need the master key.
+    master_key(&state)?;
+    let view = bm::set_sync_enabled(
+        &state.app_pool,
+        TenantId::from(org),
+        claims.0.sub.0,
+        req.sync_enabled,
+    )
+    .await?;
+    Ok(Json(view))
 }
 
 #[derive(Deserialize)]

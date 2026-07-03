@@ -2,16 +2,11 @@
 //! one BM page per DB transaction, persisting the cursor with each page so a crash or
 //! claim takeover loses at most one page of work (plan decision G).
 
-use crate::domain::bm::{
-    self, BmConnection, ImportJob, ImportOutcome, ImportedBan, ImportedBanList,
-};
+use super::mapping;
+use crate::domain::bm::{self, BmConnection, ImportJob};
 use crate::error::AppError;
-use chrono::Utc;
-use cupboard_bmapi::types::{
-    included_identifier_map, BanAttrs, BanIdentifier, BanListAttrs, Resource,
-};
-use cupboard_bmapi::{ban_content_hash, BmClient, BmError};
-use std::collections::HashMap;
+use cupboard_bmapi::types::{included_identifier_map, BanAttrs, BanListAttrs};
+use cupboard_bmapi::{BmClient, BmError};
 use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
@@ -36,8 +31,14 @@ impl Counts {
         Self(v.as_object().cloned().unwrap_or_default())
     }
     fn inc(&mut self, key: &str) {
+        self.add(key, 1);
+    }
+    fn add(&mut self, key: &str, by: usize) {
+        if by == 0 {
+            return;
+        }
         let cur = self.0.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
-        self.0.insert(key.to_string(), (cur + 1).into());
+        self.0.insert(key.to_string(), (cur + by as u64).into());
     }
     fn value(&self) -> serde_json::Value {
         serde_json::Value::Object(self.0.clone())
@@ -199,7 +200,12 @@ async fn run_phases(
 
                 let mut tx = pool.begin().await?;
                 for res in &doc.data {
-                    bm::upsert_ban_list(&mut tx, conn.tenant_id, &imported_list(res, conn)).await?;
+                    bm::upsert_ban_list(
+                        &mut tx,
+                        conn.tenant_id,
+                        &mapping::imported_list(res, conn),
+                    )
+                    .await?;
                     counts.inc("ban_lists");
                 }
                 cursor.next_url = doc.links.next.clone();
@@ -235,23 +241,17 @@ async fn run_phases(
                     .unwrap_or_else(|| client.bans_first_page(&list_id));
                 let doc = client.list_page::<BanAttrs>(&url).await?;
                 let ids_map = included_identifier_map(&doc.included);
+                let (page, skipped) = mapping::imported_ban_page(&doc.data, &ids_map, &list_id);
 
                 let mut tx = pool.begin().await?;
-                for res in &doc.data {
-                    match imported_ban(res, &ids_map, &list_id) {
-                        Some(ban) => {
-                            match bm::upsert_imported_ban(&mut tx, conn.tenant_id, pepper, &ban)
-                                .await
-                                .map_err(map_upsert_err)?
-                            {
-                                ImportOutcome::Inserted => counts.inc("bans_imported"),
-                                ImportOutcome::Updated => counts.inc("bans_updated"),
-                                ImportOutcome::Unchanged => counts.inc("bans_unchanged"),
-                            }
-                        }
-                        None => counts.inc("bans_skipped_no_identifier"),
-                    }
-                }
+                let outcome = bm::apply_ban_page(&mut tx, conn.tenant_id, pepper, &page)
+                    .await
+                    .map_err(map_upsert_err)?;
+                counts.add("bans_imported", outcome.inserted);
+                counts.add("bans_updated", outcome.updated);
+                counts.add("bans_unchanged", outcome.unchanged);
+                counts.add("bans_skipped_no_identifier", skipped);
+                counts.add("sync_conflicts", outcome.conflicts);
                 cursor.next_url = doc.links.next.clone();
                 if cursor.next_url.is_none() {
                     cursor.sub_id = cursor.pending.pop();
@@ -292,109 +292,6 @@ async fn save(
         return Err(ExecError::LostClaim);
     }
     Ok(())
-}
-
-fn imported_list(res: &Resource<BanListAttrs>, conn: &BmConnection) -> ImportedBanList {
-    // The list's owning org rides the "organization" relationship ("owner" accepted
-    // defensively); a list owned by someone else is a subscription.
-    let owner = res
-        .rel_id("organization")
-        .or_else(|| res.rel_id("owner"))
-        .map(str::to_string);
-    let subscribed = owner.as_deref().is_some_and(|o| o != conn.bm_org_id);
-    ImportedBanList {
-        external_id: res.id.clone(),
-        name: res.attributes.name.clone(),
-        action: res.attributes.action.clone(),
-        owner_bm_org: owner,
-        subscribed,
-        perm_create: res.attributes.perm_create.unwrap_or(false),
-        perm_update: res.attributes.perm_update.unwrap_or(false),
-        perm_delete: res.attributes.perm_delete.unwrap_or(false),
-    }
-}
-
-/// Cupboard subject types an imported identifier can become, most durable first.
-const PRECEDENCE: [&str; 5] = ["steam", "eos", "beguid", "ip", "name"];
-
-fn bm_kind_to_subject(kind: &str) -> Option<&'static str> {
-    match kind {
-        "steamID" => Some("steam"),
-        "eosID" | "egsID" | "epicID" => Some("eos"),
-        "BEGUID" | "legacyBEGUID" => Some("beguid"),
-        "ip" => Some("ip"),
-        "name" => Some("name"),
-        _ => None,
-    }
-}
-
-fn pick_primary(resolved: &[(String, String)]) -> Option<(&'static str, String)> {
-    let mut best: Option<(usize, &'static str, &str)> = None;
-    for (kind, value) in resolved {
-        if value.is_empty() {
-            continue;
-        }
-        if let Some(subject) = bm_kind_to_subject(kind) {
-            let rank = PRECEDENCE
-                .iter()
-                .position(|p| *p == subject)
-                .expect("subject came from PRECEDENCE");
-            if best.is_none_or(|(r, _, _)| rank < r) {
-                best = Some((rank, subject, value));
-            }
-        }
-    }
-    best.map(|(_, kind, value)| (kind, value.to_string()))
-}
-
-/// Map one BM ban resource to an importable ban. `None` = no usable identifier
-/// (counted, per decision F). The full resolved array + BM extras ride `meta`.
-fn imported_ban(
-    res: &Resource<BanAttrs>,
-    ids_map: &HashMap<String, (String, String)>,
-    list_id: &str,
-) -> Option<ImportedBan> {
-    let a = &res.attributes;
-    let mut resolved: Vec<(String, String)> = Vec::new();
-    let mut unresolved = 0u32;
-    for ident in &a.identifiers {
-        match ident {
-            BanIdentifier::Ref(n) => match ids_map.get(&n.to_string()) {
-                Some((kind, value)) => resolved.push((kind.clone(), value.clone())),
-                None => unresolved += 1,
-            },
-            BanIdentifier::Manual(m) => resolved.push((m.kind.clone(), m.identifier.clone())),
-            BanIdentifier::Other(_) => unresolved += 1,
-        }
-    }
-    let (subject_type, subject_value) = pick_primary(&resolved)?;
-    let content_hash =
-        ban_content_hash(a.reason.as_deref(), a.expires, &resolved, a.note.as_deref());
-    let meta = serde_json::json!({
-        "uid": a.uid,
-        "note": a.note,
-        "org_wide": a.org_wide,
-        "auto_add_enabled": a.auto_add_enabled,
-        "native_enabled": a.native_enabled,
-        "identifiers": resolved
-            .iter()
-            .map(|(kind, value)| serde_json::json!({ "type": kind, "value": value }))
-            .collect::<Vec<_>>(),
-        "unresolved_identifiers": unresolved,
-        "ban_list": list_id,
-        "bm_server": res.rel_id("server"),
-        "bm_player": res.rel_id("player"),
-    });
-    Some(ImportedBan {
-        external_id: res.id.clone(),
-        subject_type: subject_type.to_string(),
-        subject_value,
-        reason: a.reason.clone(),
-        issued_at: a.timestamp.unwrap_or_else(Utc::now),
-        expires_at: a.expires,
-        content_hash,
-        meta,
-    })
 }
 
 #[cfg(test)]
@@ -493,6 +390,8 @@ mod e2e_tests {
             bm_org_id: "9999".into(),
             token_enc: vec![0],
             token_dek: vec![0],
+            settings: serde_json::json!({}),
+            sync_enabled: false,
         };
         (conn, job)
     }
@@ -690,69 +589,5 @@ mod e2e_tests {
                 .unwrap();
         assert_eq!(conn_status, "error");
         assert!(last_error.is_some(), "the tenant must see why it failed");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pairs(input: &[(&str, &str)]) -> Vec<(String, String)> {
-        input
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn primary_identifier_precedence() {
-        let picked = pick_primary(&pairs(&[
-            ("ip", "1.2.3.4"),
-            ("BEGUID", "beguid-1"),
-            ("steamID", "76561198000000001"),
-        ]))
-        .unwrap();
-        assert_eq!(picked, ("steam", "76561198000000001".to_string()));
-
-        let picked = pick_primary(&pairs(&[("ip", "1.2.3.4"), ("eosID", "eos-1")])).unwrap();
-        assert_eq!(picked.0, "eos");
-
-        assert!(pick_primary(&pairs(&[("unknownKind", "x")])).is_none());
-        assert!(pick_primary(&[]).is_none());
-    }
-
-    #[test]
-    fn ban_without_usable_identifier_is_skipped() {
-        let res: Resource<BanAttrs> = serde_json::from_value(serde_json::json!({
-            "type": "ban",
-            "id": "b1",
-            "attributes": { "identifiers": [ {"unexpected": 1} ] }
-        }))
-        .unwrap();
-        assert!(imported_ban(&res, &HashMap::new(), "l1").is_none());
-    }
-
-    #[test]
-    fn numeric_refs_resolve_through_included_map() {
-        let res: Resource<BanAttrs> = serde_json::from_value(serde_json::json!({
-            "type": "ban",
-            "id": "b2",
-            "attributes": {
-                "reason": "cheating",
-                "identifiers": [7, {"type": "ip", "identifier": "9.9.9.9"}]
-            },
-            "relationships": { "banList": {"data": {"type": "banList", "id": "l1"}} }
-        }))
-        .unwrap();
-        let mut map = HashMap::new();
-        map.insert(
-            "7".to_string(),
-            ("steamID".to_string(), "76561198000000009".to_string()),
-        );
-        let ban = imported_ban(&res, &map, "l1").expect("importable");
-        assert_eq!(ban.subject_type, "steam");
-        assert_eq!(ban.subject_value, "76561198000000009");
-        let idents = ban.meta.get("identifiers").unwrap().as_array().unwrap();
-        assert_eq!(idents.len(), 2, "meta keeps the full array");
     }
 }

@@ -63,7 +63,12 @@ pub async fn run(
         lost.clone(),
     ));
 
+    let mut last_tail: Option<tokio::time::Instant> = None;
+    let mut last_scan: Option<tokio::time::Instant> = None;
+
     while !lost.load(Ordering::Relaxed) {
+        // Import jobs take precedence; sync pauses while one runs so the single
+        // rate-limit budget isn't contended (decision C).
         match bm::next_live_job(&pool, conn.id).await {
             Ok(Some(job)) => {
                 let signal = super::import::execute_job(
@@ -73,13 +78,83 @@ pub async fn run(
                 if matches!(signal, super::import::RunnerSignal::Stop) {
                     break;
                 }
+                continue;
             }
-            Ok(None) => break,
+            Ok(None) => {}
             Err(e) => {
                 tracing::warn!(connection = %conn.id, error = ?e, "job lookup failed; runner exiting");
                 break;
             }
         }
+
+        // Fresh row every tick: sync toggles, cadence changes, and token rotation all
+        // apply within seconds instead of at the next claim.
+        let current = match bm::fresh_connection(&pool, conn.id).await {
+            Ok(Some(c)) => c,
+            Ok(None) => break,
+            Err(e) => {
+                tracing::warn!(connection = %conn.id, error = ?e, "connection refresh failed");
+                break;
+            }
+        };
+        if !current.sync_enabled {
+            break;
+        }
+        if current.token_enc != conn.token_enc {
+            tracing::info!(connection = %conn.id, "token rotated; runner restarts for a fresh client");
+            break;
+        }
+
+        let settings = super::sync::settings_from(&current.settings);
+        let now = tokio::time::Instant::now();
+        let scan_due = last_scan.is_none_or(|t| now.duration_since(t) >= settings.rescan);
+        let tail_due = last_tail.is_none_or(|t| now.duration_since(t) >= settings.tail);
+
+        let tick = if scan_due {
+            let result = super::sync::full_rescan(&pool, &client, &current, &pepper, &lost).await;
+            // A scan visits everything a tail would; advance both cadences either
+            // way, so a persistently failing tick can't hot-loop against BM.
+            last_scan = Some(tokio::time::Instant::now());
+            last_tail = last_scan;
+            Some((result, true))
+        } else if tail_due {
+            let result = super::sync::tail_poll(&pool, &client, &current, &pepper).await;
+            last_tail = Some(tokio::time::Instant::now());
+            Some((result, false))
+        } else {
+            None
+        };
+
+        match tick {
+            Some((Ok(()), scan)) => {
+                let _ = bm::record_sync_tick(&pool, conn.id, &claimer, scan).await;
+            }
+            Some((Err(e), _)) if e.is_auth() => {
+                // Same stale-token discipline as the import path: only error the
+                // connection if the stored token is still the one we hold.
+                match bm::set_connection_error_if_token_unchanged(
+                    &pool,
+                    conn.id,
+                    &current.token_enc,
+                    &e.message(),
+                )
+                .await
+                {
+                    Ok(true) => tracing::warn!(connection = %conn.id, error = %e.message(),
+                        "sync auth failure; connection errored"),
+                    _ => tracing::info!(connection = %conn.id,
+                        "sync auth failure with rotated token; restarting for re-claim"),
+                }
+                break;
+            }
+            Some((Err(e), _)) => {
+                tracing::warn!(connection = %conn.id, error = %e.detail(), "sync tick failed");
+                let _ = bm::record_sync_error(&pool, conn.id, &claimer, &e.message()).await;
+            }
+            None => {}
+        }
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
     hb.abort();

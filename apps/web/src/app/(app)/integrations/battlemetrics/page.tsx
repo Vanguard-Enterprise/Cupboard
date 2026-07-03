@@ -3,6 +3,7 @@ import { can, Permission } from "@/lib/permissions";
 import { AutoRefresh } from "./auto-refresh";
 import { ConnectForm } from "./connect-form";
 import { ImportButton } from "./import-button";
+import { SyncToggle } from "./sync-toggle";
 
 type BmConnection = {
   id: string;
@@ -12,8 +13,23 @@ type BmConnection = {
   sync_enabled: boolean;
   sync_bans_outbound: boolean;
   settings: unknown;
+  last_tail_at: string | null;
+  last_scan_at: string | null;
+  sync_error: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type BmConflict = {
+  id: string;
+  entity_type: string;
+  external_id: string;
+  local_id: string | null;
+  direction: "inbound" | "outbound";
+  local_snapshot: Record<string, unknown> | null;
+  remote_snapshot: Record<string, unknown> | null;
+  resolution: "local_won" | "remote_won" | "manual_pending" | "manual_resolved";
+  created_at: string;
 };
 
 type BmImportJob = {
@@ -41,6 +57,7 @@ type BmStatus = {
   connection: BmConnection | null;
   latest_job: BmImportJob | null;
   ban_lists: BmBanList[];
+  conflicts: BmConflict[];
 };
 
 async function fetchStatus(): Promise<BmStatus | "error"> {
@@ -76,6 +93,31 @@ const PHASE_COUNT_LABELS: Record<string, string> = {
   bans_skipped_no_identifier: "Bans skipped (no identifier)",
 };
 
+const CONFLICT_RESOLUTION_STYLES: Record<BmConflict["resolution"], string> = {
+  local_won: "bg-neutral-800 text-neutral-400",
+  remote_won: "bg-neutral-800 text-neutral-400",
+  manual_pending: "bg-yellow-900 text-yellow-300",
+  manual_resolved: "bg-green-900 text-green-300",
+};
+
+// Small dependency-free "3m ago" formatter; "-" for null. Only needs coarse buckets
+// since this page polls every few seconds anyway.
+function relativeTime(iso: string | null): string {
+  if (!iso) return "-";
+  const secs = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function conflictSummary(c: BmConflict): string {
+  const reason = c.remote_snapshot?.reason;
+  return typeof reason === "string" && reason ? reason : "-";
+}
+
 export default async function BattlemetricsPage() {
   const session = await getSession();
   if (!session) return null;
@@ -91,12 +133,17 @@ export default async function BattlemetricsPage() {
   const connection = status?.connection ?? null;
   const latestJob = status?.latest_job ?? null;
   const banLists = status?.ban_lists ?? [];
+  const conflicts = status?.conflicts ?? [];
   const jobActive = latestJob?.status === "queued" || latestJob?.status === "running";
+  const syncOnly = !jobActive && !loadFailed && !!connection?.sync_enabled;
   const phaseCountEntries = Object.entries(latestJob?.phase_counts ?? {});
 
   return (
     <div className="flex flex-col gap-8">
-      <AutoRefresh active={jobActive || loadFailed} />
+      <AutoRefresh
+        active={jobActive || loadFailed || !!connection?.sync_enabled}
+        intervalMs={syncOnly ? 15000 : 3000}
+      />
 
       <div>
         <h1 className="text-2xl font-semibold">BattleMetrics</h1>
@@ -162,6 +209,64 @@ export default async function BattlemetricsPage() {
           </div>
         )}
       </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-neutral-300">Sync</h2>
+        <p className="text-xs text-neutral-500">
+          New BattleMetrics bans arrive within about a minute; edits and deletes
+          reconcile within about 15 minutes.
+        </p>
+        <SyncToggle enabled={!!connection?.sync_enabled} disabled={!connection} />
+        {connection?.sync_enabled && (
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap gap-4 text-sm text-neutral-400">
+              <span>Last tail poll: {relativeTime(connection.last_tail_at)}</span>
+              <span>Last re-scan: {relativeTime(connection.last_scan_at)}</span>
+            </div>
+            {connection.sync_error && (
+              <p className="text-sm text-red-400">{connection.sync_error}</p>
+            )}
+          </div>
+        )}
+      </section>
+
+      {conflicts.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Sync conflicts</h2>
+          <div className="overflow-hidden rounded border border-neutral-800">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-neutral-900 text-neutral-400">
+                <tr>
+                  <th className="px-3 py-2">When</th>
+                  <th className="px-3 py-2">Ban</th>
+                  <th className="px-3 py-2">Direction</th>
+                  <th className="px-3 py-2">Resolution</th>
+                  <th className="px-3 py-2">Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {conflicts.map((c) => (
+                  <tr key={c.id} className="border-t border-neutral-800">
+                    <td className="px-3 py-2 text-neutral-400">
+                      {relativeTime(c.created_at)}
+                    </td>
+                    <td className="px-3 py-2">{c.external_id}</td>
+                    <td className="px-3 py-2 text-neutral-400">{c.direction}</td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs ${CONFLICT_RESOLUTION_STYLES[c.resolution]}`}
+                      >
+                        {c.resolution}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-neutral-400">{conflictSummary(c)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {banLists.length > 0 && (
         <section className="flex flex-col gap-2">

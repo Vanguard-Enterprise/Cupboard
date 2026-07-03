@@ -63,7 +63,8 @@ tracing-opentelemetry = "0.33"
 # Errors / utils
 anyhow = "1"
 thiserror = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
+# v7 for client-generated, time-ordered ids in batch inserts (matches DB uuidv7()).
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Auth / crypto

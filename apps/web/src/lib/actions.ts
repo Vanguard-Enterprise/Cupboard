@@ -284,6 +284,25 @@ export async function startBmImportAction(
   return { ok: true };
 }
 
+export type BmSyncFormState = { error?: string; ok?: boolean };
+
+/** Toggle inbound BattleMetrics sync (new bans tail in ~1m, edits/deletes re-scan in
+ * ~15m) for the tenant's connection. */
+export async function toggleBmSyncAction(
+  _prev: BmSyncFormState,
+  form: FormData,
+): Promise<BmSyncFormState> {
+  const syncEnabled = form.get("sync_enabled") === "true";
+  const res = await apiFetch("/integrations/bm/sync", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sync_enabled: syncEnabled }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;
