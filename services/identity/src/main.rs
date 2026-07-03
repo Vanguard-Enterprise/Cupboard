@@ -7,6 +7,7 @@
 //! consumer, `cupboard_app` for RLS-scoped reads), migrates the `identity` schema, spawns
 //! the bus consumer, then serves the HTTP read API.
 
+mod bm;
 mod config;
 mod consumer;
 mod domain;
@@ -85,6 +86,15 @@ async fn main() -> anyhow::Result<()> {
             config.consumer_name.clone(),
         )),
     ];
+
+    // BM import/sync supervisor (Phase 4): claims tenant connections and runs their
+    // import jobs. No-op without the master key (nothing could decrypt tenant tokens).
+    if config.identity_master_key.is_some() {
+        tokio::spawn(bm::supervisor::run(
+            owner_pool.clone(),
+            Arc::new(config.clone()),
+        ));
+    }
 
     let state = AppState {
         owner_pool,

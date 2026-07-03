@@ -243,6 +243,47 @@ async function updateEvasion(form: FormData, verb: "dismiss" | "action"): Promis
   }
 }
 
+export type BmConnectFormState = { error?: string; ok?: boolean };
+
+/** Connect (or reconnect) the tenant's BattleMetrics org + personal access token. The
+ * backend probes the token against BattleMetrics before storing it; the token is
+ * never read back. */
+export async function connectBattlemetricsAction(
+  _prev: BmConnectFormState,
+  form: FormData,
+): Promise<BmConnectFormState> {
+  const bmOrgId = form.get("bm_org_id");
+  const token = form.get("token");
+  if (typeof bmOrgId !== "string" || !bmOrgId.trim()) {
+    return { error: "organization id is required" };
+  }
+  if (typeof token !== "string" || !token.trim()) {
+    return { error: "token is required" };
+  }
+
+  const res = await apiFetch("/integrations/bm/connection", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bm_org_id: bmOrgId, token }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type BmImportFormState = { error?: string; ok?: boolean };
+
+/** Queue a BattleMetrics import job for the tenant's connection. */
+export async function startBmImportAction(
+  _prev: BmImportFormState,
+  _form: FormData,
+): Promise<BmImportFormState> {
+  const res = await apiFetch("/integrations/bm/import", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

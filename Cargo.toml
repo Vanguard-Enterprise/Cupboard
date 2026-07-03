@@ -8,6 +8,7 @@ members = [
     "crates/auth-core",
     "crates/gameconn",
     "crates/bus",
+    "crates/bmapi",
     "services/gateway",
     "services/auth",
     "services/fleet",
@@ -93,6 +94,7 @@ cupboard-crypto = { path = "crates/crypto" }
 cupboard-auth-core = { path = "crates/auth-core" }
 cupboard-gameconn = { path = "crates/gameconn" }
 cupboard-bus = { path = "crates/bus" }
+cupboard-bmapi = { path = "crates/bmapi" }
 
 [profile.release]
 opt-level = 3

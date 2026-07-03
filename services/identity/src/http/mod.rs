@@ -3,6 +3,7 @@
 mod bans;
 mod chat;
 mod evasion;
+mod integrations;
 mod internal;
 mod players;
 mod reports;
@@ -42,6 +43,16 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(evasion::dismiss),
         )
         .route("/evasion/{id}/action", axum::routing::post(evasion::action))
+        // BattleMetrics integration (tenant-scoped, requires integrations.manage).
+        .route("/integrations/bm", get(integrations::status))
+        .route(
+            "/integrations/bm/connection",
+            axum::routing::post(integrations::connect),
+        )
+        .route(
+            "/integrations/bm/import",
+            axum::routing::post(integrations::start_import),
+        )
         // Cluster-internal enforcement lookup for the Collector (token-guarded).
         .route("/internal/enforce", axum::routing::post(internal::enforce))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))

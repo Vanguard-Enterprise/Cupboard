@@ -58,6 +58,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Evasion alerts
             </Link>
           )}
+          {can(perms, Permission.IntegrationsManage) && (
+            <Link href="/integrations/battlemetrics" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Integrations
+            </Link>
+          )}
           {can(perms, Permission.StaffManage) && (
             <Link href="/staff" className="rounded px-2 py-1 hover:bg-neutral-900">
               Staff

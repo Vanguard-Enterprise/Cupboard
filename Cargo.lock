@@ -451,6 +451,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cupboard-bmapi"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "cupboard-bmapi",
+ "cupboard-crypto",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cupboard-bus"
 version = "0.1.0"
 dependencies = [
@@ -586,6 +603,7 @@ dependencies = [
  "axum",
  "chrono",
  "cupboard-auth-core",
+ "cupboard-bmapi",
  "cupboard-bus",
  "cupboard-crypto",
  "cupboard-db",

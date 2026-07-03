@@ -1,8 +1,6 @@
 //! Runtime configuration, read from the environment (Vault → ExternalSecret → env
 //! in-cluster; a local `.env`/shell for development).
 
-use anyhow::Context as _;
-use base64::Engine as _;
 use std::env;
 
 #[derive(Clone)]
@@ -48,9 +46,10 @@ impl Config {
         let jwt_public_key_pem = env::var("JWT_PUBLIC_KEY_PEM")
             .map_err(|_| anyhow::anyhow!("JWT_PUBLIC_KEY_PEM is required"))?;
 
-        let master_key = decode_master_key(
+        let master_key = cupboard_crypto::decode_master_key(
             &env::var("FLEET_MASTER_KEY")
                 .map_err(|_| anyhow::anyhow!("FLEET_MASTER_KEY is required"))?,
+            "FLEET_MASTER_KEY",
         )?;
 
         Ok(Self {
@@ -70,16 +69,4 @@ impl Config {
                 .filter(|s| !s.is_empty()),
         })
     }
-}
-
-/// Decode a base64 master key and require exactly 32 bytes (AES-256).
-fn decode_master_key(b64: &str) -> anyhow::Result<[u8; 32]> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64.trim())
-        .context("FLEET_MASTER_KEY must be valid base64")?;
-    let key: [u8; 32] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("FLEET_MASTER_KEY must decode to exactly 32 bytes"))?;
-    Ok(key)
 }
