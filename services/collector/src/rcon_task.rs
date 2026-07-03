@@ -39,7 +39,11 @@ pub async fn run(
     fleet: FleetClient,
     identity: IdentityClient,
     poll_interval: Duration,
+    stream_maxlen: usize,
 ) {
+    // A poll interval below the reply timeout would let the frame loop's wake instant sit
+    // in the past while a reply is still pending, hot-spinning the loop. Floor it.
+    let poll_interval = poll_interval.max(REPLY_TIMEOUT);
     let mut backoff = INITIAL_BACKOFF;
     loop {
         let dial = match tokio::time::timeout(
@@ -62,8 +66,16 @@ pub async fn run(
                 backoff = INITIAL_BACKOFF; // reset on a good connection
                 tracing::info!(server = %config.name, server_id = %config.id, "rcon connected");
                 report(&fleet, &config, "connected", None).await;
-                if let Err(e) =
-                    frame_loop(&config, client, &mut bus, &fleet, &identity, poll_interval).await
+                if let Err(e) = frame_loop(
+                    &config,
+                    client,
+                    &mut bus,
+                    &fleet,
+                    &identity,
+                    poll_interval,
+                    stream_maxlen,
+                )
+                .await
                 {
                     tracing::warn!(server = %config.name, error = %e, "rcon loop ended; reconnecting");
                     report(&fleet, &config, "down", Some(&e.to_string())).await;
@@ -81,6 +93,7 @@ pub async fn run(
 
 /// The connection's main loop. Returns on the first RCON error (or an unanswered poll)
 /// so the supervisor can reconnect.
+#[allow(clippy::too_many_arguments)]
 async fn frame_loop(
     config: &ServerConfig,
     mut client: RconClient,
@@ -88,18 +101,27 @@ async fn frame_loop(
     fleet: &FleetClient,
     identity: &IdentityClient,
     poll_interval: Duration,
+    stream_maxlen: usize,
 ) -> Result<(), GameconnError> {
     let mut next_poll = Instant::now(); // poll immediately on connect
     let mut pending: Option<(i32, Instant)> = None;
+    // Liveness deadline armed by any command we send (poll or kick): a live connection
+    // returns *some* frame; if none arrives by the deadline the connection is wedged
+    // (writes buffer, nothing comes back — a half-open NAT/hang) so we reconnect. Kicks
+    // are fire-and-forget for the frame loop, so without this a kick on a wedged socket
+    // would go unnoticed until the next poll's own timeout.
+    let mut liveness: Option<Instant> = None;
 
     loop {
         let now = Instant::now();
-        // An unanswered `playerlist` past its deadline means the connection is wedged
-        // (reads still deliver chat, but commands go nowhere) — reconnect.
+        // An unanswered `playerlist` past its deadline means the connection is wedged.
         if let Some((id, deadline)) = pending {
             if now >= deadline {
                 return Err(GameconnError::Timeout(id));
             }
+        }
+        if liveness.is_some_and(|d| now >= d) {
+            return Err(GameconnError::Timeout(0)); // sent a command, no frame came back
         }
         if now >= next_poll && pending.is_none() {
             let id = client.send_command("playerlist").await?;
@@ -107,31 +129,38 @@ async fn frame_loop(
             next_poll = now + poll_interval;
         }
 
-        // Read frames until the next deadline (poll tick or reply timeout) fires.
+        // Read frames until the earliest deadline (poll tick, reply timeout, liveness).
         let mut wake = next_poll;
         if let Some((_, deadline)) = pending {
+            wake = wake.min(deadline);
+        }
+        if let Some(deadline) = liveness {
             wake = wake.min(deadline);
         }
         let frame = match tokio::time::timeout_at(wake, client.next_frame()).await {
             Err(_elapsed) => continue, // a deadline fired; the loop top handles it
             Ok(frame) => frame?,
         };
+        // Any inbound frame proves the socket is alive — clear the liveness watch.
+        liveness = None;
 
         match frame {
             RconFrame::Reply { id, message } if pending.map(|(p, _)| p) == Some(id) => {
                 pending = None;
                 let players = parse_playerlist(&message)?;
                 let event = to_roster_event(config.id, config.tenant_id, &players, Utc::now());
-                publish(bus, ROSTER_STREAM, &event, config, "roster").await;
+                publish(bus, ROSTER_STREAM, stream_maxlen, &event, config, "roster").await;
                 report(fleet, config, "connected", None).await;
                 let steam_ids: Vec<String> = players.iter().map(|p| p.steam_id.clone()).collect();
-                enforce_bans(config, &mut client, identity, &steam_ids).await?;
+                if enforce_bans(config, &mut client, identity, &steam_ids).await? {
+                    liveness.get_or_insert(Instant::now() + REPLY_TIMEOUT);
+                }
             }
             // Replies we didn't ask for a result from (kicks) — nothing to do.
             RconFrame::Reply { .. } => {}
             RconFrame::Chat(entry) => {
                 let event = to_chat_event(config.id, config.tenant_id, &entry, Utc::now());
-                publish(bus, CHAT_STREAM, &event, config, "chat").await;
+                publish(bus, CHAT_STREAM, stream_maxlen, &event, config, "chat").await;
             }
             RconFrame::Console(line) => {
                 if let Some(edge) = cupboard_gameconn::parse_console_line(&line) {
@@ -140,11 +169,21 @@ async fn frame_loop(
                         ConsoleEvent::Disconnected { .. } => None,
                     };
                     let event = to_session_event(config.id, config.tenant_id, &edge, Utc::now());
-                    publish(bus, SESSION_STREAM, &event, config, "session").await;
+                    publish(
+                        bus,
+                        SESSION_STREAM,
+                        stream_maxlen,
+                        &event,
+                        config,
+                        "session",
+                    )
+                    .await;
                     // Instant enforcement: a banned player is kicked on the join edge,
                     // not at the next poll.
                     if let Some(steam_id) = joined_steam_id {
-                        enforce_bans(config, &mut client, identity, &[steam_id]).await?;
+                        if enforce_bans(config, &mut client, identity, &[steam_id]).await? {
+                            liveness.get_or_insert(Instant::now() + REPLY_TIMEOUT);
+                        }
                     }
                 }
             }
@@ -152,32 +191,36 @@ async fn frame_loop(
     }
 }
 
-/// Publish one event; a bus hiccup must not tear down a healthy RCON connection (roster
-/// self-heals next poll; a lost chat line is acceptable), so failures only log.
+/// Publish one event with the same `XADD MAXLEN ~` cap the push path uses, so a stalled
+/// consumer can't grow chat/session/roster streams unbounded. A bus hiccup must not tear
+/// down a healthy RCON connection (roster self-heals next poll; a lost chat line is
+/// acceptable), so failures only log.
 async fn publish<T: serde::Serialize>(
     bus: &mut Bus,
     stream: &str,
+    maxlen: usize,
     event: &T,
     config: &ServerConfig,
     what: &str,
 ) {
-    if let Err(e) = bus.publish(stream, event).await {
+    if let Err(e) = bus.publish_capped(stream, maxlen, event).await {
         tracing::error!(server = %config.name, error = %e, "failed to publish {what} event");
     }
 }
 
 /// Ask identity which of `steam_ids` are banned here and kick the hits (fire-and-forget;
-/// their replies surface as unmatched `Reply` frames). A ban-lookup failure (identity
-/// down) is logged but doesn't tear the connection down; an RCON send error propagates
-/// so the supervisor reconnects.
+/// their replies surface as unmatched `Reply` frames). Returns whether any kick was sent,
+/// so the caller can arm the liveness watch. A ban-lookup failure (identity down) is
+/// logged but doesn't tear the connection down; an RCON send error propagates so the
+/// supervisor reconnects.
 async fn enforce_bans(
     config: &ServerConfig,
     client: &mut RconClient,
     identity: &IdentityClient,
     steam_ids: &[String],
-) -> Result<(), GameconnError> {
+) -> Result<bool, GameconnError> {
     if steam_ids.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let hits = match identity
         .enforce(config.tenant_id, config.id, steam_ids)
@@ -186,9 +229,10 @@ async fn enforce_bans(
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(server = %config.name, error = %e, "ban enforcement lookup failed; skipping");
-            return Ok(());
+            return Ok(false);
         }
     };
+    let mut kicked = false;
     for hit in hits {
         // Both fields are quoted into the RCON command, so both must be sanitized — a
         // hostile/non-standard server could report a Steam ID with quotes/backslashes.
@@ -197,9 +241,10 @@ async fn enforce_bans(
         // Rust `kick` accepts a Steam ID; kicking each poll keeps a banned player off.
         let cmd = format!("kick \"{steam_id}\" \"{reason}\"");
         client.send_command(&cmd).await?;
+        kicked = true;
         tracing::info!(server = %config.name, steam_id = %steam_id, "kicked banned player");
     }
-    Ok(())
+    Ok(kicked)
 }
 
 /// Strip characters that could break out of (or malform) a quoted RCON argument — quotes,

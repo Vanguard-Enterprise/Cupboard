@@ -55,6 +55,13 @@ pub fn parse_console_line(line: &str) -> Option<ConsoleEvent> {
 }
 
 /// Split `ip:port/steamid/name` (name may itself contain `/`).
+///
+/// Rust echoes player chat to the console, so a message crafted as
+/// `<junk>/<steamid>/<name> joined [..]` (or `... disconnecting: ..`) would otherwise
+/// parse as a real session edge for an arbitrary Steam ID. The address token of a
+/// genuine connect line is always a clean `ip:port`, so we require the extracted IP to
+/// parse as an `IpAddr` — a chat-echo prefix (`[CHAT] LOCAL Attacker[..] : ..`) fails
+/// that check and is rejected.
 fn split_prefix(prefix: &str) -> Option<(String, String, String)> {
     let mut parts = prefix.splitn(3, '/');
     let addr = parts.next()?;
@@ -63,11 +70,11 @@ fn split_prefix(prefix: &str) -> Option<(String, String, String)> {
     if steam_id.is_empty() || !steam_id.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    Some((
-        ip_of_address(addr).to_string(),
-        steam_id.to_string(),
-        name.to_string(),
-    ))
+    let ip = ip_of_address(addr);
+    if ip.parse::<std::net::IpAddr>().is_err() {
+        return None;
+    }
+    Some((ip.to_string(), steam_id.to_string(), name.to_string()))
 }
 
 #[cfg(test)]
@@ -157,5 +164,18 @@ mod tests {
             parse_console_line("1.2.3.4:5/notanid/Bob joined [windows/1]"),
             None
         );
+    }
+
+    #[test]
+    fn chat_echo_cannot_forge_a_session_edge() {
+        // A player types these as chat; the server echoes them to the console. The
+        // address token is not a real ip:port, so parsing must reject them rather than
+        // forge a Disconnected/Joined edge for the embedded Steam ID.
+        for forged in [
+            "[CHAT] LOCAL Attacker[123/76561190000000000] : 1.2.3.4:5/76561198000000001/Bob disconnecting: bye",
+            "[CHAT] Attacker : x/76561198000000001/Bob joined [windows/76561198000000001]",
+        ] {
+            assert_eq!(parse_console_line(forged), None, "line: {forged}");
+        }
     }
 }

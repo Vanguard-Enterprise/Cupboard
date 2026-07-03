@@ -63,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(config.poll_interval_secs),
         Duration::from_secs(config.reconcile_interval_secs),
         Duration::from_secs(config.a2s_interval_secs),
+        config.push_stream_maxlen,
     ));
 
     let ingest_state = IngestState {

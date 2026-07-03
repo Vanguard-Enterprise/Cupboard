@@ -289,9 +289,11 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             edge: SessionEdge::Connected,
             steam_id,
             name,
-            ip,
-            owner_steam_id,
-            eac_id,
+            // Drop an empty IP (same as the roster arm): it would hash to the constant
+            // hmac("") and falsely link every such player as sharing an address.
+            ip: ip.filter(|ip| !ip.is_empty()),
+            owner_steam_id: owner_steam_id.filter(|o| !o.is_empty() && o != "0"),
+            eac_id: eac_id.filter(|e| !e.is_empty()),
             reason: None,
         }),
         PushEvent::PlayerDisconnected {
@@ -312,7 +314,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             reason,
         }),
         PushEvent::Chat {
-            at,
+            at: _, // chat uses the collector receive clock (see below), not the server's
             channel,
             steam_id,
             name,
@@ -320,7 +322,11 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
         } => Translated::Chat(ChatEvent {
             server_id,
             tenant_id,
-            at: clamp(at, now),
+            // Chat uses the collector's receive clock (like the RCON path), NOT the
+            // server's `at`: cross-source dedupe in identity matches on a ±15s window,
+            // and a skewed server clock would otherwise push the two copies apart and
+            // defeat it. Exact send-time isn't needed for a chat log.
+            at: now,
             channel,
             steam_id,
             name,
@@ -369,7 +375,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
                 .collect(),
         }),
         PushEvent::Perf {
-            at,
+            at: _, // perf uses the collector receive clock (see below), not the server's
             fps,
             entities,
             players,
@@ -385,10 +391,15 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             // cumulative cost, drop the tail.
             hooks.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
             hooks.truncate(MAX_HOOK_TIMINGS);
+            // Perf uses the collector's receive clock (like chat), NOT the server's
+            // `at`: the metrics service's stale-reporting rule and dashboard x-axis key
+            // off this, and a server clock lagging within the 10-min skew budget would
+            // otherwise permanently read as "reporting stopped". Samples arrive ~every
+            // 30s, so receive time tracks true sample time closely.
             Translated::Perf(Box::new(PerfEvent {
                 server_id,
                 tenant_id,
-                at: clamp(at, now),
+                at: now,
                 fps,
                 entities,
                 players,

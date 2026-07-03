@@ -207,7 +207,12 @@ pub async fn update_status(
 
 /// Issue (or rotate) the push-ingest token for a server the tenant owns. Returns the
 /// plaintext token exactly once; only its SHA-256 is stored. Returns `None` when the
-/// server isn't visible to this tenant.
+/// server isn't visible to this tenant, and `Err(BadRequest)` for a disabled server.
+///
+/// The Collector's token registry is built from the enabled-server feed, so a token
+/// issued for a disabled server would silently never work. Rather than hand out a dead
+/// token, refuse — the operator enables the server first. (Disabling a server likewise
+/// stops its push ingestion within one reconcile, by design: `enabled` gates ingestion.)
 pub async fn issue_ingest_token(
     app_pool: &PgPool,
     tenant: TenantId,
@@ -219,14 +224,35 @@ pub async fn issue_ingest_token(
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
     let updated = sqlx::query(
         "UPDATE servers SET ingest_token_hash = $2, ingest_token_created_at = now(), \
-         updated_at = now() WHERE id = $1",
+         updated_at = now() WHERE id = $1 AND enabled",
     )
     .bind(id)
     .bind(&hash)
     .execute(&mut *tx)
     .await?;
+    if updated.rows_affected() > 0 {
+        tx.commit().await?;
+        return Ok(Some(token));
+    }
+    // No row updated: either the server doesn't exist (for this tenant) or it's disabled.
+    // Distinguish so the operator gets an actionable message instead of a bare 404.
+    let exists: Option<bool> = sqlx::query_scalar("SELECT enabled FROM servers WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
     tx.commit().await?;
-    Ok((updated.rows_affected() > 0).then_some(token))
+    match exists {
+        Some(false) => Err(AppError::BadRequest(
+            "enable the server before issuing an ingest token (a disabled server can't \
+             ingest, so the token would never work)"
+                .into(),
+        )),
+        Some(true) => {
+            // Raced from enabled→? between UPDATE and SELECT; treat as transient.
+            Err(AppError::Unavailable("could not issue token; retry".into()))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Revoke a server's push-ingest token. Returns whether a row was touched.

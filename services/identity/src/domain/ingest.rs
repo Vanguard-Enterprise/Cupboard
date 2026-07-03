@@ -21,6 +21,23 @@ fn is_player_steam_id(s: &str) -> bool {
     !s.is_empty() && s != "0" && s.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// Upper bound on a reported session length (400 days). Guards the push path, where
+/// `connected_seconds` is attacker-controllable and an absurd value would panic chrono.
+const MAX_CONNECTED_SECS: i64 = 400 * 24 * 60 * 60;
+
+/// Longest text we persist into the global (no-RLS) tables — names and identifier
+/// values. Server-controlled input; the request body cap alone is far too loose.
+const MAX_GLOBAL_TEXT: usize = 128;
+
+/// Truncate to [`MAX_GLOBAL_TEXT`] on a char boundary (never mid-UTF-8).
+fn bound_text(s: &str) -> &str {
+    let mut end = s.len().min(MAX_GLOBAL_TEXT);
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Apply a roster snapshot. See module docs.
 pub async fn ingest_roster(
     pool: &PgPool,
@@ -35,6 +52,12 @@ pub async fn ingest_roster(
     let mut present: Vec<Uuid> = Vec::with_capacity(event.players.len());
 
     for p in &event.players {
+        // Skip bots/NPCs/junk (steam_id "0", empty, or non-digit): the edge/chat/report
+        // paths already gate on this, but a pushed roster reaches here directly and must
+        // not mint phantom players in the shared global graph.
+        if !is_player_steam_id(&p.steam_id) {
+            continue;
+        }
         present.push(ingest_one_player(&mut tx, pepper, tenant, server, p, obs).await?);
     }
 
@@ -76,7 +99,8 @@ async fn ingest_one_player(
     let steam_hash = hmac_sha256(p.steam_id.as_bytes(), pepper).to_vec();
     let player_id = resolve_or_create_player(tx, &p.steam_id, &steam_hash, obs).await?;
 
-    // Name history.
+    // Name history. Bound the name — it's written into the shared global table and is
+    // server-controlled (only the request body cap bounds it upstream).
     if !p.name.is_empty() {
         sqlx::query(
             "INSERT INTO name_history (player_id, name, first_seen_at, last_seen_at) \
@@ -84,17 +108,17 @@ async fn ingest_one_player(
              ON CONFLICT (player_id, name) DO UPDATE SET last_seen_at = $3",
         )
         .bind(player_id)
-        .bind(&p.name)
+        .bind(bound_text(&p.name))
         .bind(obs)
         .execute(&mut **tx)
         .await?;
     }
 
-    // IP signal (linking + the session's stored IP).
-    let ip_hash =
-        p.ip.as_ref()
-            .map(|ip| hmac_sha256(ip.as_bytes(), pepper).to_vec());
-    if let (Some(ip), Some(h)) = (&p.ip, &ip_hash) {
+    // IP signal (linking + the session's stored IP). An empty IP would hash to the
+    // constant hmac("") and falsely link every such player — treat it as absent.
+    let ip = p.ip.as_deref().filter(|ip| !ip.is_empty());
+    let ip_hash = ip.map(|ip| hmac_sha256(ip.as_bytes(), pepper).to_vec());
+    if let (Some(ip), Some(h)) = (ip, &ip_hash) {
         upsert_signal(tx, player_id, "ip", Some(ip), h, obs).await?;
     }
 
@@ -117,7 +141,7 @@ async fn ingest_one_player(
              RETURNING player_id",
         )
         .bind(player_id)
-        .bind(eac)
+        .bind(bound_text(eac))
         .bind(&eac_hash)
         .bind(obs)
         .fetch_one(&mut **tx)
@@ -207,7 +231,7 @@ pub async fn ingest_chat(pool: &PgPool, pepper: &[u8], event: &ChatEvent) -> any
                  ON CONFLICT (player_id, name) DO UPDATE SET last_seen_at = $3",
             )
             .bind(id)
-            .bind(&event.name)
+            .bind(bound_text(&event.name))
             .bind(event.at)
             .execute(&mut *tx)
             .await?;
@@ -287,6 +311,31 @@ pub async fn ingest_report(
     } else {
         None
     };
+
+    // Replay guard: the push path is at-least-once (a mid-batch 503 makes the plugin
+    // re-send the whole batch), and a replayed report is byte-identical — same parties,
+    // same server-clock `reported_at`. Skip an exact match so duplicates don't inflate
+    // the "repeated reports against this player" moderation signal. Two genuinely
+    // distinct reports never collide (different reporter, message, or timestamp).
+    let duplicate: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM player_reports \
+         WHERE tenant_id = $1 AND server_id = $2 AND reported_at = $3 \
+           AND reporter_player_id IS NOT DISTINCT FROM $4 \
+           AND target_player_id IS NOT DISTINCT FROM $5 \
+           AND message = left($6, 2048))",
+    )
+    .bind(event.tenant_id.0)
+    .bind(event.server_id.0)
+    .bind(event.at)
+    .bind(reporter_id)
+    .bind(target_id)
+    .bind(&event.message)
+    .fetch_one(&mut *tx)
+    .await?;
+    if duplicate {
+        tx.commit().await?;
+        return Ok(());
+    }
 
     sqlx::query(
         "INSERT INTO player_reports \
@@ -420,59 +469,44 @@ async fn upsert_session(
     ip_hash: Option<&[u8]>,
     obs: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<()> {
-    let playtime = i32::try_from(p.connected_seconds.max(0)).unwrap_or(i32::MAX);
+    // Clamp reported playtime to a sane ceiling: it's attacker-controllable on the push
+    // path (the collector only clamps negatives), and `obs - Duration::seconds(raw)`
+    // panics chrono for absurd values, which would kill the consumer task. A session
+    // can't realistically exceed the cap.
+    let connected_secs = p.connected_seconds.clamp(0, MAX_CONNECTED_SECS);
+    let playtime = connected_secs as i32; // cap fits in i32
+    let connected_at = obs - chrono::Duration::seconds(connected_secs);
     let name = if p.name.is_empty() {
         None
     } else {
-        Some(p.name.as_str())
+        Some(bound_text(&p.name))
     };
 
-    let open: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM player_sessions \
-         WHERE tenant_id = $1 AND server_id = $2 AND player_id = $3 AND disconnected_at IS NULL",
+    // Atomic open-or-refresh: a partial unique index on open sessions (see migration
+    // 0008) lets ON CONFLICT collapse the old SELECT-then-INSERT, so two consumers
+    // (roster + session edge) observing the same connect concurrently can't both insert.
+    // On conflict we keep the original connected_at and refresh the live columns.
+    sqlx::query(
+        "INSERT INTO player_sessions \
+         (tenant_id, server_id, player_id, connected_at, last_seen_at, ip, ip_hash, name, playtime_secs) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         ON CONFLICT (tenant_id, server_id, player_id) WHERE disconnected_at IS NULL \
+         DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, ip = EXCLUDED.ip, \
+             ip_hash = EXCLUDED.ip_hash, name = EXCLUDED.name, \
+             playtime_secs = EXCLUDED.playtime_secs",
     )
     .bind(tenant)
     .bind(server)
     .bind(player_id)
-    .fetch_optional(&mut **tx)
+    .bind(connected_at)
+    .bind(obs)
+    // Keep the stored IP consistent with ip_hash (both drop the empty sentinel).
+    .bind(p.ip.as_deref().filter(|ip| !ip.is_empty()))
+    .bind(ip_hash)
+    .bind(name)
+    .bind(playtime)
+    .execute(&mut **tx)
     .await?;
-
-    match open {
-        Some(sid) => {
-            sqlx::query(
-                "UPDATE player_sessions \
-                 SET last_seen_at = $2, ip = $3, ip_hash = $4, name = $5, playtime_secs = $6 \
-                 WHERE id = $1",
-            )
-            .bind(sid)
-            .bind(obs)
-            .bind(p.ip.as_deref())
-            .bind(ip_hash)
-            .bind(name)
-            .bind(playtime)
-            .execute(&mut **tx)
-            .await?;
-        }
-        None => {
-            let connected_at = obs - chrono::Duration::seconds(p.connected_seconds.max(0));
-            sqlx::query(
-                "INSERT INTO player_sessions \
-                 (tenant_id, server_id, player_id, connected_at, last_seen_at, ip, ip_hash, name, playtime_secs) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            )
-            .bind(tenant)
-            .bind(server)
-            .bind(player_id)
-            .bind(connected_at)
-            .bind(obs)
-            .bind(p.ip.as_deref())
-            .bind(ip_hash)
-            .bind(name)
-            .bind(playtime)
-            .execute(&mut **tx)
-            .await?;
-        }
-    }
     Ok(())
 }
 
@@ -515,12 +549,21 @@ mod tests {
         }
     }
 
-    // Unique-ish steam ids per test run so the shared global tables don't collide.
+    // Unique-ish, ALL-DIGIT steam ids per test run so the shared global tables don't
+    // collide. Digit-only because roster/edge/chat ingestion now validates SteamID64
+    // shape (rejects non-digits); the `tag` is folded into digits for readable call
+    // sites, and an atomic counter guarantees uniqueness across rapid same-tag calls.
     fn uniq(tag: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let tag_num: u64 = tag.bytes().map(u64::from).sum();
         format!(
-            "7656{}{}",
-            tag,
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            "76561{tag_num}{n}{}",
+            Utc::now()
+                .timestamp_nanos_opt()
+                .unwrap_or_default()
+                .unsigned_abs()
         )
     }
 
@@ -869,6 +912,169 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names, 1);
+    }
+
+    #[tokio::test]
+    async fn absurd_connected_seconds_does_not_panic() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP absurd_connected_seconds_does_not_panic: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"clamp-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam = uniq_digits(70);
+        // A hostile plugin claims a ~3-million-year session; must clamp, not panic.
+        let ev = RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            observed_at: Utc::now(),
+            players: vec![player(
+                &steam,
+                None,
+                Some("203.0.113.1"),
+                100_000_000_000_000,
+            )],
+        };
+        ingest_roster(&pool, pepper, &ev)
+            .await
+            .expect("absurd connected_seconds must clamp, not panic the consumer");
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_sessions WHERE tenant_id=$1 AND disconnected_at IS NULL",
+        )
+        .bind(tenant)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1);
+    }
+
+    #[tokio::test]
+    async fn roster_skips_non_player_steam_ids() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP roster_skips_non_player_steam_ids: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"phantom-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let real = uniq_digits(71);
+        let ev = RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            observed_at: Utc::now(),
+            players: vec![
+                player("0", None, Some("203.0.113.2"), 10), // bot/NPC sentinel
+                player("", None, Some("203.0.113.3"), 10),  // junk
+                player(&real, None, Some("203.0.113.4"), 10),
+            ],
+        };
+        ingest_roster(&pool, pepper, &ev).await.expect("ingest");
+        // Only the real player opened a session; no phantom "0"/empty players created.
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_sessions WHERE tenant_id=$1 AND server_id=$2 \
+             AND disconnected_at IS NULL",
+        )
+        .bind(tenant)
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1, "only the valid steam_id becomes a session");
+        let phantom: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_identifiers WHERE value_hash = $1 OR value_hash = $2",
+        )
+        .bind(hmac_sha256(b"0", pepper).to_vec())
+        .bind(hmac_sha256(b"", pepper).to_vec())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(phantom, 0, "no phantom players for 0/empty steam ids");
+    }
+
+    #[tokio::test]
+    async fn connect_edge_racing_roster_opens_one_session() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP connect_edge_racing_roster_opens_one_session: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"session-race-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam = uniq_digits(72);
+        let at = Utc::now();
+
+        let edge = cupboard_domain::SessionEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at,
+            edge: cupboard_domain::SessionEdge::Connected,
+            steam_id: steam.clone(),
+            name: "Racer".into(),
+            ip: Some("203.0.113.5".into()),
+            owner_steam_id: None,
+            eac_id: None,
+            reason: None,
+        };
+        let roster = RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            observed_at: at,
+            players: vec![player(&steam, None, Some("203.0.113.5"), 5)],
+        };
+        // The two consumers observe the same connect concurrently.
+        let (a, b) = tokio::join!(
+            ingest_session_edge(&pool, pepper, &edge),
+            ingest_roster(&pool, pepper, &roster),
+        );
+        a.expect("edge");
+        b.expect("roster");
+
+        let open: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_sessions WHERE tenant_id=$1 AND server_id=$2 \
+             AND disconnected_at IS NULL",
+        )
+        .bind(tenant)
+        .bind(server)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(open, 1, "exactly one open session despite the race");
+    }
+
+    #[tokio::test]
+    async fn report_replay_is_deduped() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP report_replay_is_deduped: TEST_DATABASE_URL unset");
+            return;
+        };
+        let pepper = b"report-replay-pepper";
+        let tenant = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let reporter = uniq_digits(73);
+        let target = uniq_digits(74);
+        let report = cupboard_domain::ReportEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant),
+            at: Utc::now(),
+            reporter_steam_id: reporter,
+            reporter_name: "R".into(),
+            target_steam_id: target,
+            target_name: "T".into(),
+            subject: "cheating".into(),
+            message: "aimbot".into(),
+            report_type: "cheat".into(),
+        };
+        // Same batch replayed after a mid-batch 503 → byte-identical report twice.
+        ingest_report(&pool, pepper, &report).await.expect("first");
+        ingest_report(&pool, pepper, &report).await.expect("replay");
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM player_reports WHERE tenant_id=$1")
+                .bind(tenant)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1, "a replayed report must not duplicate");
     }
 
     #[tokio::test]

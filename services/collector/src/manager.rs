@@ -53,6 +53,7 @@ impl Running {
 
 /// Reconcile loop; runs until aborted. Also refreshes the push-token registry on every
 /// fetch, so token issue/rotate/revoke propagate within one reconcile interval.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     fleet: FleetClient,
     identity: crate::identity_client::IdentityClient,
@@ -61,6 +62,7 @@ pub async fn run(
     poll_interval: Duration,
     reconcile_interval: Duration,
     a2s_interval: Duration,
+    stream_maxlen: usize,
 ) {
     let mut running: HashMap<Uuid, Running> = HashMap::new();
     let mut ticker = tokio::time::interval(reconcile_interval);
@@ -104,6 +106,7 @@ pub async fn run(
                     fleet.clone(),
                     identity.clone(),
                     poll_interval,
+                    stream_maxlen,
                 ));
                 // u16 range is guaranteed by fleet's CHECK constraint; anything else is a
                 // corrupt row we skip rather than panic on.
