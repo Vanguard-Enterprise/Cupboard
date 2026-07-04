@@ -57,6 +57,13 @@ pub struct SyncSettingsRequest {
     /// outbound sync.
     #[serde(default)]
     pub backfill_existing: bool,
+    /// Import subset gates.
+    #[serde(default)]
+    pub import_servers: Option<bool>,
+    #[serde(default)]
+    pub import_players: Option<bool>,
+    #[serde(default)]
+    pub import_notes: Option<bool>,
 }
 
 /// Update sync settings (inbound toggle, outbound toggle + target list, opt-in
@@ -84,6 +91,9 @@ pub async fn update_sync(
             sync_bans_outbound: req.sync_bans_outbound,
             target_ban_list: req.target_ban_list,
             backfill_existing: req.backfill_existing,
+            import_servers: req.import_servers,
+            import_players: req.import_players,
+            import_notes: req.import_notes,
         },
     )
     .await?;
@@ -158,4 +168,21 @@ pub async fn start_import(
     master_key(&state)?;
     let job = bm::enqueue_import(&state.app_pool, TenantId::from(org), claims.0.sub.0).await?;
     Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// Pause (parks at the next slice boundary), resume, or cancel the live import job.
+pub async fn control_import(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    axum::extract::Path(action): axum::extract::Path<String>,
+) -> Result<Json<bm::ImportJobView>, AppError> {
+    let org = claims.require(Permission::IntegrationsManage)?;
+    let job = bm::control_job(
+        &state.app_pool,
+        TenantId::from(org),
+        claims.0.sub.0,
+        &action,
+    )
+    .await?;
+    Ok(Json(job))
 }

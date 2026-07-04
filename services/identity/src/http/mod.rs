@@ -57,6 +57,10 @@ pub fn router(state: AppState) -> Router {
             "/integrations/bm/sync",
             axum::routing::patch(integrations::update_sync),
         )
+        .route(
+            "/integrations/bm/import/{action}",
+            axum::routing::post(integrations::control_import),
+        )
         // Cluster-internal enforcement lookup for the Collector (token-guarded).
         .route("/internal/enforce", axum::routing::post(internal::enforce))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))

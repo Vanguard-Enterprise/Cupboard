@@ -204,6 +204,52 @@ pub async fn enqueue_import(
     Ok(job)
 }
 
+/// Tenant job controls. `pause` parks the live job at the next slice boundary (the
+/// runner stops picking it up), `resume` re-queues a paused one, `cancel` is
+/// terminal. Guarded transitions: a finished job is never resurrected.
+pub async fn control_job(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    actor: Uuid,
+    action: &str,
+) -> Result<ImportJobView, AppError> {
+    let (from, to): (&[&str], &str) = match action {
+        "pause" => (&["queued", "running"], "paused"),
+        "resume" => (&["paused"], "queued"),
+        "cancel" => (&["queued", "running", "paused"], "cancelled"),
+        _ => return Err(AppError::BadRequest("unknown job action".into())),
+    };
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let job = sqlx::query_as::<_, ImportJobView>(&format!(
+        "UPDATE bm_import_jobs SET status = $3, \
+           finished_at = CASE WHEN $3 = 'cancelled' THEN now() ELSE finished_at END \
+         WHERE tenant_id = $1 AND status = ANY($2) \
+           AND id = (SELECT id FROM bm_import_jobs WHERE tenant_id = $1 \
+                     AND status IN ('queued', 'running', 'paused') \
+                     ORDER BY created_at DESC LIMIT 1) \
+         RETURNING {JOB_VIEW_COLS}"
+    ))
+    .bind(tenant.0)
+    .bind(from)
+    .bind(to)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound(format!("no import job eligible for {action}")))?;
+
+    crate::domain::audit::record_in_tx(
+        &mut tx,
+        Some(tenant.0),
+        Some(actor),
+        &format!("integrations.bm.import.{action}"),
+        Some("bm_import_job"),
+        Some(job.id),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(job)
+}
+
 pub async fn latest_job(
     app_pool: &PgPool,
     tenant: TenantId,
@@ -344,9 +390,12 @@ pub async fn mark_job_running(
     job_id: Uuid,
     claimer: &str,
 ) -> Result<bool, AppError> {
+    // The status guard keeps a racing runner from resurrecting a job the tenant just
+    // paused or cancelled.
     let res = sqlx::query(&format!(
         "UPDATE bm_import_jobs SET status = 'running', \
-         started_at = COALESCE(started_at, now()) WHERE id = $1 AND {}",
+         started_at = COALESCE(started_at, now()) \
+         WHERE id = $1 AND status IN ('queued', 'running') AND {}",
         JOB_CLAIM_FENCE.replace("$CLAIMER", "$2")
     ))
     .bind(job_id)
@@ -363,10 +412,12 @@ pub async fn finish_job(
     error: Option<&str>,
     claimer: &str,
 ) -> Result<bool, AppError> {
+    // The status guard keeps a completing runner from overwriting a tenant's
+    // pause/cancel that landed during the final pages.
     let res = sqlx::query(&format!(
         "UPDATE bm_import_jobs SET status = $2, error = $3, finished_at = now(), \
          phase = CASE WHEN $2 = 'completed' THEN 'done' ELSE phase END \
-         WHERE id = $1 AND {}",
+         WHERE id = $1 AND status IN ('queued', 'running') AND {}",
         JOB_CLAIM_FENCE.replace("$CLAIMER", "$4")
     ))
     .bind(job_id)
@@ -1233,6 +1284,10 @@ pub struct SyncChanges {
     /// Opt-in (decision O, default off): queue pushes for existing active
     /// Cupboard-origin bans when enabling outbound.
     pub backfill_existing: bool,
+    /// Import subset gates (default on when absent from settings).
+    pub import_servers: Option<bool>,
+    pub import_players: Option<bool>,
+    pub import_notes: Option<bool>,
 }
 
 /// Apply sync settings. Outbound requires a valid writable target list (owned, or
@@ -1288,6 +1343,15 @@ pub async fn update_sync_settings(
             _ => {}
         }
         settings["target_ban_list"] = serde_json::json!(list);
+    }
+    for (key, value) in [
+        ("import_servers", changes.import_servers),
+        ("import_players", changes.import_players),
+        ("import_notes", changes.import_notes),
+    ] {
+        if let Some(v) = value {
+            settings[key] = serde_json::json!(v);
+        }
     }
 
     let mut sync_enabled = changes.sync_enabled.unwrap_or(cur_enabled);
@@ -1940,6 +2004,66 @@ mod tests {
         .unwrap();
         assert_eq!(hits.len(), 1, "imported ban must enforce");
         assert_eq!(hits[0].reason.as_deref(), Some("toxicity"));
+    }
+
+    #[tokio::test]
+    async fn job_controls_transition_and_guard() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP job_controls_transition_and_guard: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let view = connect_tenant(&pool, tenant).await;
+        sqlx::query(
+            "UPDATE bm_connections SET claimed_by = 'ctrl-a', heartbeat_at = now() WHERE id = $1",
+        )
+        .bind(view.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let actor = Uuid::new_v4();
+        let job = enqueue_import(&pool, tenant, actor).await.expect("enqueue");
+
+        // Pause parks the job: not picked up, not resurrectable by the runner.
+        let paused = control_job(&pool, tenant, actor, "pause").await.unwrap();
+        assert_eq!(paused.status, "paused");
+        assert!(next_live_job(&pool, view.id).await.unwrap().is_none());
+        assert!(
+            !mark_job_running(&pool, job.id, "ctrl-a").await.unwrap(),
+            "a runner must not resurrect a paused job"
+        );
+
+        // Resume re-queues; cancel is terminal and wins over a completing runner.
+        assert_eq!(
+            control_job(&pool, tenant, actor, "resume")
+                .await
+                .unwrap()
+                .status,
+            "queued"
+        );
+        assert_eq!(
+            control_job(&pool, tenant, actor, "cancel")
+                .await
+                .unwrap()
+                .status,
+            "cancelled"
+        );
+        assert!(
+            control_job(&pool, tenant, actor, "resume").await.is_err(),
+            "cancel is terminal"
+        );
+        assert!(
+            !finish_job(&pool, job.id, "completed", None, "ctrl-a")
+                .await
+                .unwrap(),
+            "a completing runner must not overwrite a cancel"
+        );
+        let status: String = sqlx::query_scalar("SELECT status FROM bm_import_jobs WHERE id = $1")
+            .bind(job.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "cancelled");
     }
 
     #[tokio::test]

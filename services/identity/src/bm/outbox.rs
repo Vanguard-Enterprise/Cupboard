@@ -1029,8 +1029,8 @@ mod e2e_tests {
             bmdom::SyncChanges {
                 sync_enabled: Some(true),
                 sync_bans_outbound: Some(true),
-                target_ban_list: None,
                 backfill_existing: true,
+                ..Default::default()
             },
         )
         .await
