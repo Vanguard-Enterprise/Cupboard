@@ -308,6 +308,53 @@ pub async fn update_info(owner_pool: &PgPool, id: Uuid, info: &InfoUpdate) -> Re
     Ok(())
 }
 
+/// Fields for importing a server discovered on an external source (BattleMetrics).
+/// Upserted by `(tenant_id, external_id)` so re-running an import is idempotent.
+pub struct ImportServer {
+    pub tenant_id: Uuid,
+    pub external_id: String,
+    pub name: String,
+    pub game: String,
+    pub rcon_host: String,
+    pub rcon_port: i32,
+    pub query_port: Option<i32>,
+}
+
+/// Upsert an imported server by `(tenant_id, external_id)`. Cross-tenant (owner pool),
+/// same trust boundary as the rest of `/internal`.
+///
+/// First import creates a disabled row with no RCON credentials (empty ciphertext/dek):
+/// the tenant fills in the real RCON password in the servers UI before enabling, and the
+/// Collector never dials a disabled server. Re-import refreshes only the
+/// BattleMetrics-sourced fields (name/game/rcon_host/query_port): `enabled`, the RCON
+/// credentials, and `origin` are left alone since the tenant may have since configured
+/// them.
+pub async fn upsert_imported(owner_pool: &PgPool, input: ImportServer) -> Result<Uuid, AppError> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO servers \
+         (tenant_id, external_id, name, game, rcon_host, rcon_port, query_port, origin, \
+          enabled, rcon_password_enc, rcon_password_dek) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'bm', false, ''::bytea, ''::bytea) \
+         ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL DO UPDATE SET \
+         name = EXCLUDED.name, \
+         game = EXCLUDED.game, \
+         rcon_host = EXCLUDED.rcon_host, \
+         query_port = EXCLUDED.query_port, \
+         updated_at = now() \
+         RETURNING id",
+    )
+    .bind(input.tenant_id)
+    .bind(&input.external_id)
+    .bind(&input.name)
+    .bind(&input.game)
+    .bind(&input.rcon_host)
+    .bind(input.rcon_port)
+    .bind(input.query_port)
+    .fetch_one(owner_pool)
+    .await?;
+    Ok(id)
+}
+
 /// A decrypted connection config for the Collector. Carries the plaintext RCON password —
 /// only ever served over the cluster-internal, token-guarded `/internal` endpoint.
 #[derive(Debug, serde::Serialize)]
