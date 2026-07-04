@@ -3,6 +3,7 @@ import { can, Permission } from "@/lib/permissions";
 import { AutoRefresh } from "./auto-refresh";
 import { ConnectForm } from "./connect-form";
 import { ImportButton } from "./import-button";
+import { OutboundSyncForm } from "./outbound-sync-form";
 import { SyncToggle } from "./sync-toggle";
 
 type BmConnection = {
@@ -52,12 +53,20 @@ type BmBanList = {
   import_enabled: boolean;
 };
 
+type BmOutbox = {
+  pending: number;
+  needs_verify: number;
+  failed: number;
+  abandoned: number;
+};
+
 type BmStatus = {
   configured: boolean;
   connection: BmConnection | null;
   latest_job: BmImportJob | null;
   ban_lists: BmBanList[];
   conflicts: BmConflict[];
+  outbox: BmOutbox;
 };
 
 async function fetchStatus(): Promise<BmStatus | "error"> {
@@ -118,6 +127,13 @@ function conflictSummary(c: BmConflict): string {
   return typeof reason === "string" && reason ? reason : "-";
 }
 
+// `settings` is an opaque jsonb blob; only pull out the one key the page needs.
+function targetBanList(settings: unknown): string | null {
+  if (typeof settings !== "object" || settings === null) return null;
+  const value = (settings as Record<string, unknown>).target_ban_list;
+  return typeof value === "string" ? value : null;
+}
+
 export default async function BattlemetricsPage() {
   const session = await getSession();
   if (!session) return null;
@@ -134,6 +150,10 @@ export default async function BattlemetricsPage() {
   const latestJob = status?.latest_job ?? null;
   const banLists = status?.ban_lists ?? [];
   const conflicts = status?.conflicts ?? [];
+  const writableBanLists = banLists.filter((l) => !l.subscribed || l.perm_create);
+  const outbox = status?.outbox ?? { pending: 0, needs_verify: 0, failed: 0, abandoned: 0 };
+  const outboxVisible =
+    outbox.pending > 0 || outbox.needs_verify > 0 || outbox.failed > 0 || outbox.abandoned > 0;
   const jobActive = latestJob?.status === "queued" || latestJob?.status === "running";
   const syncOnly = !jobActive && !loadFailed && !!connection?.sync_enabled;
   const phaseCountEntries = Object.entries(latestJob?.phase_counts ?? {});
@@ -227,6 +247,31 @@ export default async function BattlemetricsPage() {
               <p className="text-sm text-red-400">{connection.sync_error}</p>
             )}
           </div>
+        )}
+
+        <div>
+          <h3 className="text-xs font-medium text-neutral-400">Outbound</h3>
+          <div className="mt-2">
+            <OutboundSyncForm
+              enabled={!!connection?.sync_bans_outbound}
+              targetBanList={targetBanList(connection?.settings)}
+              options={writableBanLists}
+              disabled={!connection}
+            />
+          </div>
+        </div>
+
+        {outboxVisible && (
+          <p className="text-sm text-neutral-400">
+            Push queue: {outbox.pending} pending, {outbox.needs_verify} awaiting verification,{" "}
+            <span className={outbox.failed > 0 ? "text-red-400" : undefined}>
+              {outbox.failed} failed
+            </span>
+            ,{" "}
+            <span className={outbox.abandoned > 0 ? "text-yellow-400" : undefined}>
+              {outbox.abandoned} abandoned
+            </span>
+          </p>
         )}
       </section>
 

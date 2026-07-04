@@ -303,6 +303,35 @@ export async function toggleBmSyncAction(
   return { ok: true };
 }
 
+export type BmOutboundFormState = { error?: string; ok?: boolean; backfilled?: number };
+
+/** Toggle outbound BattleMetrics sync. Enabling also sets the target ban list and,
+ * if requested, queues a one-time backfill of existing active bans; disabling sends
+ * only `sync_bans_outbound: false` so it never touches the stored target list. */
+export async function updateBmOutboundAction(
+  _prev: BmOutboundFormState,
+  form: FormData,
+): Promise<BmOutboundFormState> {
+  const enabling = form.get("sync_bans_outbound") === "true";
+  const body: Record<string, unknown> = { sync_bans_outbound: enabling };
+  if (enabling) {
+    const targetBanList = form.get("target_ban_list");
+    if (typeof targetBanList === "string" && targetBanList) {
+      body.target_ban_list = targetBanList;
+    }
+    body.backfill_existing = form.get("backfill_existing") === "on";
+  }
+  const res = await apiFetch("/integrations/bm/sync", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const data = await res.json();
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true, backfilled: data.backfilled };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;
