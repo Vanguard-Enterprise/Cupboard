@@ -40,6 +40,11 @@ pub enum BmError {
     Transport(String),
     #[error("could not decode BattleMetrics response: {0}")]
     Decode(String),
+    /// A mutation may or may not have been applied (timeout after send, or a 5xx
+    /// after BM received the request). BM has no idempotency keys, so the caller must
+    /// existence-check before re-issuing (outbox `needs_verify`).
+    #[error("BattleMetrics mutation outcome unknown: {0}")]
+    AmbiguousMutation(String),
 }
 
 impl BmError {
@@ -106,6 +111,15 @@ impl BmClient {
     pub fn bans_first_page(&self, ban_list_id: &str) -> String {
         self.url(&format!(
             "/bans?filter[banList]={ban_list_id}&include=playerIdentifiers&page[size]={PAGE_SIZE}&sort=-timestamp"
+        ))
+    }
+
+    /// Bans page filtered to one list + a search term: the outbox's existence check
+    /// before re-issuing an ambiguous create. v1 searches steam ids (digits), so the
+    /// term needs no URL encoding.
+    pub fn bans_search_page(&self, ban_list_id: &str, search: &str) -> String {
+        self.url(&format!(
+            "/bans?filter[banList]={ban_list_id}&filter[search]={search}&include=playerIdentifiers&page[size]={PAGE_SIZE}&sort=-timestamp"
         ))
     }
 
@@ -202,6 +216,188 @@ impl BmClient {
     }
 }
 
+/// Input for `POST /bans`. Identifiers are (BM type, value) pairs, e.g.
+/// `("steamID", "7656...")`; they are sent as manual entries.
+pub struct NewBmBan<'a> {
+    pub org_id: &'a str,
+    pub ban_list_id: &'a str,
+    pub reason: Option<&'a str>,
+    pub note: Option<&'a str>,
+    pub expires: Option<chrono::DateTime<chrono::Utc>>,
+    pub identifiers: &'a [(String, String)],
+    pub org_wide: bool,
+}
+
+impl NewBmBan<'_> {
+    fn body(&self) -> serde_json::Value {
+        serde_json::json!({
+            "data": {
+                "type": "ban",
+                "attributes": {
+                    "reason": self.reason,
+                    "note": self.note,
+                    "expires": self.expires.map(|e| {
+                        e.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    }),
+                    "identifiers": self.identifiers.iter().map(|(kind, value)| {
+                        serde_json::json!({
+                            "type": kind,
+                            "identifier": value,
+                            "manual": true,
+                        })
+                    }).collect::<Vec<_>>(),
+                    "orgWide": self.org_wide,
+                    "autoAddEnabled": false,
+                },
+                "relationships": {
+                    "organization": {
+                        "data": { "type": "organization", "id": self.org_id }
+                    },
+                    "banList": {
+                        "data": { "type": "banList", "id": self.ban_list_id }
+                    },
+                },
+            }
+        })
+    }
+}
+
+/// Outcome of a delete-shaped mutation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeleteOutcome {
+    Deleted,
+    /// 404: already gone on BM (convergent with our intent).
+    AlreadyGone,
+}
+
+impl BmClient {
+    /// `POST /bans`. Returns the created resource (its id is the sync-map key and the
+    /// echo guard's input). A response we can't decode counts as ambiguous: the ban
+    /// exists, only our read of it failed.
+    pub async fn create_ban(
+        &self,
+        ban: &NewBmBan<'_>,
+    ) -> Result<crate::types::Resource<crate::types::BanAttrs>, BmError> {
+        let value = self
+            .send_mutation(reqwest::Method::POST, &self.url("/bans"), Some(ban.body()))
+            .await?;
+        let doc: crate::types::OneDoc<crate::types::BanAttrs> = serde_json::from_value(value)
+            .map_err(|e| BmError::AmbiguousMutation(format!("created but undecodable: {e}")))?;
+        Ok(doc.data)
+    }
+
+    /// `DELETE /bans/{id}` (BM's unban). 404 is success for our purposes.
+    pub async fn delete_ban(&self, ban_id: &str) -> Result<DeleteOutcome, BmError> {
+        let url = self.url(&format!("/bans/{ban_id}"));
+        match self
+            .send_mutation(reqwest::Method::DELETE, &url, None)
+            .await
+        {
+            Ok(_) => Ok(DeleteOutcome::Deleted),
+            Err(BmError::Status(404, _)) => Ok(DeleteOutcome::AlreadyGone),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `PATCH /bans/{id}` to expire now: the fallback unban when the token lacks
+    /// `ban:delete`. Returns the expiry it sent (millisecond-truncated, matching the
+    /// canonical hash normalization) so the caller can refresh its echo-guard hash.
+    pub async fn expire_ban_now(
+        &self,
+        ban_id: &str,
+    ) -> Result<chrono::DateTime<chrono::Utc>, BmError> {
+        let url = self.url(&format!("/bans/{ban_id}"));
+        let sent = chrono::Utc::now();
+        let formatted = sent.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let body = serde_json::json!({
+            "data": {
+                "type": "ban",
+                "id": ban_id,
+                "attributes": { "expires": formatted },
+            }
+        });
+        self.send_mutation(reqwest::Method::PATCH, &url, Some(body))
+            .await?;
+        // Round-trip through the wire format so the returned instant hashes
+        // identically to what BM stored.
+        Ok(chrono::DateTime::parse_from_rfc3339(&formatted)
+            .expect("formatted timestamp parses")
+            .with_timezone(&chrono::Utc))
+    }
+
+    /// Mutation discipline (decision B): retry only when the request provably never
+    /// reached BM (connect failures) or on 429; anything sent-but-unanswered or
+    /// answered 5xx is ambiguous and surfaces as [`BmError::AmbiguousMutation`].
+    async fn send_mutation(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BmError> {
+        let mut attempt = 0u32;
+        loop {
+            self.limiter.acquire().await;
+            let mut req = self
+                .http
+                .request(method.clone(), url)
+                .header("Accept", "application/json")
+                .bearer_auth(&self.token);
+            if let Some(b) = &body {
+                req = req.json(b);
+            }
+            let retry_wait = match req.send().await {
+                Err(e) if e.is_connect() => {
+                    // Never reached BM; safe to retry.
+                    if attempt + 1 >= MAX_GET_ATTEMPTS {
+                        return Err(BmError::Transport(e.to_string()));
+                    }
+                    None
+                }
+                Err(e) => return Err(BmError::AmbiguousMutation(e.to_string())),
+                Ok(res) => {
+                    let status = res.status();
+                    if status.is_success() {
+                        let text = res.text().await.unwrap_or_default();
+                        return Ok(if text.trim().is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)
+                        });
+                    }
+                    match status.as_u16() {
+                        401 => return Err(BmError::Unauthorized),
+                        403 => return Err(BmError::Forbidden(body_snippet(res).await)),
+                        429 => {
+                            if attempt + 1 >= MAX_GET_ATTEMPTS {
+                                return Err(BmError::RateLimited);
+                            }
+                            retry_after(&res)
+                        }
+                        // BM received the request; a 5xx says nothing about whether
+                        // it applied.
+                        500..=599 => {
+                            return Err(BmError::AmbiguousMutation(format!(
+                                "HTTP {status}: {}",
+                                body_snippet(res).await
+                            )))
+                        }
+                        code => return Err(BmError::Status(code, body_snippet(res).await)),
+                    }
+                }
+            };
+            attempt += 1;
+            let wait = retry_wait.unwrap_or_else(|| backoff(attempt));
+            tracing::debug!(
+                url,
+                attempt,
+                wait_ms = wait.as_millis() as u64,
+                "retrying BattleMetrics mutation"
+            );
+            tokio::time::sleep(wait).await;
+        }
+    }
+}
+
 fn retry_after(res: &reqwest::Response) -> Option<Duration> {
     let secs: u64 = res
         .headers()
@@ -239,6 +435,42 @@ mod tests {
     fn base_url_is_normalized_and_joined() {
         let c = BmClient::new("https://stub.example/", "t");
         assert_eq!(c.url("/bans?x=1"), "https://stub.example/bans?x=1");
+    }
+
+    #[test]
+    fn create_ban_body_shape() {
+        use chrono::TimeZone as _;
+        let identifiers = vec![("steamID".to_string(), "76561198000000001".to_string())];
+        let ban = NewBmBan {
+            org_id: "42",
+            ban_list_id: "list-1",
+            reason: Some("cheating"),
+            note: None,
+            expires: Some(chrono::Utc.with_ymd_and_hms(2027, 1, 2, 3, 4, 5).unwrap()),
+            identifiers: &identifiers,
+            org_wide: true,
+        };
+        let body = ban.body();
+        assert_eq!(body["data"]["type"], "ban");
+        assert_eq!(body["data"]["attributes"]["reason"], "cheating");
+        assert_eq!(
+            body["data"]["attributes"]["expires"],
+            "2027-01-02T03:04:05.000Z"
+        );
+        assert_eq!(
+            body["data"]["attributes"]["identifiers"][0]["type"],
+            "steamID"
+        );
+        assert_eq!(body["data"]["attributes"]["identifiers"][0]["manual"], true);
+        assert_eq!(body["data"]["attributes"]["orgWide"], true);
+        assert_eq!(
+            body["data"]["relationships"]["banList"]["data"]["id"],
+            "list-1"
+        );
+        assert_eq!(
+            body["data"]["relationships"]["organization"]["data"]["id"],
+            "42"
+        );
     }
 
     #[test]

@@ -86,14 +86,29 @@ impl From<sqlx::Error> for SyncError {
     }
 }
 
+/// A completed scan swept; an aborted one must record nothing (a partial scan is not
+/// a scan).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ScanOutcome {
+    Completed,
+    /// Sync was toggled off (or the connection vanished) mid-scan: stopped early,
+    /// sweep skipped, not an error.
+    Aborted,
+}
+
 /// One tail tick. Newest-first per list; a page that inserted/updated nothing means
-/// mapped territory was reached. (A page consisting entirely of unmappable bans also
-/// stops the walk early; the re-scan covers anything below it.)
+/// mapped territory was reached. `deep` ignores that stop condition and walks every
+/// page: the runner requests it after a failed tick, because a committed page 1 would
+/// otherwise hide a stranded backlog below it until the next re-scan. (A page
+/// consisting entirely of unmappable bans also stops a shallow walk early; the
+/// re-scan covers anything below it.)
 pub(crate) async fn tail_poll(
     pool: &sqlx::PgPool,
     client: &BmClient,
     conn: &BmConnection,
     pepper: &[u8],
+    claimer: &str,
+    deep: bool,
 ) -> Result<(), SyncError> {
     let lists = bm::import_enabled_list_ids_pool(pool, conn.tenant_id).await?;
     for list_id in &lists {
@@ -104,6 +119,11 @@ pub(crate) async fn tail_poll(
             let (page, _skipped) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
 
             let mut tx = pool.begin().await?;
+            // Fenced like the import path's per-page save: a stale runner must
+            // roll its page back, not race the new lease holder's writes.
+            if !bm::claim_held_in_tx(&mut tx, conn.id, claimer).await? {
+                return Err(SyncError::LostClaim);
+            }
             let outcome = bm::apply_ban_page(&mut tx, conn.tenant_id, pepper, &page).await?;
             tx.commit().await?;
             if outcome.inserted + outcome.updated > 0 {
@@ -112,7 +132,7 @@ pub(crate) async fn tail_poll(
                     conflicts = outcome.conflicts, "tail poll applied changes");
             }
             match doc.links.next {
-                Some(next) if outcome.inserted + outcome.updated > 0 => url = next,
+                Some(next) if deep || outcome.inserted + outcome.updated > 0 => url = next,
                 _ => break,
             }
         }
@@ -121,14 +141,17 @@ pub(crate) async fn tail_poll(
 }
 
 /// One full re-scan: every enabled list walked completely (edits apply by hash diff),
-/// then active bm-origin bans absent from the scan are revoked locally.
+/// then active bm-origin bans absent from the scan are revoked locally. The sweep is
+/// the destructive half, so it only runs when the walk COMPLETED, the tenant still
+/// has sync enabled, and this runner still holds the lease.
 pub(crate) async fn full_rescan(
     pool: &sqlx::PgPool,
     client: &BmClient,
     conn: &BmConnection,
     pepper: &[u8],
+    claimer: &str,
     lost_claim: &AtomicBool,
-) -> Result<(), SyncError> {
+) -> Result<ScanOutcome, SyncError> {
     // DB clock, not app clock: the sweep compares against server-side `bm_seen_at`
     // stamps, so the watermark must come from the same clock.
     let scan_start: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
@@ -143,12 +166,29 @@ pub(crate) async fn full_rescan(
             if lost_claim.load(Ordering::Relaxed) {
                 return Err(SyncError::LostClaim);
             }
+            // Disabling sync must stop an in-flight scan: the toggle is the tenant's
+            // emergency brake, and the sweep below is the part that bites.
+            match bm::fresh_connection(pool, conn.id).await? {
+                Some(cur) if cur.sync_enabled => {}
+                _ => return Ok(ScanOutcome::Aborted),
+            }
+
             let doc = client.list_page::<BanAttrs>(&url).await?;
             let ids_map = included_identifier_map(&doc.included);
-            let (page, _skipped) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
+            let (page, skipped) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
 
             let mut tx = pool.begin().await?;
+            if !bm::claim_held_in_tx(&mut tx, conn.id, claimer).await? {
+                return Err(SyncError::LostClaim);
+            }
             bm::apply_ban_page(&mut tx, conn.tenant_id, pepper, &page).await?;
+            // Every id BM returned counts as seen, INCLUDING unmappable ones
+            // (skipped rows): a ban BM still serves must never be swept because one
+            // fetch of it failed to map.
+            if skipped > 0 {
+                let all_ids: Vec<String> = doc.data.iter().map(|r| r.id.clone()).collect();
+                bm::touch_seen_external_ids(&mut tx, conn.tenant_id, &all_ids).await?;
+            }
             tx.commit().await?;
 
             match doc.links.next {
@@ -159,7 +199,14 @@ pub(crate) async fn full_rescan(
     }
 
     // Every list walked to the end: anything unseen no longer exists on BM.
+    match bm::fresh_connection(pool, conn.id).await? {
+        Some(cur) if cur.sync_enabled => {}
+        _ => return Ok(ScanOutcome::Aborted),
+    }
     let mut tx = pool.begin().await?;
+    if !bm::claim_held_in_tx(&mut tx, conn.id, claimer).await? {
+        return Err(SyncError::LostClaim);
+    }
     let revoked =
         bm::revoke_bans_absent_from_scan(&mut tx, conn.tenant_id, scan_start, &lists).await?;
     tx.commit().await?;
@@ -167,7 +214,7 @@ pub(crate) async fn full_rescan(
         tracing::info!(tenant = %conn.tenant_id, count = revoked.len(),
             "re-scan revoked bans removed on BattleMetrics");
     }
-    Ok(())
+    Ok(ScanOutcome::Completed)
 }
 
 #[cfg(test)]
@@ -188,6 +235,8 @@ mod e2e_tests {
 
     const TOKEN: &str = "stub-token";
     const PEPPER: &[u8] = b"bm-sync-pepper";
+    /// Tests claim as this runner so the per-page lease fences pass.
+    const CLAIMER: &str = "sync-e2e-runner";
 
     async fn setup() -> Option<sqlx::PgPool> {
         let url = std::env::var("TEST_DATABASE_URL").ok()?;
@@ -228,6 +277,17 @@ mod e2e_tests {
         .execute(pool)
         .await
         .expect("list");
+        // Enable sync + claim in one statement: the scan's abort check reads
+        // sync_enabled, its page fences read claimed_by.
+        sqlx::query(
+            "UPDATE bm_connections SET sync_enabled = true, claimed_by = $2, \
+             heartbeat_at = now() WHERE id = $1",
+        )
+        .bind(view.id)
+        .bind(CLAIMER)
+        .execute(pool)
+        .await
+        .expect("claim");
         bmdom::fresh_connection(pool, view.id)
             .await
             .expect("fresh")
@@ -282,10 +342,17 @@ mod e2e_tests {
         let baseline: Vec<StubBan> = (0..30).map(|i| stub_ban(i, "cheating")).collect();
         let stub_a = StubBm::start(stub_with(baseline.clone())).await;
         let client_a = BmClient::new(stub_a.base_url(), TOKEN);
-        full_rescan(&pool, &client_a, &conn, PEPPER, &AtomicBool::new(false))
-            .await
-            .map_err(|e| e.message())
-            .expect("baseline scan");
+        full_rescan(
+            &pool,
+            &client_a,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("baseline scan");
 
         // BM gains one new ban (newest timestamp so it leads the -timestamp order).
         let mut with_new = baseline.clone();
@@ -298,7 +365,7 @@ mod e2e_tests {
         );
         let stub_b = StubBm::start(stub_with(with_new)).await;
         let client_b = BmClient::new(stub_b.base_url(), TOKEN);
-        tail_poll(&pool, &client_b, &conn, PEPPER)
+        tail_poll(&pool, &client_b, &conn, PEPPER, CLAIMER, false)
             .await
             .map_err(|e| e.message())
             .expect("tail");
@@ -327,10 +394,17 @@ mod e2e_tests {
         let baseline: Vec<StubBan> = (0..30).map(|i| stub_ban(i, "cheating")).collect();
         let stub_a = StubBm::start(stub_with(baseline)).await;
         let client_a = BmClient::new(stub_a.base_url(), TOKEN);
-        full_rescan(&pool, &client_a, &conn, PEPPER, &AtomicBool::new(false))
-            .await
-            .map_err(|e| e.message())
-            .expect("baseline scan");
+        full_rescan(
+            &pool,
+            &client_a,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("baseline scan");
 
         // BM-side changes: ban-5 edited, ban-7 deleted.
         let changed: Vec<StubBan> = (0..30)
@@ -339,10 +413,17 @@ mod e2e_tests {
             .collect();
         let stub_b = StubBm::start(stub_with(changed)).await;
         let client_b = BmClient::new(stub_b.base_url(), TOKEN);
-        full_rescan(&pool, &client_b, &conn, PEPPER, &AtomicBool::new(false))
-            .await
-            .map_err(|e| e.message())
-            .expect("second scan");
+        full_rescan(
+            &pool,
+            &client_b,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("second scan");
 
         let edited = ban_state(&pool, tenant, "7656119800000005").await.unwrap();
         assert_eq!(
@@ -355,6 +436,114 @@ mod e2e_tests {
         assert_eq!(deleted.2.as_deref(), Some("removed in BattleMetrics"));
         let untouched = ban_state(&pool, tenant, "7656119800000009").await.unwrap();
         assert_eq!(untouched.0, "active", "present bans stay active");
+    }
+
+    #[tokio::test]
+    async fn unmappable_page_rows_survive_the_sweep() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP unmappable_page_rows_survive_the_sweep: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let conn = seed_connection(&pool, tenant).await;
+
+        // Baseline: the ban imports normally.
+        let stub_a = StubBm::start(stub_with(vec![stub_ban(0, "cheating")])).await;
+        let client_a = BmClient::new(stub_a.base_url(), TOKEN);
+        full_rescan(
+            &pool,
+            &client_a,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("baseline scan");
+        assert!(ban_state(&pool, tenant, "7656119800000000").await.is_some());
+
+        // BM still serves the ban, but this fetch of it is unmappable (empty
+        // identifiers): it must count as seen, not as deleted.
+        let broken = StubBan::new(
+            "l1",
+            "ban-0",
+            "uid00000",
+            "2026-01-01T00:00:00Z",
+            "cheating",
+        )
+        .identifiers(serde_json::json!([]));
+        let stub_b = StubBm::start(stub_with(vec![broken])).await;
+        let client_b = BmClient::new(stub_b.base_url(), TOKEN);
+        let outcome = full_rescan(
+            &pool,
+            &client_b,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("second scan");
+        assert_eq!(outcome, ScanOutcome::Completed);
+
+        let state = ban_state(&pool, tenant, "7656119800000000").await.unwrap();
+        assert_eq!(
+            state.0, "active",
+            "a ban BM still serves must never be swept because one fetch was unmappable"
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_sync_aborts_the_scan_without_sweeping() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP disabled_sync_aborts_the_scan_without_sweeping: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let conn = seed_connection(&pool, tenant).await;
+
+        let stub_a = StubBm::start(stub_with(vec![stub_ban(0, "cheating")])).await;
+        let client_a = BmClient::new(stub_a.base_url(), TOKEN);
+        full_rescan(
+            &pool,
+            &client_a,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("baseline scan");
+
+        // The ban is gone on BM, but the tenant hit the off switch: the scan must
+        // abort without running the destructive sweep.
+        sqlx::query("UPDATE bm_connections SET sync_enabled = false WHERE id = $1")
+            .bind(conn.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let stub_b = StubBm::start(stub_with(Vec::new())).await;
+        let client_b = BmClient::new(stub_b.base_url(), TOKEN);
+        let outcome = full_rescan(
+            &pool,
+            &client_b,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("aborted scan");
+        assert_eq!(outcome, ScanOutcome::Aborted);
+
+        let state = ban_state(&pool, tenant, "7656119800000000").await.unwrap();
+        assert_eq!(state.0, "active", "an aborted scan must not sweep");
     }
 
     #[tokio::test]
@@ -395,10 +584,17 @@ mod e2e_tests {
         // Scan l1 (empty on BM): the sweep runs but is scoped to l1.
         let stub = StubBm::start(stub_with(Vec::new())).await;
         let client = BmClient::new(stub.base_url(), TOKEN);
-        full_rescan(&pool, &client, &conn, PEPPER, &AtomicBool::new(false))
-            .await
-            .map_err(|e| e.message())
-            .expect("scan");
+        full_rescan(
+            &pool,
+            &client,
+            &conn,
+            PEPPER,
+            CLAIMER,
+            &AtomicBool::new(false),
+        )
+        .await
+        .map_err(|e| e.message())
+        .expect("scan");
 
         let l2_state = ban_state(&pool, tenant, "76561198012121212").await.unwrap();
         assert_eq!(

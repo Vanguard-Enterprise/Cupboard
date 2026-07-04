@@ -392,6 +392,7 @@ mod e2e_tests {
             token_dek: vec![0],
             settings: serde_json::json!({}),
             sync_enabled: false,
+            sync_bans_outbound: false,
         };
         (conn, job)
     }

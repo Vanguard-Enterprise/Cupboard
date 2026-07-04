@@ -19,6 +19,6 @@ mod limiter;
 pub mod stub;
 pub mod types;
 
-pub use client::{BmClient, BmError, DEFAULT_BASE, PAGE_SIZE};
+pub use client::{BmClient, BmError, DeleteOutcome, NewBmBan, DEFAULT_BASE, PAGE_SIZE};
 pub use hash::ban_content_hash;
 pub use limiter::RateLimiter;

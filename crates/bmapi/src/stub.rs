@@ -8,14 +8,14 @@
 //!
 //! Two knobs beyond static data: a FIFO of one-shot `Fault`s (each consumed by the next
 //! request, ahead of normal handling) for exercising the retry/backoff paths, and the
-//! request log. Only reads are wired now; the recorder already keys on method so the
-//! later mutation PR (POST/PATCH/DELETE with `needs_verify`) can register verbs against
-//! the same `intercept`/`record` machinery.
+//! request log. Reads and mutations (`POST`/`PATCH`/`DELETE /bans`) go through the same
+//! `intercept`/`record` machinery, so a queued fault or a bad token short-circuits
+//! either kind of request identically.
 
-use axum::extract::{OriginalUri, State};
+use axum::extract::{OriginalUri, Path, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, patch};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -64,6 +64,8 @@ pub struct StubBan {
     /// `None` = permanent.
     pub expires: Option<String>,
     pub identifiers: Value,
+    /// Echoed back as `attributes.orgWide` on GET and mutation responses alike.
+    pub org_wide: bool,
     /// Player-identifier resources emitted under `included` when `include=playerIdentifiers`
     /// is requested: `(resource id, type, identifier value)`.
     pub included_identifiers: Vec<(String, String, String)>,
@@ -86,6 +88,7 @@ impl StubBan {
             note: String::new(),
             expires: None,
             identifiers: json!([]),
+            org_wide: false,
             included_identifiers: Vec::new(),
         }
     }
@@ -103,6 +106,11 @@ impl StubBan {
     /// Raw `identifiers` array (numeric refs, manual `{type,identifier}` objects, or both).
     pub fn identifiers(mut self, identifiers: Value) -> Self {
         self.identifiers = identifiers;
+        self
+    }
+
+    pub fn org_wide(mut self, org_wide: bool) -> Self {
+        self.org_wide = org_wide;
         self
     }
 
@@ -158,25 +166,30 @@ pub enum Fault {
     Malformed,
 }
 
-/// One recorded inbound request. Keyed on method so mutation verbs record uniformly later.
+/// One recorded inbound request. Keyed on method so mutation verbs record uniformly.
 #[derive(Clone, Debug)]
 pub struct RecordedRequest {
     pub method: String,
     pub path_and_query: String,
     pub bearer_ok: bool,
+    /// The parsed JSON:API request body for mutation verbs. `None` for GET/DELETE.
+    pub body: Option<Value>,
 }
 
 struct StubState {
     token: String,
     base_url: String,
     ban_lists: Vec<StubBanList>,
-    bans: Vec<StubBan>,
+    bans: Mutex<Vec<StubBan>>,
+    /// Source of server-generated ban ids ("srv-ban-<n>"), monotonic for the stub's
+    /// whole lifetime regardless of deletions.
+    next_ban_id: Mutex<u64>,
     faults: Mutex<VecDeque<Fault>>,
     requests: Mutex<Vec<RecordedRequest>>,
 }
 
 impl StubState {
-    fn record(&self, method: &str, path_and_query: &str, bearer_ok: bool) {
+    fn record(&self, method: &str, path_and_query: &str, bearer_ok: bool, body: Option<Value>) {
         self.requests
             .lock()
             .expect("requests lock")
@@ -184,11 +197,20 @@ impl StubState {
                 method: method.to_string(),
                 path_and_query: path_and_query.to_string(),
                 bearer_ok,
+                body,
             });
     }
 
     fn take_fault(&self) -> Option<Fault> {
         self.faults.lock().expect("faults lock").pop_front()
+    }
+
+    /// Next server-generated ban id/uid suffix, monotonically increasing.
+    fn next_ban_seq(&self) -> u64 {
+        let mut seq = self.next_ban_id.lock().expect("seq lock");
+        let n = *seq;
+        *seq += 1;
+        n
     }
 }
 
@@ -212,13 +234,15 @@ impl StubBm {
             token: data.token,
             base_url: base_url.clone(),
             ban_lists: data.ban_lists,
-            bans: data.bans,
+            bans: Mutex::new(data.bans),
+            next_ban_id: Mutex::new(1),
             faults: Mutex::new(VecDeque::new()),
             requests: Mutex::new(Vec::new()),
         });
         let app = Router::new()
             .route("/ban-lists", get(ban_lists))
-            .route("/bans", get(bans))
+            .route("/bans", get(bans).post(create_ban))
+            .route("/bans/{id}", patch(patch_ban).delete(delete_ban))
             .with_state(state.clone());
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("stub serve loop");
@@ -249,6 +273,12 @@ impl StubBm {
         self.state.requests.lock().expect("requests lock").clone()
     }
 
+    /// Replace the whole ban dataset wholesale, e.g. to simulate a BM-side change
+    /// without restarting the stub.
+    pub fn set_bans(&self, bans: Vec<StubBan>) {
+        *self.state.bans.lock().expect("bans lock") = bans;
+    }
+
     /// Stop serving now (also done on drop).
     pub fn abort(&self) {
         self.handle.abort();
@@ -268,13 +298,14 @@ fn intercept(
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
+    body: Option<&Value>,
 ) -> Option<Response> {
     let path_and_query = uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_default();
     let bearer_ok = check_bearer(headers, &state.token);
-    state.record(method.as_str(), &path_and_query, bearer_ok);
+    state.record(method.as_str(), &path_and_query, bearer_ok, body.cloned());
     if let Some(fault) = state.take_fault() {
         return Some(fault_response(fault));
     }
@@ -290,7 +321,7 @@ async fn ban_lists(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(short) = intercept(&state, &method, &uri, &headers) {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, None) {
         return short;
     }
     let query = parse_query(uri.query());
@@ -322,7 +353,7 @@ async fn bans(
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Some(short) = intercept(&state, &method, &uri, &headers) {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, None) {
         return short;
     }
     let query = parse_query(uri.query());
@@ -334,8 +365,8 @@ async fn bans(
         .get("include")
         .is_some_and(|v| v.split(',').any(|p| p == "playerIdentifiers"));
 
-    let mut selected: Vec<&StubBan> = state
-        .bans
+    let stored = state.bans.lock().expect("bans lock");
+    let mut selected: Vec<&StubBan> = stored
         .iter()
         .filter(|b| filter.as_deref().is_none_or(|f| b.ban_list_id == f))
         .collect();
@@ -386,6 +417,128 @@ async fn bans(
     Json(doc).into_response()
 }
 
+async fn create_ban(
+    State(state): State<Arc<StubState>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, Some(&body)) {
+        return short;
+    }
+    let attrs = &body["data"]["attributes"];
+    let ban_list_id = body["data"]["relationships"]["banList"]["data"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let reason = attrs
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let note = attrs
+        .get("note")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let expires = attrs
+        .get("expires")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let identifiers = attrs
+        .get("identifiers")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let org_wide = attrs
+        .get("orgWide")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let seq = state.next_ban_seq();
+    let mut ban = StubBan::new(
+        ban_list_id,
+        format!("srv-ban-{seq}"),
+        format!("srv-uid-{seq}"),
+        synthetic_created_ts(seq),
+        reason,
+    )
+    .note(note)
+    .identifiers(identifiers)
+    .org_wide(org_wide);
+    if let Some(expires) = expires {
+        ban = ban.expires(expires);
+    }
+
+    let resource = ban_resource(&ban);
+    state.bans.lock().expect("bans lock").push(ban);
+
+    (StatusCode::CREATED, Json(json!({ "data": resource }))).into_response()
+}
+
+async fn delete_ban(
+    State(state): State<Arc<StubState>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, None) {
+        return short;
+    }
+    let mut stored = state.bans.lock().expect("bans lock");
+    let before = stored.len();
+    stored.retain(|b| b.id != id);
+    if stored.len() < before {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(error_body(404, "ban not found")),
+        )
+            .into_response()
+    }
+}
+
+async fn patch_ban(
+    State(state): State<Arc<StubState>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, Some(&body)) {
+        return short;
+    }
+    let attrs = &body["data"]["attributes"];
+    let mut stored = state.bans.lock().expect("bans lock");
+    let Some(ban) = stored.iter_mut().find(|b| b.id == id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(error_body(404, "ban not found")),
+        )
+            .into_response();
+    };
+    if let Some(v) = attrs.get("expires") {
+        ban.expires = v.as_str().map(str::to_string);
+    }
+    if let Some(v) = attrs.get("reason").and_then(Value::as_str) {
+        ban.reason = v.to_string();
+    }
+    if let Some(v) = attrs.get("note").and_then(Value::as_str) {
+        ban.note = v.to_string();
+    }
+    if let Some(v) = attrs.get("orgWide").and_then(Value::as_bool) {
+        ban.org_wide = v;
+    }
+    if let Some(v) = attrs.get("identifiers") {
+        ban.identifiers = v.clone();
+    }
+    let resource = ban_resource(ban);
+    Json(json!({ "data": resource })).into_response()
+}
+
 fn ban_list_resource(list: &StubBanList) -> Value {
     json!({
         "type": "banList",
@@ -408,7 +561,7 @@ fn ban_resource(ban: &StubBan) -> Value {
         "reason": ban.reason,
         "note": ban.note,
         "expires": ban.expires,
-        "orgWide": false,
+        "orgWide": ban.org_wide,
     });
     attributes["identifiers"] = ban.identifiers.clone();
     json!({
@@ -503,4 +656,12 @@ fn ban_ts(ban: &StubBan) -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339(&ban.timestamp)
         .map(|t| t.with_timezone(&chrono::Utc))
         .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+}
+
+/// A fixed-but-increasing synthetic timestamp for server-generated bans (well past any
+/// fixture data), so creation order stays deterministic across test runs.
+fn synthetic_created_ts(seq: u64) -> String {
+    let base = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z").expect("valid literal");
+    (base + chrono::Duration::seconds(seq as i64))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }

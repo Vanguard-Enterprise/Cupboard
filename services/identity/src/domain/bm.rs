@@ -27,12 +27,14 @@ pub struct BmConnection {
     pub bm_org_id: String,
     pub token_enc: Vec<u8>,
     pub token_dek: Vec<u8>,
-    /// Cadences + subset selections (`bm::sync::SyncSettings` reads these).
+    /// Cadences + target ban list + subset selections (`bm::sync` reads these).
     pub settings: serde_json::Value,
     pub sync_enabled: bool,
+    pub sync_bans_outbound: bool,
 }
 
-const CONN_COLS: &str = "id, tenant_id, bm_org_id, token_enc, token_dek, settings, sync_enabled";
+const CONN_COLS: &str = "id, tenant_id, bm_org_id, token_enc, token_dek, settings, \
+     sync_enabled, sync_bans_outbound";
 
 /// Token-free view for the API. The sealed token never leaves the service.
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]
@@ -540,9 +542,12 @@ pub async fn apply_ban_page(
     }
 
     let ext_ids: Vec<String> = bans.iter().map(|b| b.external_id.clone()).collect();
+    // LEFT JOIN: a map row whose bans row was removed out-of-band must still count as
+    // existing, or its external_id would be re-inserted into the map and violate the
+    // unique index, wedging every page that contains it.
     let existing: Vec<(String, Uuid, Option<Vec<u8>>, String)> = sqlx::query_as(
-        "SELECT m.external_id, m.local_id, m.content_hash, b.status \
-         FROM bm_sync_map m JOIN bans b ON b.id = m.local_id \
+        "SELECT m.external_id, m.local_id, m.content_hash, COALESCE(b.status, 'missing') \
+         FROM bm_sync_map m LEFT JOIN bans b ON b.id = m.local_id \
          WHERE m.tenant_id = $1 AND m.entity_type = 'ban' AND m.external_id = ANY($2)",
     )
     .bind(tenant_id)
@@ -587,12 +592,23 @@ pub async fn apply_ban_page(
     }
 
     if !unchanged_ids.is_empty() {
+        // Meta refreshes even on unchanged content: list membership is not hashed,
+        // and the delete sweep scopes on meta->>'ban_list', so a stale list id there
+        // would exempt a moved ban from its own list's sweep.
+        let unchanged_meta: Vec<serde_json::Value> = prepared
+            .iter()
+            .filter(|p| unchanged_ids.contains(&p.ban.external_id))
+            .map(|p| p.ban.meta.clone())
+            .collect();
         sqlx::query(
-            "UPDATE bm_sync_map SET bm_seen_at = now() \
-             WHERE tenant_id = $1 AND entity_type = 'ban' AND external_id = ANY($2)",
+            "UPDATE bm_sync_map m SET bm_seen_at = now(), meta = u.meta \
+             FROM unnest($2::text[], $3::jsonb[]) AS u(external_id, meta) \
+             WHERE m.tenant_id = $1 AND m.entity_type = 'ban' \
+               AND m.external_id = u.external_id",
         )
         .bind(tenant_id)
         .bind(&unchanged_ids)
+        .bind(&unchanged_meta)
         .execute(&mut **tx)
         .await?;
         out.unchanged = unchanged_ids.len();
@@ -693,6 +709,59 @@ pub async fn apply_ban_page(
     }
 
     if !changed.is_empty() {
+        // Conflict rows FIRST, while the bans row still holds its pre-edit state: BM
+        // edited a ban a local operator had revoked; the revoke stands (their most
+        // recent explicit action) and the disagreement is logged with both sides'
+        // actual snapshots for the review UI.
+        let conflicted: Vec<&(&Prepared, Uuid, &str)> = changed
+            .iter()
+            .filter(|(_, _, local_status)| *local_status == "revoked")
+            .collect();
+        if !conflicted.is_empty() {
+            sqlx::query(
+                "INSERT INTO bm_sync_conflicts \
+                   (tenant_id, entity_type, external_id, local_id, direction, \
+                    local_snapshot, remote_snapshot, resolution) \
+                 SELECT $1, 'ban', u.external_id, u.local_id, 'inbound', \
+                        jsonb_build_object( \
+                            'status', b.status, 'reason', b.reason, \
+                            'expires_at', b.expires_at, 'revoked_at', b.revoked_at, \
+                            'revoke_reason', b.revoke_reason), \
+                        u.remote_snapshot, 'local_won' \
+                 FROM unnest($2::text[], $3::uuid[], $4::jsonb[]) \
+                      AS u(external_id, local_id, remote_snapshot) \
+                 JOIN bans b ON b.id = u.local_id",
+            )
+            .bind(tenant_id)
+            .bind(
+                conflicted
+                    .iter()
+                    .map(|(p, ..)| p.ban.external_id.clone())
+                    .collect::<Vec<_>>(),
+            )
+            .bind(
+                conflicted
+                    .iter()
+                    .map(|(_, local, _)| *local)
+                    .collect::<Vec<_>>(),
+            )
+            .bind(
+                conflicted
+                    .iter()
+                    .map(|(p, ..)| {
+                        serde_json::json!({
+                            "reason": p.ban.reason,
+                            "expires_at": p.ban.expires_at,
+                            "meta": p.ban.meta,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .execute(&mut **tx)
+            .await?;
+            out.conflicts = conflicted.len();
+        }
+
         // The subject may have changed (BM-side identifier edit): player_id is
         // re-resolved per row; a stale link would pin the ban to the wrong profile.
         sqlx::query(
@@ -786,61 +855,52 @@ pub async fn apply_ban_page(
         .execute(&mut **tx)
         .await?;
 
-        // BM edited a ban a local operator had revoked: the revoke stands (their most
-        // recent explicit action), and the disagreement is logged for review.
-        let conflicted: Vec<&(&Prepared, Uuid, &str)> = changed
-            .iter()
-            .filter(|(_, _, local_status)| *local_status == "revoked")
-            .collect();
-        if !conflicted.is_empty() {
-            sqlx::query(
-                "INSERT INTO bm_sync_conflicts \
-                   (tenant_id, entity_type, external_id, local_id, direction, \
-                    local_snapshot, remote_snapshot, resolution) \
-                 SELECT $1, 'ban', u.external_id, u.local_id, 'inbound', \
-                        u.local_snapshot, u.remote_snapshot, 'local_won' \
-                 FROM unnest($2::text[], $3::uuid[], $4::jsonb[], $5::jsonb[]) \
-                      AS u(external_id, local_id, local_snapshot, remote_snapshot)",
-            )
-            .bind(tenant_id)
-            .bind(
-                conflicted
-                    .iter()
-                    .map(|(p, ..)| p.ban.external_id.clone())
-                    .collect::<Vec<_>>(),
-            )
-            .bind(
-                conflicted
-                    .iter()
-                    .map(|(_, local, _)| *local)
-                    .collect::<Vec<_>>(),
-            )
-            .bind(
-                conflicted
-                    .iter()
-                    .map(|_| serde_json::json!({ "status": "revoked" }))
-                    .collect::<Vec<_>>(),
-            )
-            .bind(
-                conflicted
-                    .iter()
-                    .map(|(p, ..)| {
-                        serde_json::json!({
-                            "reason": p.ban.reason,
-                            "expires_at": p.ban.expires_at,
-                            "meta": p.ban.meta,
-                        })
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .execute(&mut **tx)
-            .await?;
-            out.conflicts = conflicted.len();
-        }
         out.updated = changed.len();
     }
 
     Ok(out)
+}
+
+/// Stamp `bm_seen_at` for every external id BM returned on a page, INCLUDING ones
+/// that failed to map (null attributes, unresolved identifier refs). The delete sweep
+/// keys on this stamp: a ban BM still serves must never look absent just because one
+/// fetch of it was unmappable.
+pub async fn touch_seen_external_ids(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    external_ids: &[String],
+) -> Result<(), AppError> {
+    if external_ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE bm_sync_map SET bm_seen_at = now() \
+         WHERE tenant_id = $1 AND entity_type = 'ban' AND external_id = ANY($2)",
+    )
+    .bind(tenant_id)
+    .bind(external_ids)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// In-transaction lease check for sync page writes (the import path fences via
+/// `save_job_progress`; the sync loops have no job row, so they fence explicitly).
+/// `FOR SHARE` holds the connection row until this tx commits, so a takeover's claim
+/// UPDATE serializes strictly after our writes instead of racing them.
+pub async fn claim_held_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    connection_id: Uuid,
+    claimer: &str,
+) -> Result<bool, AppError> {
+    let held: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM bm_connections WHERE id = $1 AND claimed_by = $2 FOR SHARE",
+    )
+    .bind(connection_id)
+    .bind(claimer)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(held.is_some())
 }
 
 /// Delete detection after a COMPLETE re-scan: active bm-origin bans in the scanned
@@ -932,23 +992,44 @@ pub async fn import_enabled_list_ids_pool(
 }
 
 /// Stamp a successful sync tick (fenced on the lease). `scan` = the full re-scan,
-/// else the tail poll. Success clears the surfaced sync error.
+/// else the tail poll. Only a successful SCAN clears the surfaced error: a healthy
+/// 60s tail must not mask a persistently failing 15-minute re-scan.
 pub async fn record_sync_tick(
     owner_pool: &PgPool,
     connection_id: Uuid,
     claimer: &str,
     scan: bool,
 ) -> Result<(), AppError> {
-    let column = if scan { "last_scan_at" } else { "last_tail_at" };
+    let set = if scan {
+        "last_scan_at = now(), last_tail_at = now(), sync_error = NULL"
+    } else {
+        "last_tail_at = now()"
+    };
     sqlx::query(&format!(
-        "UPDATE bm_connections SET {column} = now(), sync_error = NULL \
-         WHERE id = $1 AND claimed_by = $2"
+        "UPDATE bm_connections SET {set} WHERE id = $1 AND claimed_by = $2"
     ))
     .bind(connection_id)
     .bind(claimer)
     .execute(owner_pool)
     .await?;
     Ok(())
+}
+
+/// `(last_tail_at, last_scan_at)` as persisted.
+pub type SyncTimestamps = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
+/// Persisted sync timestamps, for seeding a fresh runner's cadence state: a pod
+/// restart must not trigger an immediate full re-scan of every connection.
+pub async fn sync_timestamps(
+    owner_pool: &PgPool,
+    connection_id: Uuid,
+) -> Result<SyncTimestamps, AppError> {
+    let row: Option<SyncTimestamps> =
+        sqlx::query_as("SELECT last_tail_at, last_scan_at FROM bm_connections WHERE id = $1")
+            .bind(connection_id)
+            .fetch_optional(owner_pool)
+            .await?;
+    Ok(row.unwrap_or((None, None)))
 }
 
 /// Surface a transient sync failure (fenced). Does not flip `status`: the connection
@@ -968,38 +1049,410 @@ pub async fn record_sync_error(
     Ok(())
 }
 
-/// Tenant toggle for inbound sync.
-pub async fn set_sync_enabled(
+/// Tenant-requested sync settings changes; absent fields keep their value.
+#[derive(Debug, Default)]
+pub struct SyncChanges {
+    pub sync_enabled: Option<bool>,
+    pub sync_bans_outbound: Option<bool>,
+    pub target_ban_list: Option<String>,
+    /// Opt-in (decision O, default off): queue pushes for existing active
+    /// Cupboard-origin bans when enabling outbound.
+    pub backfill_existing: bool,
+}
+
+/// Apply sync settings. Outbound requires a valid writable target list (owned, or
+/// subscribed with owner-granted create permission). Returns the updated view and
+/// how many backfill ops were queued.
+pub async fn update_sync_settings(
     app_pool: &PgPool,
     tenant: TenantId,
     actor: Uuid,
-    enabled: bool,
-) -> Result<ConnectionView, AppError> {
+    changes: SyncChanges,
+) -> Result<(ConnectionView, u64), AppError> {
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
-    let view = sqlx::query_as::<_, ConnectionView>(&format!(
-        "UPDATE bm_connections SET sync_enabled = $2, updated_at = now() \
-         WHERE tenant_id = $1 RETURNING {VIEW_COLS}"
-    ))
+    let current: Option<(Uuid, serde_json::Value, bool, bool, String)> = sqlx::query_as(
+        "SELECT id, settings, sync_enabled, sync_bans_outbound, status FROM bm_connections \
+         WHERE tenant_id = $1 FOR UPDATE",
+    )
     .bind(tenant.0)
-    .bind(enabled)
     .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| {
+    .await?;
+    let (_, mut settings, cur_enabled, cur_outbound, conn_status) = current.ok_or_else(|| {
         AppError::NotFound("no BattleMetrics connection; connect a token first".into())
     })?;
+
+    // Enabling sync on an errored/disabled connection would persist the toggle while
+    // claim_ready (rightly) never picks it up: reject loudly instead of no-opping.
+    let enabling = changes.sync_enabled == Some(true) || changes.sync_bans_outbound == Some(true);
+    if enabling && conn_status != "connected" {
+        return Err(AppError::BadRequest(format!(
+            "the connection is {conn_status}; reconnect with a valid token before enabling sync"
+        )));
+    }
+
+    if let Some(list) = &changes.target_ban_list {
+        let perms: Option<(bool, bool)> = sqlx::query_as(
+            "SELECT subscribed, perm_create FROM bm_ban_lists \
+             WHERE tenant_id = $1 AND external_id = $2",
+        )
+        .bind(tenant.0)
+        .bind(list)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match perms {
+            None => {
+                return Err(AppError::BadRequest(
+                    "unknown ban list; run an import first".into(),
+                ))
+            }
+            Some((true, false)) => {
+                return Err(AppError::BadRequest(
+                    "the list owner has not granted create permission on that list".into(),
+                ))
+            }
+            _ => {}
+        }
+        settings["target_ban_list"] = serde_json::json!(list);
+    }
+
+    let sync_enabled = changes.sync_enabled.unwrap_or(cur_enabled);
+    let outbound = changes.sync_bans_outbound.unwrap_or(cur_outbound);
+    if outbound {
+        let has_target = settings
+            .get("target_ban_list")
+            .and_then(|v| v.as_str())
+            .is_some();
+        if !has_target {
+            return Err(AppError::BadRequest(
+                "choose a target ban list before enabling outbound sync".into(),
+            ));
+        }
+    }
+
+    let view = sqlx::query_as::<_, ConnectionView>(&format!(
+        "UPDATE bm_connections SET sync_enabled = $2, sync_bans_outbound = $3, \
+         settings = $4, updated_at = now() WHERE tenant_id = $1 RETURNING {VIEW_COLS}"
+    ))
+    .bind(tenant.0)
+    .bind(sync_enabled)
+    .bind(outbound)
+    .bind(&settings)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let backfilled = if changes.backfill_existing && outbound {
+        enqueue_backfill(&mut tx, tenant).await?
+    } else {
+        0
+    };
 
     crate::domain::audit::record_in_tx(
         &mut tx,
         Some(tenant.0),
         Some(actor),
-        "integrations.bm.sync.toggle",
+        "integrations.bm.sync.settings",
         Some("bm_connection"),
         Some(view.id),
-        Some(serde_json::json!({ "sync_enabled": enabled })),
+        Some(serde_json::json!({
+            "sync_enabled": sync_enabled,
+            "sync_bans_outbound": outbound,
+            "target_ban_list": settings.get("target_ban_list"),
+            "backfilled": backfilled,
+        })),
     )
     .await?;
     tx.commit().await?;
-    Ok(view)
+    Ok((view, backfilled))
+}
+
+// ---------------------------------------------------------------------------
+// Outbound outbox (decision J)
+
+/// A drained-side outbox row.
+#[derive(Debug, sqlx::FromRow)]
+pub struct OutboxOp {
+    pub id: Uuid,
+    pub local_id: Uuid,
+    pub op: String,
+    pub payload: serde_json::Value,
+    pub status: String,
+    pub attempts: i32,
+}
+
+/// Enqueue the outbound push for a just-created Cupboard ban, in the caller's tx.
+/// No-op unless the tenant has outbound sync on. Unsupported subjects land as
+/// `abandoned` rows (visible on the status page) rather than vanishing silently.
+pub async fn enqueue_outbound_create(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: TenantId,
+    ban: &crate::domain::bans::Ban,
+) -> Result<(), AppError> {
+    if !outbound_enabled(tx, tenant).await? {
+        return Ok(());
+    }
+    let supported = ban.subject_type == "steam";
+    let payload = serde_json::json!({
+        "subject_type": ban.subject_type,
+        "subject_value": ban.subject_value,
+        "reason": ban.reason,
+        "expires_at": ban.expires_at,
+        "scope": ban.scope,
+    });
+    sqlx::query(
+        "INSERT INTO bm_outbox (tenant_id, local_id, op, payload, status, last_error) \
+         VALUES ($1, $2, 'create', $3, $4, $5)",
+    )
+    .bind(tenant.0)
+    .bind(ban.id)
+    .bind(&payload)
+    .bind(if supported { "pending" } else { "abandoned" })
+    .bind(if supported {
+        None
+    } else {
+        Some("only steam-subject bans sync to BattleMetrics today")
+    })
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Enqueue the outbound unban for a just-revoked ban, in the caller's tx. Applies to
+/// every origin: revoking an imported ban must also remove it on BM (decision I; the
+/// drain resolves the external id through the sync map either way).
+pub async fn enqueue_outbound_delete(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: TenantId,
+    ban_id: Uuid,
+) -> Result<(), AppError> {
+    if !outbound_enabled(tx, tenant).await? {
+        return Ok(());
+    }
+    sqlx::query("INSERT INTO bm_outbox (tenant_id, local_id, op) VALUES ($1, $2, 'delete')")
+        .bind(tenant.0)
+        .bind(ban_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+async fn outbound_enabled(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: TenantId,
+) -> Result<bool, AppError> {
+    let on: Option<bool> = sqlx::query_scalar(
+        "SELECT sync_bans_outbound FROM bm_connections \
+         WHERE tenant_id = $1 AND sync_enabled AND status = 'connected'",
+    )
+    .bind(tenant.0)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(on.unwrap_or(false))
+}
+
+/// Due outbox work, oldest first (create-then-revoke of one ban must stay ordered).
+/// `inflight` rows come back once their lease (`next_attempt_at`) lapses: a crash
+/// mid-send must not strand an op.
+pub async fn due_outbox_ops(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    limit: i64,
+) -> Result<Vec<OutboxOp>, AppError> {
+    let ops = sqlx::query_as::<_, OutboxOp>(
+        "SELECT id, local_id, op, payload, status, attempts FROM bm_outbox \
+         WHERE tenant_id = $1 AND status IN ('pending', 'needs_verify', 'inflight') \
+           AND next_attempt_at <= now() \
+         ORDER BY created_at ASC LIMIT $2",
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(owner_pool)
+    .await?;
+    Ok(ops)
+}
+
+/// Claim one op for a push attempt: `inflight` with a 10-minute lease, so a crashed
+/// drain surfaces the op again instead of stranding it.
+pub async fn mark_outbox_inflight(owner_pool: &PgPool, id: Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE bm_outbox SET status = 'inflight', attempts = attempts + 1, \
+         next_attempt_at = now() + interval '10 minutes' WHERE id = $1",
+    )
+    .bind(id)
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
+/// Settle an op after a push attempt. `retry_in` schedules the next attempt for
+/// non-terminal statuses.
+pub async fn finish_outbox_op(
+    owner_pool: &PgPool,
+    id: Uuid,
+    status: &str,
+    error: Option<&str>,
+    retry_in: Option<std::time::Duration>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE bm_outbox SET status = $2, last_error = $3, \
+         next_attempt_at = now() + make_interval(secs => $4) WHERE id = $1",
+    )
+    .bind(id)
+    .bind(status)
+    .bind(error)
+    .bind(retry_in.map(|d| d.as_secs_f64()).unwrap_or(0.0))
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
+/// Record a successfully pushed ban in the sync map (the echo guard: the inbound
+/// loops skip records whose hash matches what we wrote). Upserts on `local_id`: a
+/// verify-then-push retry may find a row already recorded.
+pub async fn record_outbound_ban(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    local_id: Uuid,
+    external_id: &str,
+    content_hash: &[u8],
+    meta: &serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO bm_sync_map \
+           (tenant_id, entity_type, external_id, local_id, content_hash, meta, \
+            bm_seen_at, local_synced_at, last_direction) \
+         VALUES ($1, 'ban', $2, $3, $4, $5, now(), now(), 'outbound') \
+         ON CONFLICT (tenant_id, entity_type, local_id) DO UPDATE SET \
+           external_id = EXCLUDED.external_id, content_hash = EXCLUDED.content_hash, \
+           meta = EXCLUDED.meta, bm_seen_at = now(), local_synced_at = now(), \
+           last_direction = 'outbound'",
+    )
+    .bind(tenant_id)
+    .bind(external_id)
+    .bind(local_id)
+    .bind(content_hash)
+    .bind(meta)
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
+/// Refresh the stored hash after an outbound edit-shaped push (the expire-now
+/// fallback), so the next re-scan sees it as an echo, not a BM edit.
+pub async fn update_outbound_hash(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    local_id: Uuid,
+    content_hash: &[u8],
+) -> Result<(), AppError> {
+    sqlx::query(
+        "UPDATE bm_sync_map SET content_hash = $3, local_synced_at = now(), \
+           last_direction = 'outbound' \
+         WHERE tenant_id = $1 AND entity_type = 'ban' AND local_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(local_id)
+    .bind(content_hash)
+    .execute(owner_pool)
+    .await?;
+    Ok(())
+}
+
+/// The BM ban id for a local ban, if it was ever mapped (imported or pushed).
+pub async fn external_ban_id(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    local_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let ext: Option<String> = sqlx::query_scalar(
+        "SELECT external_id FROM bm_sync_map \
+         WHERE tenant_id = $1 AND entity_type = 'ban' AND local_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(local_id)
+    .fetch_optional(owner_pool)
+    .await?;
+    Ok(ext)
+}
+
+/// Inputs for recomputing the echo-guard hash after an expire-now fallback: the local
+/// reason plus the map meta (identifiers array + note, as BM holds them).
+pub async fn outbound_fallback_inputs(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    local_id: Uuid,
+) -> Result<Option<(Option<String>, serde_json::Value)>, AppError> {
+    let row: Option<(Option<String>, serde_json::Value)> = sqlx::query_as(
+        "SELECT b.reason, m.meta FROM bans b \
+         JOIN bm_sync_map m ON m.tenant_id = b.tenant_id AND m.entity_type = 'ban' \
+           AND m.local_id = b.id \
+         WHERE b.tenant_id = $1 AND b.id = $2",
+    )
+    .bind(tenant_id)
+    .bind(local_id)
+    .fetch_optional(owner_pool)
+    .await?;
+    Ok(row)
+}
+
+/// Opt-in backfill (decision O): queue pushes for active, steam-subject, non-BM
+/// bans that were never mapped. Returns how many were queued.
+pub async fn enqueue_backfill(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: TenantId,
+) -> Result<u64, AppError> {
+    let res = sqlx::query(
+        "INSERT INTO bm_outbox (tenant_id, local_id, op, payload) \
+         SELECT b.tenant_id, b.id, 'create', jsonb_build_object( \
+             'subject_type', b.subject_type, 'subject_value', b.subject_value, \
+             'reason', b.reason, 'expires_at', b.expires_at, 'scope', b.scope) \
+         FROM bans b \
+         WHERE b.tenant_id = $1 AND b.status = 'active' AND b.origin <> 'bm' \
+           AND b.subject_type = 'steam' \
+           AND NOT EXISTS (SELECT 1 FROM bm_sync_map m WHERE m.tenant_id = b.tenant_id \
+                             AND m.entity_type = 'ban' AND m.local_id = b.id) \
+           AND NOT EXISTS (SELECT 1 FROM bm_outbox o WHERE o.tenant_id = b.tenant_id \
+                             AND o.local_id = b.id AND o.op = 'create' \
+                             AND o.status IN ('pending', 'inflight', 'needs_verify'))",
+    )
+    .bind(tenant.0)
+    .execute(&mut **tx)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// Outbox queue depths for the status page.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct OutboxSummary {
+    pub pending: i64,
+    pub needs_verify: i64,
+    pub failed: i64,
+    pub abandoned: i64,
+}
+
+pub async fn outbox_summary(
+    app_pool: &PgPool,
+    tenant: TenantId,
+) -> Result<OutboxSummary, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT status, count(*) FROM bm_outbox \
+         WHERE tenant_id = $1 AND status <> 'done' GROUP BY status",
+    )
+    .bind(tenant.0)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    let mut summary = OutboxSummary::default();
+    for (status, count) in rows {
+        match status.as_str() {
+            "pending" | "inflight" => summary.pending += count,
+            "needs_verify" => summary.needs_verify += count,
+            "failed" => summary.failed += count,
+            "abandoned" => summary.abandoned += count,
+            _ => {}
+        }
+    }
+    Ok(summary)
 }
 
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]
@@ -1412,16 +1865,135 @@ mod tests {
         assert_eq!(reason.as_deref(), Some("edited reason"));
         tx.commit().await.unwrap();
 
-        let (count, resolution): (i64, Option<String>) = sqlx::query_as(
-            "SELECT count(*), min(resolution) FROM bm_sync_conflicts \
-             WHERE tenant_id = $1 AND external_id = 'bm-ban-r'",
-        )
-        .bind(tenant.0)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (count, resolution, local_snapshot): (i64, Option<String>, Option<serde_json::Value>) =
+            sqlx::query_as(
+                "SELECT count(*), min(resolution), \
+                        (array_agg(local_snapshot))[1] FROM bm_sync_conflicts \
+                 WHERE tenant_id = $1 AND external_id = 'bm-ban-r'",
+            )
+            .bind(tenant.0)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count, 1, "the disagreement must be logged");
         assert_eq!(resolution.as_deref(), Some("local_won"));
+        // The snapshot captures the PRE-edit local state (the same tx overwrites it).
+        let snap = local_snapshot.expect("local snapshot present");
+        assert_eq!(snap["status"], "revoked");
+        assert_eq!(
+            snap["reason"], "cheating",
+            "pre-edit reason, not the incoming one"
+        );
+        assert!(
+            !snap["revoked_at"].is_null(),
+            "revocation context preserved"
+        );
+    }
+
+    #[tokio::test]
+    async fn orphan_map_row_does_not_wedge_the_page() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP orphan_map_row_does_not_wedge_the_page: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let pepper = b"bm-pepper";
+        let subject = format!("7656119{}", rand_digits());
+
+        let ban = imported_ban("orph-1", &subject, "cheating");
+        let mut tx = pool.begin().await.unwrap();
+        apply_ban_page(&mut tx, tenant.0, pepper, std::slice::from_ref(&ban))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        // The bans row vanishes out-of-band; the map row remains (no FK).
+        sqlx::query("DELETE FROM bans WHERE tenant_id = $1 AND subject_value = $2")
+            .bind(tenant.0)
+            .bind(&subject)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Re-applying the same external id must not re-insert into the map (unique
+        // violation would wedge every page containing it).
+        let mut tx = pool.begin().await.unwrap();
+        let out = apply_ban_page(&mut tx, tenant.0, pepper, std::slice::from_ref(&ban))
+            .await
+            .expect("orphan must not wedge the page");
+        assert_eq!(out.inserted, 0, "an orphan is existing, not fresh");
+        let edited = imported_ban("orph-1", &subject, "edited");
+        apply_ban_page(&mut tx, tenant.0, pepper, std::slice::from_ref(&edited))
+            .await
+            .expect("changed path tolerates the missing bans row");
+        tx.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unchanged_content_still_refreshes_meta() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP unchanged_content_still_refreshes_meta: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let pepper = b"bm-pepper";
+        let subject = format!("7656119{}", rand_digits());
+
+        // Same content hash, different list membership (lists are not hashed): the
+        // sweep scopes on meta ban_list, so meta must track the move.
+        let mut on_l1 = imported_ban("mv-1", &subject, "x");
+        on_l1.meta = serde_json::json!({ "ban_list": "l1" });
+        let mut on_l2 = imported_ban("mv-1", &subject, "x");
+        on_l2.meta = serde_json::json!({ "ban_list": "l2" });
+
+        let mut tx = pool.begin().await.unwrap();
+        apply_ban_page(&mut tx, tenant.0, pepper, std::slice::from_ref(&on_l1))
+            .await
+            .unwrap();
+        let out = apply_ban_page(&mut tx, tenant.0, pepper, std::slice::from_ref(&on_l2))
+            .await
+            .unwrap();
+        assert_eq!(out.unchanged, 1);
+        let list: String = sqlx::query_scalar(
+            "SELECT meta->>'ban_list' FROM bm_sync_map \
+             WHERE tenant_id = $1 AND entity_type = 'ban' AND external_id = 'mv-1'",
+        )
+        .bind(tenant.0)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(list, "l2", "meta must follow the list move");
+        tx.commit().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn enabling_sync_on_errored_connection_is_rejected() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP enabling_sync_on_errored_connection_is_rejected: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let view = connect_tenant(&pool, tenant).await;
+        sqlx::query("UPDATE bm_connections SET status = 'error' WHERE id = $1")
+            .bind(view.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let err = update_sync_settings(
+            &pool,
+            tenant,
+            Uuid::new_v4(),
+            SyncChanges {
+                sync_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("enable on an errored connection must fail loudly");
+        assert!(matches!(err, AppError::BadRequest(_)), "got {err:?}");
     }
 
     #[tokio::test]

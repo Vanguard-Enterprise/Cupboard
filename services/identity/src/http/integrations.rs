@@ -34,38 +34,62 @@ pub async fn status(
     let latest_job = bm::latest_job(&state.app_pool, tenant).await?;
     let ban_lists = bm::list_ban_lists(&state.app_pool, tenant).await?;
     let conflicts = bm::list_conflicts(&state.app_pool, tenant).await?;
+    let outbox = bm::outbox_summary(&state.app_pool, tenant).await?;
     Ok(Json(json!({
         "configured": state.config.identity_master_key.is_some(),
         "connection": connection,
         "latest_job": latest_job,
         "ban_lists": ban_lists,
         "conflicts": conflicts,
+        "outbox": outbox,
     })))
 }
 
 #[derive(Deserialize)]
-pub struct SyncToggleRequest {
-    pub sync_enabled: bool,
+pub struct SyncSettingsRequest {
+    #[serde(default)]
+    pub sync_enabled: Option<bool>,
+    #[serde(default)]
+    pub sync_bans_outbound: Option<bool>,
+    #[serde(default)]
+    pub target_ban_list: Option<String>,
+    /// Opt-in (default off): push existing active Cupboard bans to BM when enabling
+    /// outbound sync.
+    #[serde(default)]
+    pub backfill_existing: bool,
 }
 
-/// Toggle inbound sync. The runner notices within one tick (claim within ~15s when
-/// enabling; loop exit within ~5s when disabling).
+/// Update sync settings (inbound toggle, outbound toggle + target list, opt-in
+/// backfill). The runner notices within one tick (claim within ~15s when enabling;
+/// loop exit within ~5s when disabling).
 pub async fn update_sync(
     State(state): State<AppState>,
     claims: AuthClaims,
-    Json(req): Json<SyncToggleRequest>,
-) -> Result<Json<bm::ConnectionView>, AppError> {
+    Json(req): Json<SyncSettingsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
     let org = claims.require(Permission::IntegrationsManage)?;
     // Sync needs a runner, and runners need the master key.
     master_key(&state)?;
-    let view = bm::set_sync_enabled(
+    if let Some(list) = &req.target_ban_list {
+        if list.trim().is_empty() || list.len() > 64 {
+            return Err(AppError::BadRequest("invalid target ban list id".into()));
+        }
+    }
+    let (view, backfilled) = bm::update_sync_settings(
         &state.app_pool,
         TenantId::from(org),
         claims.0.sub.0,
-        req.sync_enabled,
+        bm::SyncChanges {
+            sync_enabled: req.sync_enabled,
+            sync_bans_outbound: req.sync_bans_outbound,
+            target_ban_list: req.target_ban_list,
+            backfill_existing: req.backfill_existing,
+        },
     )
     .await?;
-    Ok(Json(view))
+    Ok(Json(
+        json!({ "connection": view, "backfilled": backfilled }),
+    ))
 }
 
 #[derive(Deserialize)]

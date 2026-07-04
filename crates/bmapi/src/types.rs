@@ -20,6 +20,13 @@ where
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
+/// A JSON:API single-resource document (mutation responses).
+#[derive(Debug, Deserialize)]
+#[serde(bound(deserialize = "A: serde::de::DeserializeOwned + Default"))]
+pub struct OneDoc<A> {
+    pub data: Resource<A>,
+}
+
 /// A JSON:API list document (`data` is an array). Follow `links.next` until absent.
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "A: serde::de::DeserializeOwned + Default"))]

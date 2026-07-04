@@ -99,6 +99,11 @@ pub async fn create(
     )
     .await?;
 
+    // Outbound BM sync (Phase 4 decision J): the push op rides this tx so it can
+    // neither be lost nor observed before the ban commits. No-op when the tenant has
+    // no outbound sync.
+    crate::domain::bm::enqueue_outbound_create(&mut tx, tenant, &ban).await?;
+
     tx.commit().await?;
     Ok(ban)
 }
@@ -145,6 +150,9 @@ pub async fn revoke(
             None,
         )
         .await?;
+        // Outbound BM sync: the unban push rides this tx (decision J). Applies to
+        // imported bans too; the drain resolves the BM id through the sync map.
+        crate::domain::bm::enqueue_outbound_delete(&mut tx, tenant, b.id).await?;
     }
 
     tx.commit().await?;

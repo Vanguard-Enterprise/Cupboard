@@ -11,6 +11,7 @@
 
 mod import;
 mod mapping;
+mod outbox;
 mod runner;
 pub mod supervisor;
 mod sync;

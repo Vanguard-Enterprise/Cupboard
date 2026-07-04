@@ -63,8 +63,19 @@ pub async fn run(
         lost.clone(),
     ));
 
-    let mut last_tail: Option<tokio::time::Instant> = None;
-    let mut last_scan: Option<tokio::time::Instant> = None;
+    // Cadence state seeds from the persisted timestamps: a pod restart or re-claim
+    // must not trigger an immediate full re-scan of every connection (a 100k-ban org
+    // is ~1000 BM requests per scan).
+    let (mut last_tail, mut last_scan) = match bm::sync_timestamps(&pool, conn.id).await {
+        Ok((tail, scan)) => (instant_ago(tail), instant_ago(scan)),
+        Err(e) => {
+            tracing::warn!(connection = %conn.id, error = ?e, "cadence seed failed; starting cold");
+            (None, None)
+        }
+    };
+    // After a failed tail tick the next one walks every page: a committed page 1
+    // would otherwise hide a stranded backlog until the next re-scan.
+    let mut tail_deep = false;
 
     while !lost.load(Ordering::Relaxed) {
         // Import jobs take precedence; sync pauses while one runs so the single
@@ -105,29 +116,67 @@ pub async fn run(
             break;
         }
 
+        // Outbound drain every tick: the due-scan is one cheap indexed query when
+        // idle, and queued staff bans should reach BM within seconds.
+        if current.sync_bans_outbound {
+            match super::outbox::drain(&pool, &client, &current).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(connection = %conn.id, ops = n, "outbox drained"),
+                Err(e) if e.is_auth() => {
+                    match bm::set_connection_error_if_token_unchanged(
+                        &pool,
+                        conn.id,
+                        &current.token_enc,
+                        &e.message(),
+                    )
+                    .await
+                    {
+                        Ok(true) => tracing::warn!(connection = %conn.id, error = %e.message(),
+                            "outbound auth failure; connection errored"),
+                        _ => tracing::info!(connection = %conn.id,
+                            "outbound auth failure with rotated token; restarting for re-claim"),
+                    }
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(connection = %conn.id, error = %e.detail(), "outbox drain failed");
+                    let _ = bm::record_sync_error(&pool, conn.id, &claimer, &e.message()).await;
+                }
+            }
+        }
+
         let settings = super::sync::settings_from(&current.settings);
         let now = tokio::time::Instant::now();
         let scan_due = last_scan.is_none_or(|t| now.duration_since(t) >= settings.rescan);
         let tail_due = last_tail.is_none_or(|t| now.duration_since(t) >= settings.tail);
 
         let tick = if scan_due {
-            let result = super::sync::full_rescan(&pool, &client, &current, &pepper, &lost).await;
+            let result =
+                super::sync::full_rescan(&pool, &client, &current, &pepper, &claimer, &lost).await;
             // A scan visits everything a tail would; advance both cadences either
             // way, so a persistently failing tick can't hot-loop against BM.
             last_scan = Some(tokio::time::Instant::now());
             last_tail = last_scan;
-            Some((result, true))
+            Some((result.map(Some), true))
         } else if tail_due {
-            let result = super::sync::tail_poll(&pool, &client, &current, &pepper).await;
+            let result =
+                super::sync::tail_poll(&pool, &client, &current, &pepper, &claimer, tail_deep)
+                    .await;
             last_tail = Some(tokio::time::Instant::now());
-            Some((result, false))
+            Some((result.map(|()| None), false))
         } else {
             None
         };
 
         match tick {
-            Some((Ok(()), scan)) => {
-                let _ = bm::record_sync_tick(&pool, conn.id, &claimer, scan).await;
+            Some((Ok(scan_outcome), scan)) => {
+                tail_deep = false;
+                // An aborted scan (sync toggled off mid-walk) records nothing: a
+                // partial scan is not a scan, and the loop exits on the next check.
+                let aborted = matches!(scan_outcome, Some(super::sync::ScanOutcome::Aborted));
+                if !aborted {
+                    let _ = bm::record_sync_tick(&pool, conn.id, &claimer, scan).await;
+                }
             }
             Some((Err(e), _)) if e.is_auth() => {
                 // Same stale-token discipline as the import path: only error the
@@ -148,6 +197,7 @@ pub async fn run(
                 break;
             }
             Some((Err(e), _)) => {
+                tail_deep = true;
                 tracing::warn!(connection = %conn.id, error = %e.detail(), "sync tick failed");
                 let _ = bm::record_sync_error(&pool, conn.id, &claimer, &e.message()).await;
             }
@@ -160,6 +210,14 @@ pub async fn run(
     hb.abort();
     let _ = bm::release_claim(&pool, conn.id, &claimer).await;
     tracing::info!(connection = %conn.id, "BM runner exited");
+}
+
+/// Map a persisted timestamp onto the monotonic clock ("that happened N seconds
+/// ago"). `None` (never ran) or a nonsensical future stamp both mean "due now".
+fn instant_ago(at: Option<chrono::DateTime<chrono::Utc>>) -> Option<tokio::time::Instant> {
+    let at = at?;
+    let elapsed = (chrono::Utc::now() - at).to_std().ok()?;
+    tokio::time::Instant::now().checked_sub(elapsed)
 }
 
 async fn heartbeat_loop(

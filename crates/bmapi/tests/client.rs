@@ -8,7 +8,7 @@
 
 use cupboard_bmapi::stub::{Fault, StubBan, StubBanList, StubBm, StubData};
 use cupboard_bmapi::types::{BanAttrs, BanIdentifier, BanListAttrs};
-use cupboard_bmapi::{BmClient, BmError};
+use cupboard_bmapi::{BmClient, BmError, DeleteOutcome, NewBmBan};
 use serde_json::json;
 use std::collections::HashSet;
 
@@ -213,4 +213,197 @@ async fn bans_include_resolves_numeric_ref() {
         Some(&("steamID".to_string(), "76561198000000007".to_string())),
         "numeric ref resolves to the included identifier",
     );
+}
+
+fn steam_identifier(value: &str) -> Vec<(String, String)> {
+    vec![("steamID".to_string(), value.to_string())]
+}
+
+#[tokio::test]
+async fn create_ban_happy_path() {
+    let stub =
+        StubBm::start(StubData::new("tok").with_ban_list(StubBanList::new("list-1", "Main"))).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    let identifiers = steam_identifier("76561198000000001");
+    let new_ban = NewBmBan {
+        org_id: "42",
+        ban_list_id: "list-1",
+        reason: Some("cheating"),
+        note: None,
+        expires: None,
+        identifiers: &identifiers,
+        org_wide: true,
+    };
+
+    let created = client.create_ban(&new_ban).await.expect("ban is created");
+    assert!(created.id.starts_with("srv-ban-"), "got id {}", created.id);
+    assert_eq!(created.rel_id("banList"), Some("list-1"));
+    assert_eq!(created.attributes.reason.as_deref(), Some("cheating"));
+    assert_eq!(created.attributes.org_wide, Some(true));
+
+    let reqs = stub.requests();
+    assert_eq!(reqs.len(), 1);
+    let body = reqs[0].body.as_ref().expect("POST body is recorded");
+    assert_eq!(
+        body["data"]["relationships"]["banList"]["data"]["id"],
+        "list-1"
+    );
+    assert_eq!(
+        body["data"]["attributes"]["identifiers"][0]["type"],
+        "steamID"
+    );
+    assert_eq!(body["data"]["attributes"]["identifiers"][0]["manual"], true);
+    assert_eq!(body["data"]["attributes"]["orgWide"], true);
+
+    let page = client
+        .list_page::<BanAttrs>(&client.bans_first_page("list-1"))
+        .await
+        .expect("list decodes");
+    assert!(
+        page.data.iter().any(|r| r.id == created.id),
+        "the new ban shows up on a subsequent list"
+    );
+}
+
+#[tokio::test]
+async fn delete_ban_removes_existing_and_reports_already_gone_for_missing() {
+    let ban = StubBan::new(
+        "list-1",
+        "ban-1",
+        "uid-1",
+        "2026-01-01T00:00:00Z",
+        "cheating",
+    );
+    let stub = StubBm::start(
+        StubData::new("tok")
+            .with_ban_list(StubBanList::new("list-1", "Main"))
+            .with_bans(vec![ban]),
+    )
+    .await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    let outcome = client.delete_ban("ban-1").await.expect("delete succeeds");
+    assert_eq!(outcome, DeleteOutcome::Deleted);
+
+    let page = client
+        .list_page::<BanAttrs>(&client.bans_first_page("list-1"))
+        .await
+        .expect("list decodes");
+    assert!(page.data.is_empty(), "deleted ban is gone from the list");
+
+    let outcome = client
+        .delete_ban("does-not-exist")
+        .await
+        .expect("404 converges with our intent");
+    assert_eq!(outcome, DeleteOutcome::AlreadyGone);
+}
+
+#[tokio::test]
+async fn expire_ban_now_updates_stored_expiry() {
+    let ban = StubBan::new(
+        "list-1",
+        "ban-1",
+        "uid-1",
+        "2026-01-01T00:00:00Z",
+        "cheating",
+    );
+    let stub = StubBm::start(
+        StubData::new("tok")
+            .with_ban_list(StubBanList::new("list-1", "Main"))
+            .with_bans(vec![ban]),
+    )
+    .await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    client
+        .expire_ban_now("ban-1")
+        .await
+        .expect("expire succeeds");
+
+    let page = client
+        .list_page::<BanAttrs>(&client.bans_first_page("list-1"))
+        .await
+        .expect("list decodes");
+    let updated = page
+        .data
+        .iter()
+        .find(|r| r.id == "ban-1")
+        .expect("ban is still present");
+    assert!(
+        updated.attributes.expires.is_some(),
+        "expires is set instead of permanent"
+    );
+}
+
+#[tokio::test]
+async fn create_ban_server_error_is_ambiguous_no_retry() {
+    let stub =
+        StubBm::start(StubData::new("tok").with_ban_list(StubBanList::new("list-1", "Main"))).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    stub.push_fault(Fault::Status(500));
+    let identifiers = steam_identifier("1");
+    let new_ban = NewBmBan {
+        org_id: "42",
+        ban_list_id: "list-1",
+        reason: Some("cheating"),
+        note: None,
+        expires: None,
+        identifiers: &identifiers,
+        org_wide: false,
+    };
+
+    let err = client
+        .create_ban(&new_ban)
+        .await
+        .expect_err("a 5xx on a mutation is ambiguous, not retried");
+    assert!(matches!(err, BmError::AmbiguousMutation(_)), "got {err:?}");
+    assert_eq!(stub.requests().len(), 1, "no retry on a mutation 5xx");
+}
+
+#[tokio::test]
+async fn create_ban_rate_limited_then_succeeds() {
+    let stub =
+        StubBm::start(StubData::new("tok").with_ban_list(StubBanList::new("list-1", "Main"))).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    stub.push_fault(Fault::RateLimited {
+        retry_after: Some(1),
+    });
+    let identifiers = steam_identifier("1");
+    let new_ban = NewBmBan {
+        org_id: "42",
+        ban_list_id: "list-1",
+        reason: Some("cheating"),
+        note: None,
+        expires: None,
+        identifiers: &identifiers,
+        org_wide: false,
+    };
+
+    let created = client
+        .create_ban(&new_ban)
+        .await
+        .expect("succeeds after honoring Retry-After");
+    assert!(created.id.starts_with("srv-ban-"));
+    assert_eq!(
+        stub.requests().len(),
+        2,
+        "one throttled attempt, then the retry"
+    );
+}
+
+#[tokio::test]
+async fn delete_ban_forbidden_is_the_delete_missing_signal() {
+    let stub =
+        StubBm::start(StubData::new("tok").with_ban_list(StubBanList::new("list-1", "Main"))).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    stub.push_fault(Fault::Status(403));
+    let err = client
+        .delete_ban("ban-1")
+        .await
+        .expect_err("403 is terminal, not treated as already-gone");
+    assert!(matches!(err, BmError::Forbidden(_)), "got {err:?}");
 }
