@@ -19,6 +19,9 @@ ALTER TABLE player_notes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY player_notes_isolation ON player_notes
     USING (tenant_id = current_setting('app.current_tenant', true)::uuid);
 
+-- NOTE: player_flags has no reader/writer yet. The staff flag CRUD + BM flag import that
+-- exercise (and validate) this schema land in PR6; the table ships here so that PR builds
+-- on a stable migration rather than adding one late.
 CREATE TABLE player_flags (
     id         uuid PRIMARY KEY DEFAULT uuidv7(),
     tenant_id  uuid NOT NULL,

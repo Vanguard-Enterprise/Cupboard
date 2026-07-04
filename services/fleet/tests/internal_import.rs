@@ -272,12 +272,14 @@ async fn reimport_does_not_clobber_enabled_or_rcon_credentials() {
     assert_eq!(res.status(), StatusCode::OK);
     let id = Uuid::parse_str(body_json(res).await["id"].as_str().unwrap()).unwrap();
 
-    // Simulate the tenant configuring real RCON credentials and enabling the server from
-    // the servers UI, exactly as `domain::servers::update` would leave the row.
+    // Simulate the tenant configuring the server from the servers UI: real RCON
+    // credentials, enabled, plus edits to the tenant-owned name and rcon_host (the UI often
+    // points rcon_host at a private RCON address different from BM's public game IP), exactly
+    // as `domain::servers::update` would leave the row.
     let fake_secret = vec![9u8; 16];
     sqlx::query(
-        "UPDATE servers SET enabled = true, rcon_password_enc = $2, rcon_password_dek = $2 \
-         WHERE id = $1",
+        "UPDATE servers SET enabled = true, rcon_password_enc = $2, rcon_password_dek = $2, \
+         name = 'Tenant Renamed', rcon_host = '10.9.9.9' WHERE id = $1",
     )
     .bind(id)
     .bind(&fake_secret)
@@ -285,11 +287,13 @@ async fn reimport_does_not_clobber_enabled_or_rcon_credentials() {
     .await
     .expect("simulate tenant configuration");
 
+    // Re-import with BM's (different) name and rcon_host: once the tenant adopted the row,
+    // neither must be clobbered.
     let second = serde_json::json!({
         "tenant_id": tenant,
         "external_id": external_id,
-        "name": "After Tenant Configures",
-        "rcon_host": "203.0.113.30",
+        "name": "BM Name After Config",
+        "rcon_host": "203.0.113.31",
     });
     let res = app
         .oneshot(import_request(second, Some(INTERNAL_TOKEN)))
@@ -300,20 +304,26 @@ async fn reimport_does_not_clobber_enabled_or_rcon_credentials() {
     #[derive(sqlx::FromRow)]
     struct Row {
         name: String,
+        rcon_host: String,
         enabled: bool,
         rcon_password_enc: Vec<u8>,
         rcon_password_dek: Vec<u8>,
     }
     let row: Row = sqlx::query_as(
-        "SELECT name, enabled, rcon_password_enc, rcon_password_dek FROM servers WHERE id = $1",
+        "SELECT name, rcon_host, enabled, rcon_password_enc, rcon_password_dek \
+         FROM servers WHERE id = $1",
     )
     .bind(id)
     .fetch_one(&owner)
     .await
     .expect("fetch row after reimport");
     assert_eq!(
-        row.name, "After Tenant Configures",
-        "re-import must still update the name"
+        row.name, "Tenant Renamed",
+        "re-import must not clobber a name the tenant edited after adopting the server"
+    );
+    assert_eq!(
+        row.rcon_host, "10.9.9.9",
+        "re-import must not clobber an rcon_host the tenant edited after adopting the server"
     );
     assert!(
         row.enabled,

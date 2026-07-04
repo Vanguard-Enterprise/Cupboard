@@ -134,10 +134,15 @@ pub async fn run(
         // during long imports.
         match bm::next_live_job(&pool, conn.id).await {
             Ok(Some(job)) => {
+                // Pass the freshly reloaded `current` row (not the claim-time `conn`) so
+                // import subset gates read live settings: an import-scope change applies to
+                // the next run within a tick, matching the UI's promise. The token fence
+                // still holds: the loop already broke above if the token rotated, so
+                // `current.token_enc == conn.token_enc` here.
                 let signal = super::import::execute_job(
                     &pool,
                     &client,
-                    &conn,
+                    &current,
                     job,
                     &pepper,
                     &lost,

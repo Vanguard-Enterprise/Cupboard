@@ -3,24 +3,54 @@
 //! each page so a crash or claim takeover loses at most one page of work (plan decision
 //! G). The servers/players/notes phases (PR4) are subset-gated by `conn.settings`.
 
-use super::fleet_client::{FleetClient, ImportedServer};
+use super::fleet_client::{FleetClient, FleetError, ImportedServer};
 use super::mapping;
-use crate::domain::bm::{self, BmConnection, ImportJob};
+use crate::domain::bm::{self, BmConnection, ImportJob, JobWrite};
 use crate::domain::ingest::resolve_or_create_player;
 use crate::error::AppError;
 use chrono::Utc;
 use cupboard_bmapi::types::{
-    included_identifier_map, BanAttrs, BanListAttrs, NoteAttrs, PlayerAttrs, ServerAttrs,
+    included_identifier_map, BanAttrs, BanListAttrs, NoteAttrs, PlayerAttrs, Resource, ServerAttrs,
 };
 use cupboard_bmapi::{BmClient, BmError};
 use cupboard_crypto::hmac_sha256;
 use std::sync::atomic::{AtomicBool, Ordering};
 use uuid::Uuid;
 
+/// Longest text the import writes into fleet (server names) or the shared global identity
+/// tables (player names): fleet caps names at 128 bytes, and the global name table is
+/// unbounded, so a tag-stuffed BM hostname must be truncated rather than wedging the job.
+const MAX_IMPORT_TEXT: usize = 128;
+
+/// Truncate `s` to at most `max` bytes on a char boundary (never mid-UTF-8).
+fn truncate_bytes(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Read a boolean import-subset toggle from `settings`, defaulting to on: a fresh
 /// connection with `{}` settings imports every phase.
 fn subset_enabled(settings: &serde_json::Value, key: &str) -> bool {
     settings.get(key).and_then(|v| v.as_bool()).unwrap_or(true)
+}
+
+/// One player's resolved `(kind, value)` identifiers paired with its BM resource, as the
+/// players phase orders and walks a page.
+type ResolvedPlayer<'a> = (Vec<(String, String)>, &'a Resource<PlayerAttrs>);
+
+/// The steam identifier value in a resolved `(kind, value)` list, if any (matching is
+/// steam-only today).
+fn steam_identifier(idents: &[(String, String)]) -> Option<&str> {
+    idents
+        .iter()
+        .find(|(kind, _)| kind == "steamID")
+        .map(|(_, value)| value.as_str())
 }
 
 /// Resumable position within a phase. `next_url` is BM's `links.next` verbatim;
@@ -63,6 +93,9 @@ enum ExecError {
     App(AppError),
     /// Another claimer took the connection; leave the job running for them.
     LostClaim,
+    /// The tenant paused or cancelled the job mid-slice: stop working it but KEEP the
+    /// claim, so inbound/outbound sync (and any next job) carry on for this connection.
+    JobGone,
 }
 
 /// What the runner should do after this job attempt.
@@ -110,6 +143,12 @@ pub async fn execute_job(
         Err(ExecError::LostClaim) => {
             tracing::info!(job = %job_id, "claim lost mid-import; new owner resumes from cursor");
             RunnerSignal::Stop
+        }
+        Err(ExecError::JobGone) => {
+            // The tenant paused or cancelled it: we still hold the lease, so keep it and
+            // let the runner drain the outbox / pick up sync work.
+            tracing::info!(job = %job_id, "import job paused or cancelled by tenant; keeping the claim");
+            RunnerSignal::Continue
         }
         Err(ExecError::Bm(e)) if e.is_auth() => {
             // Only fail things if the stored token is still the one we decrypted; a
@@ -197,8 +236,10 @@ async fn run_phases(
     claimer: &str,
     fleet: Option<&FleetClient>,
 ) -> Result<(), ExecError> {
-    if !bm::mark_job_running(pool, job.id, claimer).await? {
-        return Err(ExecError::LostClaim);
+    match bm::mark_job_running(pool, job.id, claimer).await? {
+        JobWrite::Applied => {}
+        JobWrite::NotRunnable => return Err(ExecError::JobGone),
+        JobWrite::LeaseLost => return Err(ExecError::LostClaim),
     }
     let mut phase = job.phase.clone();
     let mut cursor: Cursor = serde_json::from_value(job.cursor.clone()).unwrap_or_default();
@@ -249,16 +290,36 @@ async fn run_phases(
                         counts.inc("servers_skipped_incomplete");
                         continue;
                     };
-                    let local_id = fleet
+                    // Sanitize BM's server-controlled fields so one bad record can't 400 the
+                    // whole import: cap the name to fleet's 128-byte limit, and drop an
+                    // out-of-range query port (fleet rejects 0/>65535) rather than sending it.
+                    let name = truncate_bytes(name, MAX_IMPORT_TEXT);
+                    let query_port = a.port_query.filter(|p| (1..=65535).contains(p));
+                    let local_id = match fleet
                         .upsert_imported_server(&ImportedServer {
                             tenant_id: conn.tenant_id,
                             external_id: res.id.clone(),
                             name: name.to_string(),
                             rcon_host: ip.to_string(),
-                            query_port: a.port_query,
+                            query_port,
                         })
                         .await
-                        .map_err(|e| ExecError::App(AppError::Internal(e)))?;
+                    {
+                        Ok(id) => id,
+                        // A 4xx means this one server's payload is unusable: skip-and-count
+                        // it, never fail the job (bans/players/notes must still run).
+                        Err(FleetError::Rejected(msg)) => {
+                            tracing::warn!(external_id = %res.id, error = %msg,
+                                "fleet rejected an imported server; skipping it");
+                            counts.inc("servers_skipped_invalid");
+                            continue;
+                        }
+                        // A 5xx/transport error is transient: fail the job with the cursor
+                        // kept so a re-run resumes from this page.
+                        Err(FleetError::Transient(e)) => {
+                            return Err(ExecError::App(AppError::Internal(e)))
+                        }
+                    };
                     let meta = serde_json::json!({ "name": name, "ip": ip, "port": a.port });
                     upserted.push((res.id.clone(), local_id, meta));
                 }
@@ -297,15 +358,22 @@ async fn run_phases(
                 let doc = client.list_page::<PlayerAttrs>(&url).await?;
                 let ids_map = included_identifier_map(&doc.included);
 
+                // Resolve each player's identifiers once, then process the page in steam-id
+                // order. resolve_or_create_player locks the shared (global, un-tenanted)
+                // players/player_identifiers rows and the tx spans the whole page, so two
+                // import runners touching the same global player (a steam id shared across
+                // orgs) must take those row locks in ONE order or Postgres would abort one
+                // on a deadlock; a stable sort by steam id gives every runner that order.
+                let mut page: Vec<ResolvedPlayer> = doc
+                    .data
+                    .iter()
+                    .map(|res| (mapping::resolved_player_identifiers(res, &ids_map), res))
+                    .collect();
+                page.sort_by(|(a, _), (b, _)| steam_identifier(a).cmp(&steam_identifier(b)));
+
                 let mut tx = pool.begin().await?;
-                // Skip re-mapping a player already mapped THIS page (two BM players
-                // resolving to one Cupboard player would collide on the map's local_id
-                // unique index): keep the first, count the rest as matched.
-                let mut mapped_local = std::collections::HashSet::new();
-                for res in &doc.data {
-                    let idents = mapping::resolved_player_identifiers(res, &ids_map);
-                    let Some((_, steam_value)) = idents.iter().find(|(kind, _)| kind == "steamID")
-                    else {
+                for (idents, res) in &page {
+                    let Some(steam_value) = steam_identifier(idents) else {
                         // Unmatchable without a steam id: no map row, no graph writes.
                         counts.inc("players_skipped_no_steam");
                         continue;
@@ -316,6 +384,24 @@ async fn run_phases(
                         resolve_or_create_player(&mut tx, steam_value, &steam_hash, obs)
                             .await
                             .map_err(|e| ExecError::App(AppError::Internal(e)))?;
+
+                    // Cross-page/-run duplicate guard: a second BM record sharing this
+                    // player's steam id (BM merge leftovers) resolves to the same Cupboard
+                    // player, and mapping it again would collide on bm_sync_map's local_id
+                    // unique index, which map_upsert_err would misread as a lost claim and
+                    // wedge the import. Skip its mapping AND graph writes. The check runs in
+                    // this tx, so a mapping written earlier on THIS page counts too.
+                    if bm::player_mapped_to_other_external(
+                        &mut tx,
+                        conn.tenant_id,
+                        player_id,
+                        &res.id,
+                    )
+                    .await?
+                    {
+                        counts.inc("players_duplicate_steam");
+                        continue;
+                    }
                     counts.inc("players_matched");
 
                     if let Some(name) = res
@@ -325,35 +411,46 @@ async fn run_phases(
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
-                        bm::upsert_name_history(&mut tx, player_id, name, obs).await?;
+                        // Bound the name: it lands in the shared, unbounded global name table.
+                        bm::upsert_name_history(
+                            &mut tx,
+                            player_id,
+                            truncate_bytes(name, MAX_IMPORT_TEXT),
+                            obs,
+                        )
+                        .await?;
                     }
-                    for (kind, value) in &idents {
+                    let mut wrote_ip = false;
+                    for (kind, value) in idents {
                         if kind == "ip" && !value.is_empty() {
                             let hash = hmac_sha256(value.as_bytes(), pepper).to_vec();
                             bm::upsert_ip_signal(&mut tx, player_id, value, &hash, obs).await?;
+                            wrote_ip = true;
                         }
+                    }
+                    // Compute alt-links from the imported IP evidence, exactly as native
+                    // ingest does after a signal write; otherwise a shared IP established
+                    // purely by import stays invisible until the player is next seen live.
+                    // (No check_evasion here: importing history must not raise live-connect
+                    // evasion alerts.)
+                    if wrote_ip {
+                        crate::domain::links::evaluate_links(&mut tx, player_id, obs)
+                            .await
+                            .map_err(|e| ExecError::App(AppError::Internal(e)))?;
                     }
 
                     // eos/beguid/others never become graph rows (matching is steam-only
                     // today); they ride the map meta so nothing is lost.
-                    if mapped_local.insert(player_id) {
-                        let meta = serde_json::json!({
-                            "name": res.attributes.name,
-                            "identifiers": idents
-                                .iter()
-                                .map(|(kind, value)| serde_json::json!({ "type": kind, "value": value }))
-                                .collect::<Vec<_>>(),
-                        });
-                        bm::upsert_player_mapping(
-                            &mut tx,
-                            conn.tenant_id,
-                            &res.id,
-                            player_id,
-                            &meta,
-                        )
+                    let meta = serde_json::json!({
+                        "name": res.attributes.name,
+                        "identifiers": idents
+                            .iter()
+                            .map(|(kind, value)| serde_json::json!({ "type": kind, "value": value }))
+                            .collect::<Vec<_>>(),
+                    });
+                    bm::upsert_player_mapping(&mut tx, conn.tenant_id, &res.id, player_id, &meta)
                         .await
                         .map_err(map_upsert_err)?;
-                    }
                 }
                 cursor.next_url = doc.links.next.clone();
                 if cursor.next_url.is_none() {
@@ -373,8 +470,10 @@ async fn run_phases(
                     continue;
                 }
                 // Keyset over player map rows by external id: cursor.sub_id is the last
-                // player processed, never the full id set. One player per slice budget
-                // page, however many BM note pages that player has.
+                // player fully processed. cursor.next_url is the current player's next BM
+                // note page (None = start that player from page 1). ONE BM note page per tx
+                // (plan decision G), so a deep-page BM error loses at most one page and each
+                // page counts against the slice budget, keeping the outbox airtime bound.
                 let next =
                     bm::mapped_player_page(pool, conn.tenant_id, cursor.sub_id.as_deref(), 1)
                         .await?;
@@ -383,25 +482,16 @@ async fn run_phases(
                     continue;
                 };
 
-                // Fetch every note page for this player (HTTP outside the tx), then apply
-                // them in one tx alongside the cursor advance.
-                let mut url = client.player_notes_first_page(&external_id);
-                let mut fetched: Vec<(String, Option<String>, chrono::DateTime<Utc>)> = Vec::new();
-                loop {
-                    let doc = client.list_page::<NoteAttrs>(&url).await?;
-                    for res in &doc.data {
-                        let created = res.attributes.created_at.unwrap_or_else(Utc::now);
-                        fetched.push((res.id.clone(), res.attributes.note.clone(), created));
-                    }
-                    match doc.links.next.clone() {
-                        Some(n) => url = n,
-                        None => break,
-                    }
-                }
+                let url = cursor
+                    .next_url
+                    .clone()
+                    .unwrap_or_else(|| client.player_notes_first_page(&external_id));
+                let doc = client.list_page::<NoteAttrs>(&url).await?;
 
                 let mut tx = pool.begin().await?;
-                for (note_ext, body, created) in &fetched {
-                    let body = body.as_deref().map(str::trim).unwrap_or("");
+                for res in &doc.data {
+                    let created = res.attributes.created_at.unwrap_or_else(Utc::now);
+                    let body = res.attributes.note.as_deref().map(str::trim).unwrap_or("");
                     if body.is_empty() {
                         counts.inc("notes_skipped_empty");
                         continue;
@@ -410,9 +500,9 @@ async fn run_phases(
                         &mut tx,
                         conn.tenant_id,
                         player_id,
-                        note_ext,
+                        &res.id,
                         body,
-                        *created,
+                        created,
                     )
                     .await
                     .map_err(map_upsert_err)?
@@ -420,7 +510,15 @@ async fn run_phases(
                         counts.inc("notes_imported");
                     }
                 }
-                cursor.sub_id = Some(external_id);
+                match doc.links.next.clone() {
+                    // More note pages for this player: stay on it, resume from the next page.
+                    Some(n) => cursor.next_url = Some(n),
+                    // This player is done: advance the keyset to the next player.
+                    None => {
+                        cursor.sub_id = Some(external_id);
+                        cursor.next_url = None;
+                    }
+                }
                 save(&mut tx, job.id, &phase, &cursor, &counts, claimer).await?;
                 tx.commit().await?;
                 pages += 1;
@@ -512,8 +610,10 @@ async fn run_phases(
                 let mut tx = pool.begin().await?;
                 save(&mut tx, job.id, "done", &cursor, &counts, claimer).await?;
                 tx.commit().await?;
-                if !bm::finish_job(pool, job.id, "completed", None, claimer).await? {
-                    return Err(ExecError::LostClaim);
+                match bm::finish_job(pool, job.id, "completed", None, claimer).await? {
+                    JobWrite::Applied => {}
+                    JobWrite::NotRunnable => return Err(ExecError::JobGone),
+                    JobWrite::LeaseLost => return Err(ExecError::LostClaim),
                 }
                 tracing::info!(job = %job.id, tenant = %conn.tenant_id, counts = %counts.value(),
                     "BM import completed");
@@ -533,12 +633,13 @@ async fn save(
 ) -> Result<(), ExecError> {
     let cursor_v =
         serde_json::to_value(cursor).map_err(|e| ExecError::App(AppError::Internal(e.into())))?;
-    // A fence miss means the lease moved: error out BEFORE the caller commits, so the
-    // whole page rolls back instead of racing the new owner's writes.
-    if !bm::save_job_progress(tx, job_id, phase, &cursor_v, &counts.value(), claimer).await? {
-        return Err(ExecError::LostClaim);
+    // Error out BEFORE the caller commits, so the whole page rolls back instead of racing
+    // the new owner (lease moved) or persisting into a job the tenant just paused/cancelled.
+    match bm::save_job_progress(tx, job_id, phase, &cursor_v, &counts.value(), claimer).await? {
+        JobWrite::Applied => Ok(()),
+        JobWrite::NotRunnable => Err(ExecError::JobGone),
+        JobWrite::LeaseLost => Err(ExecError::LostClaim),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -599,6 +700,14 @@ mod e2e_tests {
                             .as_str()
                             .unwrap_or_default()
                             .to_string();
+                        // Sentinel for the 4xx-skip test: fleet rejects this one server.
+                        if ext.starts_with("reject-4xx") {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                axum::Json(serde_json::json!({ "error": "bad server" })),
+                            )
+                                .into_response();
+                        }
                         calls.lock().unwrap().push(body.0);
                         let id = *ids.lock().unwrap().entry(ext).or_insert_with(Uuid::new_v4);
                         axum::Json(serde_json::json!({ "id": id })).into_response()
@@ -1102,7 +1211,7 @@ mod e2e_tests {
             .collect();
         assert!(kinds.contains(&"eosID".to_string()), "eos rides the meta");
 
-        // Re-run: resolve reuses, UNIQUEs dedup — no new rows anywhere.
+        // Re-run: resolve reuses, UNIQUEs dedup, no new rows anywhere.
         bmdom::enqueue_import(&pool, tenant, Uuid::new_v4())
             .await
             .expect("re-enqueue");
@@ -1399,5 +1508,395 @@ mod e2e_tests {
         assert_eq!(map_count(&pool, tenant, "player").await, 1);
         assert_eq!(ban_count(&pool, tenant).await, 1);
         assert_eq!(bm_notes_count(&pool, tenant).await, 1);
+    }
+
+    #[tokio::test]
+    async fn native_recency_and_signal_count_survive_import() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP native_recency_and_signal_count_survive_import: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let steam = uniq_steam();
+        let ip = "203.0.113.77";
+        let stub = StubBm::start(StubData::new(TOKEN).with_players(vec![
+            // BM's createdAt is years in the past; it must never rewind live recency.
+            StubPlayer::new("rp-1", "OldTimer")
+                .created_at("2020-01-01T00:00:00Z")
+                .identifier("steamID", &steam)
+                .identifier("ip", ip),
+        ]))
+        .await;
+        let client = cupboard_bmapi::BmClient::new(stub.base_url(), TOKEN);
+        let tenant = TenantId(Uuid::new_v4());
+        let (conn, job) = seed_job(&pool, tenant).await;
+
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            None,
+        )
+        .await;
+
+        let player_id: Uuid = sqlx::query_scalar(
+            "SELECT player_id FROM player_identifiers WHERE type='steam' AND value=$1",
+        )
+        .bind(&steam)
+        .fetch_one(&pool)
+        .await
+        .expect("player created");
+
+        // Simulate live native activity AFTER the import: recency advances, sightings accrue.
+        sqlx::query("UPDATE players SET last_seen_at = now() WHERE id = $1")
+            .bind(player_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE identity_signals SET last_seen_at = now(), sighting_count = 5 \
+             WHERE player_id = $1 AND type = 'ip'",
+        )
+        .bind(player_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Re-import the same player (BM createdAt still 2020): must not rewind recency, and
+        // must not count the re-import as a sighting.
+        bmdom::enqueue_import(&pool, tenant, Uuid::new_v4())
+            .await
+            .expect("re-enqueue");
+        let rerun = bmdom::next_live_job(&pool, conn.id)
+            .await
+            .unwrap()
+            .expect("second job");
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            rerun,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            None,
+        )
+        .await;
+
+        let (last_seen_recent, sightings): (bool, i32) = sqlx::query_as(
+            "SELECT (p.last_seen_at > now() - interval '1 hour'), s.sighting_count::int4 \
+             FROM players p JOIN identity_signals s \
+               ON s.player_id = p.id AND s.type = 'ip' \
+             WHERE p.id = $1",
+        )
+        .bind(player_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            last_seen_recent,
+            "import must not rewind players.last_seen_at to BM's historical createdAt"
+        );
+        assert_eq!(
+            sightings, 5,
+            "re-import must not bump sighting_count (an import is not a sighting)"
+        );
+    }
+
+    #[tokio::test]
+    async fn players_phase_skips_cross_run_duplicate_steam() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP players_phase_skips_cross_run_duplicate_steam: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let steam = uniq_steam();
+        let tenant = TenantId(Uuid::new_v4());
+        let (conn, _) = seed_job(&pool, tenant).await;
+
+        // Run 1: only dup-1 exists on BM, so it maps to a fresh Cupboard player.
+        let stub1 = StubBm::start(StubData::new(TOKEN).with_players(vec![
+            StubPlayer::new("dup-1", "First").identifier("steamID", &steam),
+        ]))
+        .await;
+        let client1 = cupboard_bmapi::BmClient::new(stub1.base_url(), TOKEN);
+        let job1 = bmdom::next_live_job(&pool, conn.id)
+            .await
+            .unwrap()
+            .expect("first job");
+        execute_job(
+            &pool,
+            &client1,
+            &conn,
+            job1,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            None,
+        )
+        .await;
+        assert_eq!(map_count(&pool, tenant, "player").await, 1);
+
+        // Run 2: a SECOND BM record now shares dup-1's steam id (a BM merge leftover). The
+        // committed dup-1 mapping must make dup-2 a counted duplicate, not a job-wedging
+        // unique-index violation misread as a lost claim.
+        let stub2 = StubBm::start(StubData::new(TOKEN).with_players(vec![
+            StubPlayer::new("dup-1", "First").identifier("steamID", &steam),
+            StubPlayer::new("dup-2", "Second").identifier("steamID", &steam),
+        ]))
+        .await;
+        let client2 = cupboard_bmapi::BmClient::new(stub2.base_url(), TOKEN);
+        bmdom::enqueue_import(&pool, tenant, Uuid::new_v4())
+            .await
+            .expect("re-enqueue");
+        let job2 = bmdom::next_live_job(&pool, conn.id)
+            .await
+            .unwrap()
+            .expect("second job");
+        let job2_id = job2.id;
+        execute_job(
+            &pool,
+            &client2,
+            &conn,
+            job2,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            None,
+        )
+        .await;
+
+        let (status, phase, counts) = job_row(&pool, job2_id).await;
+        assert_eq!(
+            (status.as_str(), phase.as_str()),
+            ("completed", "done"),
+            "a duplicate steam id must not wedge the job"
+        );
+        assert_eq!(counts["players_duplicate_steam"], 1, "counts: {counts}");
+        assert_eq!(
+            map_count(&pool, tenant, "player").await,
+            1,
+            "the duplicate BM record gets no second map row"
+        );
+    }
+
+    #[tokio::test]
+    async fn servers_phase_sanitizes_long_name_and_bad_port() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP servers_phase_sanitizes_long_name_and_bad_port: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let stub = StubBm::start(StubData::new(TOKEN).with_servers(vec![
+                StubServer::new("bs-long", "N".repeat(200))
+                    .ip("10.0.0.9")
+                    .port_query(28017),
+                StubServer::new("bs-badport", "Shorty")
+                    .ip("10.0.0.10")
+                    .port_query(99999),
+            ]))
+        .await;
+        let client = cupboard_bmapi::BmClient::new(stub.base_url(), TOKEN);
+        let fleet_stub = stub_fleet().await;
+        let fleet = fleet_client(&fleet_stub);
+        let tenant = TenantId(Uuid::new_v4());
+        let (conn, job) = seed_job(&pool, tenant).await;
+        let job_id = job.id;
+
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            Some(&fleet),
+        )
+        .await;
+
+        // A 200-char name and an out-of-range query port must be sanitized, not fatal: both
+        // servers import and the pipeline reaches 'done'.
+        let (status, phase, counts) = job_row(&pool, job_id).await;
+        assert_eq!((status.as_str(), phase.as_str()), ("completed", "done"));
+        assert_eq!(counts["servers_imported"], 2, "counts: {counts}");
+        let calls = fleet_stub.calls.lock().unwrap().clone();
+        let long = calls
+            .iter()
+            .find(|c| c["external_id"] == "bs-long")
+            .expect("long-named server sent");
+        assert!(
+            long["name"].as_str().unwrap().len() <= 128,
+            "the over-long name is truncated to fleet's 128-byte limit"
+        );
+        let bad = calls
+            .iter()
+            .find(|c| c["external_id"] == "bs-badport")
+            .expect("bad-port server sent");
+        assert!(
+            bad["query_port"].is_null(),
+            "the out-of-range query port is nulled out, not sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn servers_phase_skips_fleet_4xx_as_counted_skip() {
+        let Some(pool) = setup().await else {
+            eprintln!(
+                "SKIP servers_phase_skips_fleet_4xx_as_counted_skip: TEST_DATABASE_URL unset"
+            );
+            return;
+        };
+        let stub = StubBm::start(StubData::new(TOKEN).with_servers(vec![
+                StubServer::new("ok-1", "Good").ip("10.0.0.1").port_query(28017),
+                StubServer::new("reject-4xx-1", "Bad").ip("10.0.0.2").port_query(28017),
+            ]))
+        .await;
+        let client = cupboard_bmapi::BmClient::new(stub.base_url(), TOKEN);
+        let fleet_stub = stub_fleet().await;
+        let fleet = fleet_client(&fleet_stub);
+        let tenant = TenantId(Uuid::new_v4());
+        let (conn, job) = seed_job(&pool, tenant).await;
+        let job_id = job.id;
+
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            Some(&fleet),
+        )
+        .await;
+
+        // A fleet 4xx on one server is a counted skip, never a job failure: the other
+        // server still imports and the job completes.
+        let (status, phase, counts) = job_row(&pool, job_id).await;
+        assert_eq!((status.as_str(), phase.as_str()), ("completed", "done"));
+        assert_eq!(counts["servers_imported"], 1, "counts: {counts}");
+        assert_eq!(counts["servers_skipped_invalid"], 1, "counts: {counts}");
+        assert_eq!(map_count(&pool, tenant, "server").await, 1);
+    }
+
+    #[tokio::test]
+    async fn imported_shared_ip_forms_a_link() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP imported_shared_ip_forms_a_link: TEST_DATABASE_URL unset");
+            return;
+        };
+        let ip = "203.0.113.88";
+        let (s1, s2) = (uniq_steam(), uniq_steam());
+        let stub = StubBm::start(StubData::new(TOKEN).with_players(vec![
+            StubPlayer::new("lp-1", "A").identifier("steamID", &s1).identifier("ip", ip),
+            StubPlayer::new("lp-2", "B").identifier("steamID", &s2).identifier("ip", ip),
+        ]))
+        .await;
+        let client = cupboard_bmapi::BmClient::new(stub.base_url(), TOKEN);
+        let tenant = TenantId(Uuid::new_v4());
+        let (conn, job) = seed_job(&pool, tenant).await;
+
+        execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            None,
+        )
+        .await;
+
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT player_id FROM player_identifiers WHERE type='steam' AND value = ANY($1)",
+        )
+        .bind(vec![s1.clone(), s2.clone()])
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ids.len(), 2, "both imported players exist");
+        let (lo, hi) = if ids[0] < ids[1] {
+            (ids[0], ids[1])
+        } else {
+            (ids[1], ids[0])
+        };
+        let links: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_links WHERE player_a = $1 AND player_b = $2",
+        )
+        .bind(lo)
+        .bind(hi)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            links, 1,
+            "an IP shared purely through import must still form an alt link"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_keeps_claim_and_imports_nothing() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP cancel_keeps_claim_and_imports_nothing: TEST_DATABASE_URL unset");
+            return;
+        };
+        let stub = StubBm::start(stub_data(5)).await;
+        let client = cupboard_bmapi::BmClient::new(stub.base_url(), TOKEN);
+        let tenant = TenantId(Uuid::new_v4());
+        let (conn, job) = seed_job(&pool, tenant).await;
+        let job_id = job.id;
+
+        // The tenant cancels between claim and the runner marking the job running.
+        sqlx::query(
+            "UPDATE bm_import_jobs SET status = 'cancelled', finished_at = now() WHERE id = $1",
+        )
+        .bind(job_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let signal = execute_job(
+            &pool,
+            &client,
+            &conn,
+            job,
+            PEPPER,
+            &AtomicBool::new(false),
+            CLAIMER,
+            None,
+        )
+        .await;
+
+        assert!(
+            matches!(signal, RunnerSignal::Continue),
+            "a tenant cancel must not be misread as a lost claim (which would Stop the runner)"
+        );
+        assert_eq!(
+            ban_count(&pool, tenant).await,
+            0,
+            "a cancelled job imports nothing"
+        );
+        let (status, _, _) = job_row(&pool, job_id).await;
+        assert_eq!(status, "cancelled", "the job stays cancelled");
+        let claimed: Option<String> =
+            sqlx::query_scalar("SELECT claimed_by FROM bm_connections WHERE id = $1")
+                .bind(conn.id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            claimed.as_deref(),
+            Some(CLAIMER),
+            "the connection stays claimed so inbound/outbound sync continue"
+        );
     }
 }

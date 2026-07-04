@@ -382,8 +382,12 @@ pub(crate) async fn resolve_or_create_player(
     .await?;
 
     if let Some(id) = existing {
+        // `last_seen_at` only moves forward (`GREATEST`): native ingest passes a
+        // monotonically-current `obs` (a no-op), but the BM import passes a player's
+        // historical `createdAt`, which must never rewind a recency the live graph already
+        // advanced. `first_seen_at` keeps its earliest non-null value.
         sqlx::query(
-            "UPDATE players SET last_seen_at = $2, \
+            "UPDATE players SET last_seen_at = GREATEST(last_seen_at, $2), \
              first_seen_at = COALESCE(first_seen_at, $2), updated_at = now() WHERE id = $1",
         )
         .bind(id)
@@ -404,7 +408,8 @@ pub(crate) async fn resolve_or_create_player(
     let claimed: Uuid = sqlx::query_scalar(
         "INSERT INTO player_identifiers (player_id, type, value, value_hash, first_seen_at, last_seen_at) \
          VALUES ($1, 'steam', $2, $3, $4, $4) \
-         ON CONFLICT (type, value_hash) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at \
+         ON CONFLICT (type, value_hash) DO UPDATE SET \
+           last_seen_at = GREATEST(player_identifiers.last_seen_at, EXCLUDED.last_seen_at) \
          RETURNING player_id",
     )
     .bind(fresh)

@@ -385,11 +385,49 @@ pub async fn next_live_job(
 const JOB_CLAIM_FENCE: &str = "connection_id IN \
      (SELECT id FROM bm_connections WHERE claimed_by = $CLAIMER)";
 
+/// Outcome of a fenced, status-guarded job-status write. A bare `false` conflated two very
+/// different misses; splitting them lets the runner KEEP the lease when the tenant merely
+/// paused or cancelled the job, instead of dropping it (and halting sync) as if the lease
+/// had been taken over.
+#[derive(Debug, PartialEq, Eq)]
+pub enum JobWrite {
+    /// The row moved to the requested state.
+    Applied,
+    /// We still hold the lease, but the job left the runnable set (the tenant paused or
+    /// cancelled it): stop working the job, keep the claim.
+    NotRunnable,
+    /// The lease was taken over (fence miss): stop the runner so a fresh claim resumes.
+    LeaseLost,
+}
+
+/// Classify a 0-row job write on the owner pool: if the job's connection is still leased to
+/// `claimer` the miss came from the status guard (paused/cancelled), otherwise the lease
+/// moved. Jobs are never deleted, so a missing row can only mean the fence no longer holds.
+async fn classify_job_miss(
+    owner_pool: &PgPool,
+    job_id: Uuid,
+    claimer: &str,
+) -> Result<JobWrite, AppError> {
+    let held: Option<i32> = sqlx::query_scalar(&format!(
+        "SELECT 1 FROM bm_import_jobs WHERE id = $1 AND {}",
+        JOB_CLAIM_FENCE.replace("$CLAIMER", "$2")
+    ))
+    .bind(job_id)
+    .bind(claimer)
+    .fetch_optional(owner_pool)
+    .await?;
+    Ok(if held.is_some() {
+        JobWrite::NotRunnable
+    } else {
+        JobWrite::LeaseLost
+    })
+}
+
 pub async fn mark_job_running(
     owner_pool: &PgPool,
     job_id: Uuid,
     claimer: &str,
-) -> Result<bool, AppError> {
+) -> Result<JobWrite, AppError> {
     // The status guard keeps a racing runner from resurrecting a job the tenant just
     // paused or cancelled.
     let res = sqlx::query(&format!(
@@ -402,7 +440,10 @@ pub async fn mark_job_running(
     .bind(claimer)
     .execute(owner_pool)
     .await?;
-    Ok(res.rows_affected() == 1)
+    if res.rows_affected() == 1 {
+        return Ok(JobWrite::Applied);
+    }
+    classify_job_miss(owner_pool, job_id, claimer).await
 }
 
 pub async fn finish_job(
@@ -411,7 +452,7 @@ pub async fn finish_job(
     status: &str,
     error: Option<&str>,
     claimer: &str,
-) -> Result<bool, AppError> {
+) -> Result<JobWrite, AppError> {
     // The status guard keeps a completing runner from overwriting a tenant's
     // pause/cancel that landed during the final pages.
     let res = sqlx::query(&format!(
@@ -426,12 +467,19 @@ pub async fn finish_job(
     .bind(claimer)
     .execute(owner_pool)
     .await?;
-    Ok(res.rows_affected() == 1)
+    if res.rows_affected() == 1 {
+        return Ok(JobWrite::Applied);
+    }
+    classify_job_miss(owner_pool, job_id, claimer).await
 }
 
 /// Persist a page's progress inside that page's tx: phase, cursor, and counts move
-/// together with the rows they describe, so a crash never double-imports a page.
-/// `false` = the lease was taken over; the caller must roll the page back.
+/// together with the rows they describe, so a crash never double-imports a page. The same
+/// status guard as `mark_job_running`/`finish_job` fences it, so a tenant pause/cancel
+/// landing mid-slice stops the in-flight page from committing (it rolls back) instead of
+/// letting the runner keep importing into a cancelled job. `NotRunnable` = the tenant
+/// paused/cancelled (keep the claim); `LeaseLost` = the lease moved (both roll the page
+/// back).
 pub async fn save_job_progress(
     tx: &mut Transaction<'_, Postgres>,
     job_id: Uuid,
@@ -439,10 +487,10 @@ pub async fn save_job_progress(
     cursor: &serde_json::Value,
     phase_counts: &serde_json::Value,
     claimer: &str,
-) -> Result<bool, AppError> {
+) -> Result<JobWrite, AppError> {
     let res = sqlx::query(&format!(
         "UPDATE bm_import_jobs SET phase = $2, cursor = $3, phase_counts = $4 \
-         WHERE id = $1 AND {}",
+         WHERE id = $1 AND status IN ('queued', 'running') AND {}",
         JOB_CLAIM_FENCE.replace("$CLAIMER", "$5")
     ))
     .bind(job_id)
@@ -452,7 +500,24 @@ pub async fn save_job_progress(
     .bind(claimer)
     .execute(&mut **tx)
     .await?;
-    Ok(res.rows_affected() == 1)
+    if res.rows_affected() == 1 {
+        return Ok(JobWrite::Applied);
+    }
+    // Distinguish a tenant pause/cancel (lease still ours) from a takeover, probing within
+    // the same tx so the classification is consistent with the write it just attempted.
+    let held: Option<i32> = sqlx::query_scalar(&format!(
+        "SELECT 1 FROM bm_import_jobs WHERE id = $1 AND {}",
+        JOB_CLAIM_FENCE.replace("$CLAIMER", "$2")
+    ))
+    .bind(job_id)
+    .bind(claimer)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(if held.is_some() {
+        JobWrite::NotRunnable
+    } else {
+        JobWrite::LeaseLost
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -621,7 +686,12 @@ pub async fn upsert_name_history(
 }
 
 /// Record an observed IP as an identity signal (same shape native ingest writes), so
-/// imported players feed link detection exactly like natively-seen ones.
+/// imported players feed link detection exactly like natively-seen ones. Unlike native
+/// ingest this must NOT count as a sighting: re-importing the same BM record is not a new
+/// observation, so `sighting_count` is only ever the initial 1 (matching native's first
+/// insert) and never incremented on conflict. `last_seen_at` only moves forward
+/// (`GREATEST`), so importing a player's historical `createdAt` can't rewind a recency the
+/// native graph already advanced; `first_seen_at` is preserved.
 pub async fn upsert_ip_signal(
     tx: &mut Transaction<'_, Postgres>,
     player_id: Uuid,
@@ -634,7 +704,7 @@ pub async fn upsert_ip_signal(
            (player_id, type, value, value_hash, sighting_count, first_seen_at, last_seen_at) \
          VALUES ($1, 'ip', $2, $3, 1, $4, $4) \
          ON CONFLICT (player_id, type, value_hash) DO UPDATE SET \
-           sighting_count = identity_signals.sighting_count + 1, last_seen_at = $4",
+           last_seen_at = GREATEST(identity_signals.last_seen_at, EXCLUDED.last_seen_at)",
     )
     .bind(player_id)
     .bind(value)
@@ -643,6 +713,32 @@ pub async fn upsert_ip_signal(
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// Whether Cupboard player `local_id` is already mapped to a BM player OTHER than
+/// `external_id` for this tenant. Two BM player records that share a steam id (BM merge
+/// leftovers) resolve to one Cupboard player; mapping the second would collide on
+/// `bm_sync_map`'s `UNIQUE (tenant_id, entity_type, local_id)`, which `map_upsert_err`
+/// would misread as a lost claim and wedge the import. The caller skips such a player.
+/// Runs inside the page tx (indexed by the same unique key), so a mapping written earlier
+/// in the same page but not yet committed counts too: cross-page AND same-page safe.
+pub async fn player_mapped_to_other_external(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    local_id: Uuid,
+    external_id: &str,
+) -> Result<bool, AppError> {
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT external_id FROM bm_sync_map \
+         WHERE tenant_id = $1 AND entity_type = 'player' AND local_id = $2 \
+           AND external_id <> $3 LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(local_id)
+    .bind(external_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(existing.is_some())
 }
 
 /// Insert an imported note, guarded by a `note` sync-map row so a re-scan never
@@ -2028,9 +2124,10 @@ mod tests {
         let paused = control_job(&pool, tenant, actor, "pause").await.unwrap();
         assert_eq!(paused.status, "paused");
         assert!(next_live_job(&pool, view.id).await.unwrap().is_none());
-        assert!(
-            !mark_job_running(&pool, job.id, "ctrl-a").await.unwrap(),
-            "a runner must not resurrect a paused job"
+        assert_eq!(
+            mark_job_running(&pool, job.id, "ctrl-a").await.unwrap(),
+            JobWrite::NotRunnable,
+            "a runner must not resurrect a paused job, but the lease stays ours"
         );
 
         // Resume re-queues; cancel is terminal and wins over a completing runner.
@@ -2052,11 +2149,12 @@ mod tests {
             control_job(&pool, tenant, actor, "resume").await.is_err(),
             "cancel is terminal"
         );
-        assert!(
-            !finish_job(&pool, job.id, "completed", None, "ctrl-a")
+        assert_eq!(
+            finish_job(&pool, job.id, "completed", None, "ctrl-a")
                 .await
                 .unwrap(),
-            "a completing runner must not overwrite a cancel"
+            JobWrite::NotRunnable,
+            "a completing runner must not overwrite a cancel, but the lease stays ours"
         );
         let status: String = sqlx::query_scalar("SELECT status FROM bm_import_jobs WHERE id = $1")
             .bind(job.id)
@@ -2085,36 +2183,46 @@ mod tests {
             .await
             .expect("enqueue");
 
-        assert!(
-            !mark_job_running(&pool, job.id, "fence-b").await.unwrap(),
+        assert_eq!(
+            mark_job_running(&pool, job.id, "fence-b").await.unwrap(),
+            JobWrite::LeaseLost,
             "a non-holder must not flip the job running"
         );
-        assert!(mark_job_running(&pool, job.id, "fence-a").await.unwrap());
+        assert_eq!(
+            mark_job_running(&pool, job.id, "fence-a").await.unwrap(),
+            JobWrite::Applied
+        );
 
         let mut tx = pool.begin().await.unwrap();
         let cursor = serde_json::json!({});
-        assert!(
-            !save_job_progress(&mut tx, job.id, "bans", &cursor, &cursor, "fence-b")
+        assert_eq!(
+            save_job_progress(&mut tx, job.id, "bans", &cursor, &cursor, "fence-b")
                 .await
                 .unwrap(),
+            JobWrite::LeaseLost,
             "a non-holder must not move the cursor"
         );
-        assert!(
+        assert_eq!(
             save_job_progress(&mut tx, job.id, "bans", &cursor, &cursor, "fence-a")
                 .await
-                .unwrap()
+                .unwrap(),
+            JobWrite::Applied
         );
         tx.commit().await.unwrap();
 
-        assert!(
-            !finish_job(&pool, job.id, "failed", Some("x"), "fence-b")
+        assert_eq!(
+            finish_job(&pool, job.id, "failed", Some("x"), "fence-b")
                 .await
                 .unwrap(),
+            JobWrite::LeaseLost,
             "a non-holder must not fail the job"
         );
-        assert!(finish_job(&pool, job.id, "completed", None, "fence-a")
-            .await
-            .unwrap());
+        assert_eq!(
+            finish_job(&pool, job.id, "completed", None, "fence-a")
+                .await
+                .unwrap(),
+            JobWrite::Applied
+        );
     }
 
     #[tokio::test]
