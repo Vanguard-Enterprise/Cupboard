@@ -1115,8 +1115,18 @@ pub async fn update_sync_settings(
         settings["target_ban_list"] = serde_json::json!(list);
     }
 
-    let sync_enabled = changes.sync_enabled.unwrap_or(cur_enabled);
-    let outbound = changes.sync_bans_outbound.unwrap_or(cur_outbound);
+    let mut sync_enabled = changes.sync_enabled.unwrap_or(cur_enabled);
+    let mut outbound = changes.sync_bans_outbound.unwrap_or(cur_outbound);
+    // Invariant: outbound implies sync_enabled (the runner, claim, and enqueue paths
+    // all key on sync_enabled; outbound without it would queue ops nothing drains).
+    // Enabling outbound switches sync on; disabling sync switches outbound off.
+    if outbound && !sync_enabled {
+        if changes.sync_bans_outbound == Some(true) {
+            sync_enabled = true;
+        } else {
+            outbound = false;
+        }
+    }
     if outbound {
         let has_target = settings
             .get("target_ban_list")
@@ -1239,14 +1249,64 @@ async fn outbound_enabled(
     tx: &mut Transaction<'_, Postgres>,
     tenant: TenantId,
 ) -> Result<bool, AppError> {
+    // FOR SHARE serializes against update_sync_settings' FOR UPDATE: a ban created
+    // concurrently with enable-outbound-plus-backfill either blocks until the toggle
+    // commits (and enqueues itself) or commits first (and the backfill picks it up).
+    // A plain read could thread between the backfill snapshot and the toggle commit,
+    // silently losing the ban from both paths.
     let on: Option<bool> = sqlx::query_scalar(
         "SELECT sync_bans_outbound FROM bm_connections \
-         WHERE tenant_id = $1 AND sync_enabled AND status = 'connected'",
+         WHERE tenant_id = $1 AND sync_enabled AND status = 'connected' FOR SHARE",
     )
     .bind(tenant.0)
     .fetch_optional(&mut **tx)
     .await?;
     Ok(on.unwrap_or(false))
+}
+
+/// The not-yet-settled create op for a ban, if any (a revoke must supersede it; see
+/// the drain's ordering discipline).
+pub async fn unsettled_create_for(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    local_id: Uuid,
+) -> Result<Option<OutboxOp>, AppError> {
+    let op = sqlx::query_as::<_, OutboxOp>(
+        "SELECT id, local_id, op, payload, status, attempts FROM bm_outbox \
+         WHERE tenant_id = $1 AND local_id = $2 AND op = 'create' \
+           AND status IN ('pending', 'inflight', 'needs_verify') \
+         ORDER BY created_at ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(local_id)
+    .fetch_optional(owner_pool)
+    .await?;
+    Ok(op)
+}
+
+/// External ids among `candidates` that are already mapped to a DIFFERENT local ban
+/// (the verify pass must never adopt those: it would violate the map's uniqueness and
+/// wedge the op).
+pub async fn externally_mapped_elsewhere(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    local_id: Uuid,
+    candidates: &[String],
+) -> Result<std::collections::HashSet<String>, AppError> {
+    if candidates.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT external_id FROM bm_sync_map \
+         WHERE tenant_id = $1 AND entity_type = 'ban' AND external_id = ANY($2) \
+           AND local_id <> $3",
+    )
+    .bind(tenant_id)
+    .bind(candidates)
+    .bind(local_id)
+    .fetch_all(owner_pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
 /// Due outbox work, oldest first (create-then-revoke of one ban must stay ordered).
@@ -1271,16 +1331,29 @@ pub async fn due_outbox_ops(
 }
 
 /// Claim one op for a push attempt: `inflight` with a 10-minute lease, so a crashed
-/// drain surfaces the op again instead of stranding it.
-pub async fn mark_outbox_inflight(owner_pool: &PgPool, id: Uuid) -> Result<(), AppError> {
-    sqlx::query(
+/// drain surfaces the op again instead of stranding it. Fenced on the connection
+/// lease and on the op still being drainable: a stale runner resuming after a
+/// takeover must not flip a settled op back and double-push it. `false` = stop
+/// draining.
+pub async fn mark_outbox_inflight(
+    owner_pool: &PgPool,
+    id: Uuid,
+    connection_id: Uuid,
+    claimer: &str,
+) -> Result<bool, AppError> {
+    let res = sqlx::query(
         "UPDATE bm_outbox SET status = 'inflight', attempts = attempts + 1, \
-         next_attempt_at = now() + interval '10 minutes' WHERE id = $1",
+         next_attempt_at = now() + interval '10 minutes' \
+         WHERE id = $1 AND status IN ('pending', 'needs_verify', 'inflight') \
+           AND EXISTS (SELECT 1 FROM bm_connections c \
+                       WHERE c.id = $2 AND c.claimed_by = $3)",
     )
     .bind(id)
+    .bind(connection_id)
+    .bind(claimer)
     .execute(owner_pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 /// Settle an op after a push attempt. `retry_in` schedules the next attempt for

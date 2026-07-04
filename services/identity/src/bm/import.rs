@@ -165,6 +165,12 @@ fn map_upsert_err(e: AppError) -> ExecError {
     ExecError::App(e)
 }
 
+/// Pages committed per `execute_job` call before yielding back to the runner loop.
+/// The job stays `running` with its cursor persisted; the runner drains the outbox
+/// (staff unbans must not wait hours behind a big import) and re-enters. Bigger than
+/// any test fixture; small enough that the outbox gets airtime every ~20-40s.
+const PAGES_PER_SLICE: usize = 20;
+
 async fn run_phases(
     pool: &sqlx::PgPool,
     client: &BmClient,
@@ -180,10 +186,16 @@ async fn run_phases(
     let mut phase = job.phase.clone();
     let mut cursor: Cursor = serde_json::from_value(job.cursor.clone()).unwrap_or_default();
     let mut counts = Counts::from_value(&job.phase_counts);
+    let mut pages = 0usize;
 
     loop {
         if lost_claim.load(Ordering::Relaxed) {
             return Err(ExecError::LostClaim);
+        }
+        if pages >= PAGES_PER_SLICE {
+            // Yield the slice: cursor and counts are already committed with the last
+            // page; the runner re-enters through next_live_job.
+            return Ok(());
         }
         match phase.as_str() {
             // Breadth phases land in PR4; a job carrying one just moves along the
@@ -228,6 +240,7 @@ async fn run_phases(
                 }
                 save(&mut tx, job.id, &phase, &cursor, &counts, claimer).await?;
                 tx.commit().await?;
+                pages += 1;
             }
 
             "bans" => {
@@ -261,6 +274,7 @@ async fn run_phases(
                 }
                 save(&mut tx, job.id, &phase, &cursor, &counts, claimer).await?;
                 tx.commit().await?;
+                pages += 1;
             }
 
             _ => {

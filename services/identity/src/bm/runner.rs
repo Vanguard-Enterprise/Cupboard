@@ -78,26 +78,6 @@ pub async fn run(
     let mut tail_deep = false;
 
     while !lost.load(Ordering::Relaxed) {
-        // Import jobs take precedence; sync pauses while one runs so the single
-        // rate-limit budget isn't contended (decision C).
-        match bm::next_live_job(&pool, conn.id).await {
-            Ok(Some(job)) => {
-                let signal = super::import::execute_job(
-                    &pool, &client, &conn, job, &pepper, &lost, &claimer,
-                )
-                .await;
-                if matches!(signal, super::import::RunnerSignal::Stop) {
-                    break;
-                }
-                continue;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(connection = %conn.id, error = ?e, "job lookup failed; runner exiting");
-                break;
-            }
-        }
-
         // Fresh row every tick: sync toggles, cadence changes, and token rotation all
         // apply within seconds instead of at the next claim.
         let current = match bm::fresh_connection(&pool, conn.id).await {
@@ -108,18 +88,17 @@ pub async fn run(
                 break;
             }
         };
-        if !current.sync_enabled {
-            break;
-        }
         if current.token_enc != conn.token_enc {
             tracing::info!(connection = %conn.id, "token rotated; runner restarts for a fresh client");
             break;
         }
 
-        // Outbound drain every tick: the due-scan is one cheap indexed query when
-        // idle, and queued staff bans should reach BM within seconds.
-        if current.sync_bans_outbound {
-            match super::outbox::drain(&pool, &client, &current).await {
+        // Outbound drain FIRST, before import work: imports run in bounded slices
+        // (import.rs PAGES_PER_SLICE), and a staff unban must reach BM between
+        // slices, not after a multi-hour initial import finishes. The due-scan is one
+        // cheap indexed query when idle.
+        if current.sync_enabled && current.sync_bans_outbound {
+            match super::outbox::drain(&pool, &client, &current, &claimer).await {
                 Ok(0) => {}
                 Ok(n) => tracing::info!(connection = %conn.id, ops = n, "outbox drained"),
                 Err(e) if e.is_auth() => {
@@ -138,11 +117,38 @@ pub async fn run(
                     }
                     break;
                 }
+                Err(super::sync::SyncError::LostClaim) => break,
                 Err(e) => {
                     tracing::warn!(connection = %conn.id, error = %e.detail(), "outbox drain failed");
                     let _ = bm::record_sync_error(&pool, conn.id, &claimer, &e.message()).await;
                 }
             }
+        }
+
+        // Import jobs next; inbound sync pauses while one runs so the single
+        // rate-limit budget isn't contended (decision C). execute_job returns after
+        // a bounded slice of pages, so this loop (and the drain above) keeps cycling
+        // during long imports.
+        match bm::next_live_job(&pool, conn.id).await {
+            Ok(Some(job)) => {
+                let signal = super::import::execute_job(
+                    &pool, &client, &conn, job, &pepper, &lost, &claimer,
+                )
+                .await;
+                if matches!(signal, super::import::RunnerSignal::Stop) {
+                    break;
+                }
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(connection = %conn.id, error = ?e, "job lookup failed; runner exiting");
+                break;
+            }
+        }
+
+        if !current.sync_enabled {
+            break;
         }
 
         let settings = super::sync::settings_from(&current.settings);

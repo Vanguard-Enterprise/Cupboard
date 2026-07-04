@@ -6,16 +6,27 @@
 //! successful write stores the response's canonical hash in the sync map: that is the
 //! echo guard that keeps the inbound loops from re-importing our own writes.
 //!
-//! BM has no idempotency keys, so an ambiguous create (timeout after send, 5xx)
-//! parks as `needs_verify`; the next attempt existence-checks (search by subject on
-//! the target list) before re-issuing. Deletes are idempotent and just retry.
+//! Discipline that keeps the queue safe:
+//!   * Ordering: a revoke SUPERSEDES any unsettled create for the same ban (the
+//!     create is verified-then-abandoned first), so a backed-off create retry can
+//!     never resurrect a ban after its revoke drained.
+//!   * Lease fence: claiming an op checks the connection lease and the op's own
+//!     drainable status, so a stale runner resuming after a takeover cannot flip a
+//!     settled op back and double-push it.
+//!   * Ambiguity: BM has no idempotency keys, so an ambiguous create (timeout after
+//!     send, 5xx) parks as `needs_verify` and the next attempt existence-checks
+//!     before re-issuing. The check only adopts a ban that plausibly IS our push:
+//!     same subject, hash-normalized-equal reason, same expiry, and not already
+//!     mapped to a different local ban.
 
 use super::sync::SyncError;
 use crate::domain::bm::{self, BmConnection, OutboxOp};
 use chrono::{DateTime, Utc};
 use cupboard_bmapi::types::{included_identifier_map, BanAttrs, BanIdentifier, Resource};
 use cupboard_bmapi::{ban_content_hash, BmClient, BmError, NewBmBan};
+use std::collections::HashMap;
 use std::time::Duration;
+use uuid::Uuid;
 
 const DRAIN_BATCH: i64 = 25;
 const MAX_PUSH_ATTEMPTS: i32 = 10;
@@ -32,6 +43,7 @@ pub(crate) async fn drain(
     pool: &sqlx::PgPool,
     client: &BmClient,
     conn: &BmConnection,
+    claimer: &str,
 ) -> Result<usize, SyncError> {
     let ops = bm::due_outbox_ops(pool, conn.tenant_id, DRAIN_BATCH).await?;
     if ops.is_empty() {
@@ -53,15 +65,26 @@ pub(crate) async fn drain(
     let count = ops.len();
     for op in ops {
         let resumed_ambiguous = op.status == "needs_verify" || op.status == "inflight";
-        bm::mark_outbox_inflight(pool, op.id).await?;
+        if !bm::mark_outbox_inflight(pool, op.id, conn.id, claimer).await? {
+            // Lease moved, or the op settled under a new owner: stop draining.
+            return Err(SyncError::LostClaim);
+        }
         match op.op.as_str() {
             "create" => {
                 push_create(pool, client, conn, &target_list, &op, resumed_ambiguous).await?
             }
-            _ => push_delete(pool, client, conn, &op).await?,
+            _ => push_delete(pool, client, conn, &target_list, &op).await?,
         }
     }
     Ok(count)
+}
+
+fn payload_expires(payload: &serde_json::Value) -> Option<DateTime<Utc>> {
+    payload
+        .get("expires_at")
+        .and_then(|v| v.as_str())
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|t| t.with_timezone(&Utc))
 }
 
 async fn push_create(
@@ -86,19 +109,35 @@ async fn push_create(
         .get("reason")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    let expires: Option<DateTime<Utc>> = payload
-        .get("expires_at")
-        .and_then(|v| v.as_str())
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|t| t.with_timezone(&Utc));
+    let expires = payload_expires(payload);
     let identifiers = vec![("steamID".to_string(), subject.clone())];
 
     // An op that already had an ambiguous attempt may have landed: look before
     // re-issuing (BM has no idempotency keys).
     if verify_first {
-        if let Some(found) = find_existing(client, target_list, &subject, reason.as_deref()).await?
+        if let Some((found, resolved)) = find_existing(
+            pool,
+            client,
+            conn,
+            target_list,
+            op.local_id,
+            &subject,
+            reason.as_deref(),
+            expires,
+        )
+        .await?
         {
-            record_pushed(pool, conn, op, target_list, &found).await?;
+            record_mapping(
+                pool,
+                conn,
+                op.local_id,
+                target_list,
+                &found,
+                &resolved,
+                payload,
+            )
+            .await?;
+            bm::finish_outbox_op(pool, op.id, "done", None, None).await?;
             return Ok(());
         }
     }
@@ -115,7 +154,21 @@ async fn push_create(
         org_wide: true,
     };
     match client.create_ban(&new_ban).await {
-        Ok(resource) => record_pushed(pool, conn, op, target_list, &resource).await,
+        Ok(resource) => {
+            let resolved = resolve_identifiers(&resource, &HashMap::new());
+            record_mapping(
+                pool,
+                conn,
+                op.local_id,
+                target_list,
+                &resource,
+                &resolved,
+                payload,
+            )
+            .await?;
+            bm::finish_outbox_op(pool, op.id, "done", None, None).await?;
+            Ok(())
+        }
         Err(e) => settle_error(pool, op, e, true).await,
     }
 }
@@ -124,8 +177,63 @@ async fn push_delete(
     pool: &sqlx::PgPool,
     client: &BmClient,
     conn: &BmConnection,
+    target_list: &str,
     op: &OutboxOp,
 ) -> Result<(), SyncError> {
+    // Ordering discipline: a revoke supersedes any unsettled create for the same ban.
+    // A create that ever reached the wire may have landed unacknowledged, so verify
+    // (and map) it first; then the delete below removes it. Without this, a
+    // backed-off create retry would re-push the ban AFTER its revoke drained,
+    // resurrecting it on BM permanently.
+    if let Some(create_op) = bm::unsettled_create_for(pool, conn.tenant_id, op.local_id).await? {
+        if create_op.attempts > 0 {
+            let subject = create_op
+                .payload
+                .get("subject_value")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let reason = create_op
+                .payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            if !subject.is_empty() {
+                if let Some((found, resolved)) = find_existing(
+                    pool,
+                    client,
+                    conn,
+                    target_list,
+                    op.local_id,
+                    &subject,
+                    reason.as_deref(),
+                    payload_expires(&create_op.payload),
+                )
+                .await?
+                {
+                    record_mapping(
+                        pool,
+                        conn,
+                        op.local_id,
+                        target_list,
+                        &found,
+                        &resolved,
+                        &create_op.payload,
+                    )
+                    .await?;
+                }
+            }
+        }
+        bm::finish_outbox_op(
+            pool,
+            create_op.id,
+            "abandoned",
+            Some("superseded by revoke"),
+            None,
+        )
+        .await?;
+    }
+
     let Some(external_id) = bm::external_ban_id(pool, conn.tenant_id, op.local_id).await? else {
         // Never reached BM (and never imported): nothing to undo remotely.
         bm::finish_outbox_op(pool, op.id, "done", None, None).await?;
@@ -168,18 +276,23 @@ async fn push_delete(
     }
 }
 
-async fn record_pushed(
+/// Record a pushed/adopted ban in the sync map (the echo guard). `identifiers` must
+/// be the RESOLVED list (numeric refs dereferenced): the inbound loops hash resolved
+/// pairs, and a hash computed over fewer identifiers would read every subsequent
+/// re-scan of our own write as a BM edit.
+async fn record_mapping(
     pool: &sqlx::PgPool,
     conn: &BmConnection,
-    op: &OutboxOp,
+    local_id: Uuid,
     target_list: &str,
     resource: &Resource<BanAttrs>,
+    identifiers: &[(String, String)],
+    payload: &serde_json::Value,
 ) -> Result<(), SyncError> {
-    let identifiers = resource_identifiers(resource);
     let hash = ban_content_hash(
         resource.attributes.reason.as_deref(),
         resource.attributes.expires,
-        &identifiers,
+        identifiers,
         resource.attributes.note.as_deref(),
     );
     let meta = serde_json::json!({
@@ -192,55 +305,65 @@ async fn record_pushed(
             .collect::<Vec<_>>(),
         "ban_list": target_list,
         "pushed": true,
-        "local_scope": op.payload.get("scope"),
+        "local_scope": payload.get("scope"),
     });
-    bm::record_outbound_ban(
-        pool,
-        conn.tenant_id,
-        op.local_id,
-        &resource.id,
-        &hash,
-        &meta,
-    )
-    .await?;
-    bm::finish_outbox_op(pool, op.id, "done", None, None).await?;
+    bm::record_outbound_ban(pool, conn.tenant_id, local_id, &resource.id, &hash, &meta).await?;
     Ok(())
 }
 
-/// The existence check for ambiguous creates: search the target list for a ban on
-/// this subject with our reason (newest first).
+/// The existence check for ambiguous creates: the newest ban on the target list that
+/// plausibly IS our push. Same subject, reason equal under the hash normalization
+/// (null and "" compare equal), same expiry, and not already mapped to a DIFFERENT
+/// local ban (adopting one of those would violate the map's uniqueness and wedge the
+/// op). Returns the resource plus its resolved identifiers.
+#[allow(clippy::too_many_arguments)]
 async fn find_existing(
+    pool: &sqlx::PgPool,
     client: &BmClient,
+    conn: &BmConnection,
     target_list: &str,
+    local_id: Uuid,
     subject: &str,
     reason: Option<&str>,
-) -> Result<Option<Resource<BanAttrs>>, SyncError> {
+    expires: Option<DateTime<Utc>>,
+) -> Result<Option<(Resource<BanAttrs>, Vec<(String, String)>)>, SyncError> {
     let url = client.bans_search_page(target_list, subject);
     let doc = client.list_page::<BanAttrs>(&url).await?;
     let ids_map = included_identifier_map(&doc.included);
+    let candidates: Vec<String> = doc.data.iter().map(|r| r.id.clone()).collect();
+    let taken =
+        bm::externally_mapped_elsewhere(pool, conn.tenant_id, local_id, &candidates).await?;
     for res in doc.data {
-        let matches_subject = res.attributes.identifiers.iter().any(|i| match i {
-            BanIdentifier::Manual(m) => m.kind == "steamID" && m.identifier == subject,
-            BanIdentifier::Ref(n) => ids_map
-                .get(&n.to_string())
-                .is_some_and(|(kind, value)| kind == "steamID" && value == subject),
-            BanIdentifier::Other(_) => false,
-        });
-        if matches_subject && res.attributes.reason.as_deref() == reason {
-            return Ok(Some(res));
+        if taken.contains(&res.id) {
+            continue;
+        }
+        let resolved = resolve_identifiers(&res, &ids_map);
+        let matches_subject = resolved
+            .iter()
+            .any(|(kind, value)| kind == "steamID" && value == subject);
+        let reason_matches = res.attributes.reason.as_deref().unwrap_or("") == reason.unwrap_or("");
+        let expires_matches = res.attributes.expires == expires;
+        if matches_subject && reason_matches && expires_matches {
+            return Ok(Some((res, resolved)));
         }
     }
     Ok(None)
 }
 
-fn resource_identifiers(resource: &Resource<BanAttrs>) -> Vec<(String, String)> {
+/// Resolved (type, value) pairs: manual entries inline, numeric refs through the
+/// page's included map.
+fn resolve_identifiers(
+    resource: &Resource<BanAttrs>,
+    ids_map: &HashMap<String, (String, String)>,
+) -> Vec<(String, String)> {
     resource
         .attributes
         .identifiers
         .iter()
         .filter_map(|i| match i {
             BanIdentifier::Manual(m) => Some((m.kind.clone(), m.identifier.clone())),
-            _ => None,
+            BanIdentifier::Ref(n) => ids_map.get(&n.to_string()).cloned(),
+            BanIdentifier::Other(_) => None,
         })
         .collect()
 }
@@ -271,10 +394,17 @@ async fn settle_error(
     match e {
         BmError::Unauthorized => Err(SyncError::Bm(e)),
         BmError::AmbiguousMutation(msg) if is_create => {
+            // Same attempt ceiling as plain retries: a permanently-ambiguous op must
+            // eventually surface as failed instead of verifying forever.
+            let status = if op.attempts >= MAX_PUSH_ATTEMPTS {
+                "failed"
+            } else {
+                "needs_verify"
+            };
             bm::finish_outbox_op(
                 pool,
                 op.id,
-                "needs_verify",
+                status,
                 Some(&msg),
                 Some(retry_backoff(op.attempts)),
             )
@@ -446,7 +576,9 @@ mod e2e_tests {
             vec![("create".to_string(), "pending".to_string())]
         );
 
-        let drained = drain(&pool, &client, &conn).await.map_err(|e| e.message());
+        let drained = drain(&pool, &client, &conn, CLAIMER)
+            .await
+            .map_err(|e| e.message());
         assert_eq!(drained, Ok(1));
         assert_eq!(
             outbox_rows(&pool, tenant).await,
@@ -511,7 +643,7 @@ mod e2e_tests {
         let ban_b = bans::create(&pool, tenant, PEPPER, local_ban(&sub_b))
             .await
             .unwrap();
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("push both");
@@ -521,7 +653,7 @@ mod e2e_tests {
             .await
             .unwrap()
             .expect("revoked a");
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("drain delete");
@@ -532,7 +664,7 @@ mod e2e_tests {
             .unwrap()
             .expect("revoked b");
         stub.push_fault(Fault::Status(403));
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("drain fallback");
@@ -591,7 +723,7 @@ mod e2e_tests {
 
         // First attempt: 500 (fault preempts the stub, so nothing landed).
         stub.push_fault(Fault::Status(500));
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("first drain");
@@ -606,7 +738,7 @@ mod e2e_tests {
             .execute(&pool)
             .await
             .unwrap();
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("second drain");
@@ -671,7 +803,7 @@ mod e2e_tests {
             .unwrap();
         let before = stub.requests().len();
 
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("drain");
@@ -687,6 +819,164 @@ mod e2e_tests {
             .filter(|r| r.method == "POST")
             .count();
         assert_eq!(posts_after, 0, "no duplicate POST after verify found it");
+    }
+
+    #[tokio::test]
+    async fn revoke_supersedes_a_backed_off_create() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP revoke_supersedes_a_backed_off_create: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let conn = seed_outbound(&pool, tenant).await;
+        let stub = StubBm::start(empty_stub()).await;
+        let client = BmClient::new(stub.base_url(), TOKEN);
+        let sub = subject();
+
+        // The create attempt was ambiguous AND actually landed on BM.
+        let ban = bans::create(&pool, tenant, PEPPER, local_ban(&sub))
+            .await
+            .unwrap();
+        let identifiers = vec![("steamID".to_string(), sub.clone())];
+        client
+            .create_ban(&NewBmBan {
+                org_id: "9999",
+                ban_list_id: "l1",
+                reason: Some("cheating"),
+                note: None,
+                expires: None,
+                identifiers: &identifiers,
+                org_wide: true,
+            })
+            .await
+            .expect("landed unacknowledged");
+        // Park the create as ambiguous with a long backoff (as a real 5xx would).
+        sqlx::query(
+            "UPDATE bm_outbox SET status = 'needs_verify', attempts = 1, \
+             next_attempt_at = now() + interval '5 minutes' \
+             WHERE tenant_id = $1 AND op = 'create'",
+        )
+        .bind(tenant.0)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Staff revokes while the create is still backed off: the delete is due NOW.
+        bans::revoke(&pool, tenant, ban.id, Uuid::new_v4(), None)
+            .await
+            .unwrap()
+            .expect("revoked");
+        drain(&pool, &client, &conn, CLAIMER)
+            .await
+            .map_err(|e| e.message())
+            .expect("drain the delete");
+
+        let rows = outbox_rows(&pool, tenant).await;
+        assert_eq!(
+            rows,
+            vec![
+                ("create".to_string(), "abandoned".to_string()),
+                ("delete".to_string(), "done".to_string()),
+            ],
+            "the revoke supersedes the create (verified, adopted, then deleted): {rows:?}"
+        );
+        // The landed ban is gone from BM: no resurrection possible (the create is
+        // terminal) and nothing remains to re-import.
+        let remaining = client
+            .list_page::<cupboard_bmapi::types::BanAttrs>(&client.bans_first_page("l1"))
+            .await
+            .expect("list")
+            .data
+            .len();
+        assert_eq!(
+            remaining, 0,
+            "the unacknowledged-but-landed ban was deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_is_fenced_on_the_lease() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP drain_is_fenced_on_the_lease: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let conn = seed_outbound(&pool, tenant).await;
+        let stub = StubBm::start(empty_stub()).await;
+        let client = BmClient::new(stub.base_url(), TOKEN);
+
+        bans::create(&pool, tenant, PEPPER, local_ban(&subject()))
+            .await
+            .unwrap();
+        // Another runner took the lease: this (now stale) drainer must stop before
+        // pushing anything.
+        sqlx::query("UPDATE bm_connections SET claimed_by = 'someone-else' WHERE id = $1")
+            .bind(conn.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = drain(&pool, &client, &conn, CLAIMER)
+            .await
+            .expect_err("stale drain must stop");
+        assert_eq!(err.message(), "claim lost mid-sync");
+        assert!(stub.requests().is_empty(), "no push from a stale runner");
+        assert_eq!(
+            outbox_rows(&pool, tenant).await,
+            vec![("create".to_string(), "pending".to_string())],
+            "the op stays drainable for the new lease holder"
+        );
+    }
+
+    #[tokio::test]
+    async fn outbound_enable_implies_sync_enabled() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP outbound_enable_implies_sync_enabled: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let conn = seed_outbound(&pool, tenant).await;
+        // Start from sync fully off (the outbound form never sends sync_enabled).
+        sqlx::query(
+            "UPDATE bm_connections SET sync_enabled = false, sync_bans_outbound = false \
+             WHERE id = $1",
+        )
+        .bind(conn.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (view, _) = bmdom::update_sync_settings(
+            &pool,
+            tenant,
+            Uuid::new_v4(),
+            bmdom::SyncChanges {
+                sync_bans_outbound: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("enable outbound");
+        assert!(
+            view.sync_enabled && view.sync_bans_outbound,
+            "outbound requires a live runner: enabling it must enable sync"
+        );
+
+        // And the inverse: switching sync off never leaves outbound silently queued.
+        let (view, _) = bmdom::update_sync_settings(
+            &pool,
+            tenant,
+            Uuid::new_v4(),
+            bmdom::SyncChanges {
+                sync_enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("disable sync");
+        assert!(
+            !view.sync_enabled && !view.sync_bans_outbound,
+            "disabling sync must also disable outbound"
+        );
     }
 
     #[tokio::test]
@@ -710,7 +1000,7 @@ mod e2e_tests {
             outbox_rows(&pool, tenant).await,
             vec![("create".to_string(), "abandoned".to_string())]
         );
-        drain(&pool, &client, &conn)
+        drain(&pool, &client, &conn, CLAIMER)
             .await
             .map_err(|e| e.message())
             .expect("drain skips abandoned");
