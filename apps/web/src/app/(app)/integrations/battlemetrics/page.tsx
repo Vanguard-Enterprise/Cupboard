@@ -3,6 +3,8 @@ import { can, Permission } from "@/lib/permissions";
 import { AutoRefresh } from "./auto-refresh";
 import { ConnectForm } from "./connect-form";
 import { ImportButton } from "./import-button";
+import { ImportControl } from "./import-control";
+import { ImportScopeForm } from "./import-scope-form";
 import { OutboundSyncForm } from "./outbound-sync-form";
 import { SyncToggle } from "./sync-toggle";
 
@@ -100,6 +102,17 @@ const PHASE_COUNT_LABELS: Record<string, string> = {
   bans_updated: "Bans updated",
   bans_unchanged: "Bans unchanged",
   bans_skipped_no_identifier: "Bans skipped (no identifier)",
+  servers_imported: "Servers imported",
+  servers_skipped_unconfigured: "Servers skipped (unconfigured)",
+  servers_skipped_disabled: "Servers skipped (disabled)",
+  servers_skipped_incomplete: "Servers skipped (incomplete)",
+  players_matched: "Players matched",
+  players_skipped_no_steam: "Players skipped (no steam id)",
+  players_skipped_disabled: "Players skipped (disabled)",
+  notes_imported: "Notes imported",
+  notes_skipped_empty: "Notes skipped (empty)",
+  notes_skipped_disabled: "Notes skipped (disabled)",
+  sync_conflicts: "Sync conflicts",
 };
 
 const CONFLICT_RESOLUTION_STYLES: Record<BmConflict["resolution"], string> = {
@@ -134,6 +147,13 @@ function targetBanList(settings: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+// Import subset gates default to enabled; only an explicit `false` in settings turns
+// one off.
+function importScopeFlag(settings: unknown, key: string): boolean {
+  if (typeof settings !== "object" || settings === null) return true;
+  return (settings as Record<string, unknown>)[key] !== false;
+}
+
 export default async function BattlemetricsPage() {
   const session = await getSession();
   if (!session) return null;
@@ -155,6 +175,9 @@ export default async function BattlemetricsPage() {
   const outboxVisible =
     outbox.pending > 0 || outbox.needs_verify > 0 || outbox.failed > 0 || outbox.abandoned > 0;
   const jobActive = latestJob?.status === "queued" || latestJob?.status === "running";
+  // A paused job still occupies the live-job slot (Run import stays disabled) but isn't
+  // progressing, so it shouldn't force the fast 3s poll on its own.
+  const hasLiveJob = jobActive || latestJob?.status === "paused";
   const syncOnly = !jobActive && !loadFailed && !!connection?.sync_enabled;
   const phaseCountEntries = Object.entries(latestJob?.phase_counts ?? {});
 
@@ -204,7 +227,16 @@ export default async function BattlemetricsPage() {
 
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-medium text-neutral-300">Import</h2>
-        <ImportButton disabled={!connection || jobActive} />
+        <ImportScopeForm
+          servers={importScopeFlag(connection?.settings, "import_servers")}
+          players={importScopeFlag(connection?.settings, "import_players")}
+          notes={importScopeFlag(connection?.settings, "import_notes")}
+          disabled={!connection}
+        />
+        <div className="flex flex-wrap items-start gap-2">
+          <ImportButton disabled={!connection || hasLiveJob} />
+          <ImportControl status={latestJob?.status ?? null} />
+        </div>
         {latestJob && (
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-sm">

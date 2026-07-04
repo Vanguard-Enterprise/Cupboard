@@ -340,6 +340,43 @@ export async function updateBmOutboundAction(
   return { ok: true, backfilled: data.backfilled };
 }
 
+export type BmImportControlFormState = { error?: string; ok?: boolean };
+
+/** Pause, resume, or cancel the tenant's live BattleMetrics import job (action comes
+ * from a hidden form field so one server action covers all three buttons). */
+export async function controlBmImportAction(
+  _prev: BmImportControlFormState,
+  form: FormData,
+): Promise<BmImportControlFormState> {
+  const action = form.get("action");
+  if (typeof action !== "string" || !action) return { error: "missing action" };
+  const res = await apiFetch(`/integrations/bm/import/${action}`, { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type BmImportScopeFormState = { error?: string; ok?: boolean };
+
+/** Persist which BM entity types (servers/players/notes) the next import job pulls. */
+export async function updateBmImportScopeAction(
+  _prev: BmImportScopeFormState,
+  form: FormData,
+): Promise<BmImportScopeFormState> {
+  const res = await apiFetch("/integrations/bm/sync", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      import_servers: form.get("import_servers") === "on",
+      import_players: form.get("import_players") === "on",
+      import_notes: form.get("import_notes") === "on",
+    }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;
