@@ -28,7 +28,15 @@ pub struct Config {
 
     /// Shared secret the Collector presents (`X-Internal-Token`) to `/internal/*` (the
     /// connect-time ban enforcement lookup). `None` disables those endpoints (fail closed).
+    /// Reused as the token identity presents to fleet's `/internal/servers/import`:
+    /// v-deployments sets the same value on both services (one cluster-internal token).
     pub internal_api_token: Option<String>,
+
+    /// Fleet's cluster-internal base URL (`FLEET_INTERNAL_URL`, e.g.
+    /// `http://cupboard-fleet:8080`), where the BM import registers discovered servers.
+    /// `None` (or a missing `internal_api_token`) makes the import's servers phase skip
+    /// with a counted reason rather than fail (degradation posture).
+    pub fleet_internal_url: Option<String>,
 
     /// 32-byte envelope master key (base64 in `IDENTITY_MASTER_KEY`) wrapping per-tenant
     /// BattleMetrics token data keys (`cupboard_crypto::envelope`). `None` disables the
@@ -75,6 +83,9 @@ impl Config {
                 .or_else(|_| env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "identity-1".into()),
             internal_api_token: env::var("INTERNAL_API_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            fleet_internal_url: env::var("FLEET_INTERNAL_URL")
                 .ok()
                 .filter(|s| !s.is_empty()),
             identity_master_key: match env::var("IDENTITY_MASTER_KEY") {

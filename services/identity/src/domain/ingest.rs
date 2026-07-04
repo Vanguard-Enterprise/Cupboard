@@ -368,7 +368,7 @@ pub async fn ingest_report(
 /// same brand-new player in the same instant. Creation is claimed through
 /// `ON CONFLICT (type, value_hash) DO UPDATE … RETURNING player_id` — the loser blocks
 /// until the winner commits, adopts the winner's player, and deletes its own orphan row.
-async fn resolve_or_create_player(
+pub(crate) async fn resolve_or_create_player(
     tx: &mut Transaction<'_, Postgres>,
     steam_id: &str,
     steam_hash: &[u8],

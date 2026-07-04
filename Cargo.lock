@@ -610,6 +610,7 @@ dependencies = [
  "cupboard-db",
  "cupboard-domain",
  "cupboard-telemetry",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

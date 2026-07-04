@@ -6,8 +6,13 @@
 //! No network, no env gates. The retry tests use `Retry-After: 1` to keep the client's
 //! honored waits at ~1s each instead of its jittered exponential backoff.
 
-use cupboard_bmapi::stub::{Fault, StubBan, StubBanList, StubBm, StubData};
-use cupboard_bmapi::types::{BanAttrs, BanIdentifier, BanListAttrs};
+use cupboard_bmapi::stub::{
+    Fault, StubBan, StubBanList, StubBm, StubData, StubNote, StubPlayer, StubServer,
+};
+use cupboard_bmapi::types::{
+    included_identifier_map, BanAttrs, BanIdentifier, BanListAttrs, NoteAttrs, PlayerAttrs,
+    ServerAttrs,
+};
 use cupboard_bmapi::{BmClient, BmError, DeleteOutcome, NewBmBan};
 use serde_json::json;
 use std::collections::HashSet;
@@ -392,6 +397,136 @@ async fn create_ban_rate_limited_then_succeeds() {
         2,
         "one throttled attempt, then the retry"
     );
+}
+
+#[tokio::test]
+async fn servers_paginate_and_decode() {
+    // 150 servers -> 2 pages of 100; decode into ServerAttrs, including portQuery.
+    let servers: Vec<StubServer> = (0..150)
+        .map(|i| {
+            StubServer::new(format!("srv-{i}"), format!("Server {i}"))
+                .ip(format!("10.0.0.{}", i % 255))
+                .port(28015)
+                .port_query(28017)
+        })
+        .collect();
+    let stub = StubBm::start(StubData::new("tok").with_servers(servers)).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    let mut url = client.servers_first_page("9999");
+    let mut ids = Vec::new();
+    let mut pages = 0;
+    loop {
+        let doc = client
+            .list_page::<ServerAttrs>(&url)
+            .await
+            .expect("servers page decodes");
+        pages += 1;
+        for r in &doc.data {
+            ids.push(r.id.clone());
+            assert!(r.attributes.name.is_some());
+            assert_eq!(r.attributes.port_query, Some(28017), "portQuery decodes");
+        }
+        match doc.links.next {
+            Some(next) => url = next,
+            None => break,
+        }
+    }
+    assert_eq!(pages, 2, "150 / page[size]=100 -> 2 pages");
+    assert_eq!(ids.len(), 150);
+    assert_eq!(ids.iter().collect::<HashSet<_>>().len(), 150);
+}
+
+#[tokio::test]
+async fn players_paginate_decode_and_resolve_identifiers() {
+    // 120 players -> 2 pages; each carries a steam + ip identifier via `included`.
+    let players: Vec<StubPlayer> = (0..120)
+        .map(|i| {
+            StubPlayer::new(format!("p-{i}"), format!("Player {i}"))
+                .created_at("2026-01-02T03:04:05Z")
+                .identifier("steamID", format!("7656119800{i:06}"))
+                .identifier("ip", format!("203.0.113.{}", i % 255))
+        })
+        .collect();
+    let stub = StubBm::start(StubData::new("tok").with_players(players)).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    let mut url = client.players_first_page("9999");
+    let mut total = 0;
+    let mut pages = 0;
+    loop {
+        let doc = client
+            .list_page::<PlayerAttrs>(&url)
+            .await
+            .expect("players page decodes");
+        pages += 1;
+        let ids_map = included_identifier_map(&doc.included);
+        for r in &doc.data {
+            total += 1;
+            assert!(r.attributes.created_at.is_some(), "createdAt decodes");
+            let resolved: Vec<(String, String)> = r
+                .rel_ids("identifiers")
+                .into_iter()
+                .filter_map(|id| ids_map.get(id).cloned())
+                .collect();
+            assert!(
+                resolved.iter().any(|(k, _)| k == "steamID"),
+                "steam identifier resolves through included: {resolved:?}"
+            );
+            assert!(resolved.iter().any(|(k, _)| k == "ip"));
+        }
+        match doc.links.next {
+            Some(next) => url = next,
+            None => break,
+        }
+    }
+    assert_eq!(pages, 2, "120 / page[size]=100 -> 2 pages");
+    assert_eq!(total, 120);
+}
+
+#[tokio::test]
+async fn player_notes_paginate_and_decode() {
+    // 150 notes on one player -> 2 pages; decode into NoteAttrs.
+    let notes: Vec<StubNote> = (0..150)
+        .map(|i| {
+            StubNote::new(
+                format!("n-{i}"),
+                format!("note {i}"),
+                "2026-01-01T00:00:00Z",
+            )
+        })
+        .collect();
+    let stub = StubBm::start(StubData::new("tok").with_notes("p-1", notes)).await;
+    let client = BmClient::new(stub.base_url(), "tok");
+
+    let mut url = client.player_notes_first_page("p-1");
+    let mut bodies = Vec::new();
+    let mut pages = 0;
+    loop {
+        let doc = client
+            .list_page::<NoteAttrs>(&url)
+            .await
+            .expect("notes page decodes");
+        pages += 1;
+        for r in &doc.data {
+            bodies.push(r.attributes.note.clone().expect("note body decodes"));
+            assert!(r.attributes.created_at.is_some(), "createdAt decodes");
+        }
+        match doc.links.next {
+            Some(next) => url = next,
+            None => break,
+        }
+    }
+    assert_eq!(pages, 2, "150 / page[size]=100 -> 2 pages");
+    assert_eq!(bodies.len(), 150);
+
+    // A player with no notes returns an empty page, not an error.
+    let doc = client
+        .list_page::<NoteAttrs>(&client.player_notes_first_page("nobody"))
+        .await
+        .expect("empty notes page decodes");
+    assert!(doc.data.is_empty());
+    assert!(doc.links.next.is_none());
 }
 
 #[tokio::test]

@@ -114,6 +114,30 @@ impl BmClient {
         ))
     }
 
+    /// First page of the org's servers (import "servers" phase). `filter[organizations]`
+    /// scopes to the tenant's org.
+    pub fn servers_first_page(&self, org_id: &str) -> String {
+        self.url(&format!(
+            "/servers?filter[organizations]={org_id}&page[size]={PAGE_SIZE}"
+        ))
+    }
+
+    /// First page of the org's players (import "players" phase). `include=identifiers`
+    /// carries each player's identifiers as `included` resources referenced by the
+    /// player's `identifiers` relationship.
+    pub fn players_first_page(&self, org_id: &str) -> String {
+        self.url(&format!(
+            "/players?filter[organizations]={org_id}&include=identifiers&page[size]={PAGE_SIZE}"
+        ))
+    }
+
+    /// First page of one BM player's notes (import "notes" phase).
+    pub fn player_notes_first_page(&self, bm_player_id: &str) -> String {
+        self.url(&format!(
+            "/players/{bm_player_id}/relationships/notes?page[size]={PAGE_SIZE}"
+        ))
+    }
+
     /// Bans page filtered to one list + a search term: the outbox's existence check
     /// before re-issuing an ambiguous create. v1 searches steam ids (digits), so the
     /// term needs no URL encoding.

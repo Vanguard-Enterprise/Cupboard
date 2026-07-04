@@ -170,9 +170,12 @@ pub async fn enqueue_import(
         ));
     }
 
+    // Start at the head of the PR4 pipeline (servers). The column default is the PR1
+    // 'ban_lists' (0009 predates the breadth phases and is already applied, so its
+    // default can't be rewritten); set the phase explicitly here instead.
     let job = sqlx::query_as::<_, ImportJobView>(&format!(
-        "INSERT INTO bm_import_jobs (tenant_id, connection_id, requested_by) \
-         VALUES ($1, $2, $3) RETURNING {JOB_VIEW_COLS}"
+        "INSERT INTO bm_import_jobs (tenant_id, connection_id, requested_by, phase) \
+         VALUES ($1, $2, $3, 'servers') RETURNING {JOB_VIEW_COLS}"
     ))
     .bind(tenant.0)
     .bind(connection_id)
@@ -486,6 +489,178 @@ pub async fn import_enabled_list_ids(
     .fetch_all(&mut **tx)
     .await?;
     Ok(ids.into_iter().map(|(id,)| id).collect())
+}
+
+// ---------------------------------------------------------------------------
+// Import breadth: servers, players, notes (PR4)
+
+/// Idempotent sync-map upsert for a non-ban entity (server or player). Keyed on
+/// `(tenant_id, entity_type, external_id)`: a re-run converges `local_id`/`meta` instead
+/// of erroring. The fleet server upsert and this map write are not one transaction, so
+/// this must tolerate a repeat.
+async fn upsert_mapping(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    entity_type: &str,
+    external_id: &str,
+    local_id: Uuid,
+    meta: &serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO bm_sync_map \
+           (tenant_id, entity_type, external_id, local_id, meta, bm_seen_at, \
+            local_synced_at, last_direction) \
+         VALUES ($1, $2, $3, $4, $5, now(), now(), 'inbound') \
+         ON CONFLICT (tenant_id, entity_type, external_id) DO UPDATE SET \
+           local_id = EXCLUDED.local_id, meta = EXCLUDED.meta, bm_seen_at = now(), \
+           local_synced_at = now(), last_direction = 'inbound'",
+    )
+    .bind(tenant_id)
+    .bind(entity_type)
+    .bind(external_id)
+    .bind(local_id)
+    .bind(meta)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Map a BM server (external id) to its fleet server uuid.
+pub async fn upsert_server_mapping(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    external_id: &str,
+    local_id: Uuid,
+    meta: &serde_json::Value,
+) -> Result<(), AppError> {
+    upsert_mapping(tx, tenant_id, "server", external_id, local_id, meta).await
+}
+
+/// Map a BM player (external id) to its Cupboard player uuid.
+pub async fn upsert_player_mapping(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    external_id: &str,
+    local_id: Uuid,
+    meta: &serde_json::Value,
+) -> Result<(), AppError> {
+    upsert_mapping(tx, tenant_id, "player", external_id, local_id, meta).await
+}
+
+/// Record an observed name in the global name history (same table native ingest writes).
+/// `last_seen_at` only moves forward.
+pub async fn upsert_name_history(
+    tx: &mut Transaction<'_, Postgres>,
+    player_id: Uuid,
+    name: &str,
+    obs: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO name_history (player_id, name, first_seen_at, last_seen_at) \
+         VALUES ($1, $2, $3, $3) \
+         ON CONFLICT (player_id, name) DO UPDATE SET \
+           last_seen_at = GREATEST(name_history.last_seen_at, EXCLUDED.last_seen_at)",
+    )
+    .bind(player_id)
+    .bind(name)
+    .bind(obs)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Record an observed IP as an identity signal (same shape native ingest writes), so
+/// imported players feed link detection exactly like natively-seen ones.
+pub async fn upsert_ip_signal(
+    tx: &mut Transaction<'_, Postgres>,
+    player_id: Uuid,
+    value: &str,
+    value_hash: &[u8],
+    obs: DateTime<Utc>,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO identity_signals \
+           (player_id, type, value, value_hash, sighting_count, first_seen_at, last_seen_at) \
+         VALUES ($1, 'ip', $2, $3, 1, $4, $4) \
+         ON CONFLICT (player_id, type, value_hash) DO UPDATE SET \
+           sighting_count = identity_signals.sighting_count + 1, last_seen_at = $4",
+    )
+    .bind(player_id)
+    .bind(value)
+    .bind(value_hash)
+    .bind(obs)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Insert an imported note, guarded by a `note` sync-map row so a re-scan never
+/// duplicates it. `false` = already mapped (nothing inserted). Author is NULL (BM notes
+/// carry no Cupboard staff user); `origin = 'bm'`.
+pub async fn insert_imported_note(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    player_id: Uuid,
+    note_external_id: &str,
+    body: &str,
+    created_at: DateTime<Utc>,
+) -> Result<bool, AppError> {
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT local_id FROM bm_sync_map \
+         WHERE tenant_id = $1 AND entity_type = 'note' AND external_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(note_external_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if existing.is_some() {
+        return Ok(false);
+    }
+    let note_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO player_notes (tenant_id, player_id, author, body, origin, created_at) \
+         VALUES ($1, $2, NULL, $3, 'bm', $4) RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(player_id)
+    .bind(body)
+    .bind(created_at)
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO bm_sync_map \
+           (tenant_id, entity_type, external_id, local_id, bm_seen_at, local_synced_at, \
+            last_direction) \
+         VALUES ($1, 'note', $2, $3, now(), now(), 'inbound')",
+    )
+    .bind(tenant_id)
+    .bind(note_external_id)
+    .bind(note_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(true)
+}
+
+/// The next page of player map rows for the notes phase's keyset walk, ordered by
+/// `external_id` (a stable total order; the walk visits each player exactly once). The
+/// cursor carries only the last processed external id, never the full id set.
+pub async fn mapped_player_page(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    after_external_id: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, Uuid)>, AppError> {
+    let rows: Vec<(String, Uuid)> = sqlx::query_as(
+        "SELECT external_id, local_id FROM bm_sync_map \
+         WHERE tenant_id = $1 AND entity_type = 'player' \
+           AND ($2::text IS NULL OR external_id > $2) \
+         ORDER BY external_id ASC LIMIT $3",
+    )
+    .bind(tenant_id)
+    .bind(after_external_id)
+    .bind(limit)
+    .fetch_all(owner_pool)
+    .await?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------

@@ -69,6 +69,17 @@ impl<A> Resource<A> {
             RelData::Many(_) => None,
         }
     }
+
+    /// Every related resource id under `name` (a to-one yields one, a to-many yields
+    /// all). Used to walk a player's `identifiers` relationship against a page's
+    /// `included` resources.
+    pub fn rel_ids(&self, name: &str) -> Vec<&str> {
+        match self.relationships.get(name).and_then(|r| r.data.as_ref()) {
+            Some(RelData::One(ident)) => vec![ident.id.as_str()],
+            Some(RelData::Many(idents)) => idents.iter().map(|i| i.id.as_str()).collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -159,6 +170,45 @@ pub struct BanListAttrs {
     pub perm_create: Option<bool>,
     pub perm_update: Option<bool>,
     pub perm_delete: Option<bool>,
+}
+
+/// Server attributes (import "servers" phase). Minimal: enough to register the server
+/// in fleet by external id. `port` is the game port; `port_query` (BM `portQuery`) is the
+/// A2S query port. RCON credentials are never exposed by BM, so imported servers land
+/// disabled for the tenant to configure.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ServerAttrs {
+    pub name: Option<String>,
+    pub ip: Option<String>,
+    pub port: Option<i64>,
+    pub port_query: Option<i64>,
+}
+
+/// Player attributes (import "players" phase). Identifiers ride the resource's
+/// `identifiers` relationship, resolved through the page's `included` array.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PlayerAttrs {
+    pub name: Option<String>,
+    /// First-seen time on BM; the import uses it as the identity-graph observation
+    /// timestamp when present.
+    #[serde(deserialize_with = "lenient_ts")]
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// Player-note attributes (import "notes" phase). BM fidelity the local `player_notes`
+/// row can't hold (shared flag, clearance level, expiry) rides `bm_sync_map.meta`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NoteAttrs {
+    pub note: Option<String>,
+    pub shared: Option<bool>,
+    pub clearance_level: Option<i64>,
+    #[serde(deserialize_with = "lenient_ts")]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(deserialize_with = "lenient_ts")]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 /// Attributes of an included player-identifier resource.

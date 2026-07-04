@@ -9,6 +9,7 @@
 //!
 //! Data access lives in `crate::domain::bm`; nothing here touches HTTP.
 
+mod fleet_client;
 mod import;
 mod mapping;
 mod outbox;

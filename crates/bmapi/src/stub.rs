@@ -121,6 +121,98 @@ impl StubBan {
     }
 }
 
+/// A server as the stub should serve it. Attributes map to [`crate::types::ServerAttrs`].
+#[derive(Clone, Debug)]
+pub struct StubServer {
+    pub id: String,
+    pub name: String,
+    pub ip: Option<String>,
+    pub port: Option<i64>,
+    pub port_query: Option<i64>,
+}
+
+impl StubServer {
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            ip: None,
+            port: None,
+            port_query: None,
+        }
+    }
+
+    pub fn ip(mut self, ip: impl Into<String>) -> Self {
+        self.ip = Some(ip.into());
+        self
+    }
+
+    pub fn port(mut self, port: i64) -> Self {
+        self.port = Some(port);
+        self
+    }
+
+    pub fn port_query(mut self, port_query: i64) -> Self {
+        self.port_query = Some(port_query);
+        self
+    }
+}
+
+/// A player as the stub should serve it. `identifiers` is a list of `(kind, value)`
+/// pairs emitted as `included` resources of JSON:API type `identifier` and referenced by
+/// the player's `identifiers` relationship (only when `include=identifiers` is requested).
+#[derive(Clone, Debug)]
+pub struct StubPlayer {
+    pub id: String,
+    pub name: String,
+    pub created_at: Option<String>,
+    pub identifiers: Vec<(String, String)>,
+}
+
+impl StubPlayer {
+    pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            created_at: None,
+            identifiers: Vec::new(),
+        }
+    }
+
+    pub fn created_at(mut self, created_at: impl Into<String>) -> Self {
+        self.created_at = Some(created_at.into());
+        self
+    }
+
+    /// Push one `(kind, value)` identifier, e.g. `("steamID", "7656...")` or `("ip", ...)`.
+    pub fn identifier(mut self, kind: impl Into<String>, value: impl Into<String>) -> Self {
+        self.identifiers.push((kind.into(), value.into()));
+        self
+    }
+}
+
+/// A player note as the stub should serve it. Attributes map to [`crate::types::NoteAttrs`].
+#[derive(Clone, Debug)]
+pub struct StubNote {
+    pub id: String,
+    pub note: String,
+    pub created_at: String,
+}
+
+impl StubNote {
+    pub fn new(
+        id: impl Into<String>,
+        note: impl Into<String>,
+        created_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            note: note.into(),
+            created_at: created_at.into(),
+        }
+    }
+}
+
 /// Everything the stub serves, plus the required bearer token.
 #[derive(Clone, Debug, Default)]
 pub struct StubData {
@@ -128,14 +220,17 @@ pub struct StubData {
     pub token: String,
     pub ban_lists: Vec<StubBanList>,
     pub bans: Vec<StubBan>,
+    pub servers: Vec<StubServer>,
+    pub players: Vec<StubPlayer>,
+    /// Notes keyed by BM player id, served from `/players/{id}/relationships/notes`.
+    pub notes_by_player: HashMap<String, Vec<StubNote>>,
 }
 
 impl StubData {
     pub fn new(token: impl Into<String>) -> Self {
         Self {
             token: token.into(),
-            ban_lists: Vec::new(),
-            bans: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -151,6 +246,21 @@ impl StubData {
 
     pub fn with_bans(mut self, bans: Vec<StubBan>) -> Self {
         self.bans.extend(bans);
+        self
+    }
+
+    pub fn with_servers(mut self, servers: Vec<StubServer>) -> Self {
+        self.servers.extend(servers);
+        self
+    }
+
+    pub fn with_players(mut self, players: Vec<StubPlayer>) -> Self {
+        self.players.extend(players);
+        self
+    }
+
+    pub fn with_notes(mut self, player_id: impl Into<String>, notes: Vec<StubNote>) -> Self {
+        self.notes_by_player.insert(player_id.into(), notes);
         self
     }
 }
@@ -180,6 +290,9 @@ struct StubState {
     token: String,
     base_url: String,
     ban_lists: Vec<StubBanList>,
+    servers: Vec<StubServer>,
+    players: Vec<StubPlayer>,
+    notes_by_player: HashMap<String, Vec<StubNote>>,
     bans: Mutex<Vec<StubBan>>,
     /// Source of server-generated ban ids ("srv-ban-<n>"), monotonic for the stub's
     /// whole lifetime regardless of deletions.
@@ -234,6 +347,9 @@ impl StubBm {
             token: data.token,
             base_url: base_url.clone(),
             ban_lists: data.ban_lists,
+            servers: data.servers,
+            players: data.players,
+            notes_by_player: data.notes_by_player,
             bans: Mutex::new(data.bans),
             next_ban_id: Mutex::new(1),
             faults: Mutex::new(VecDeque::new()),
@@ -243,6 +359,9 @@ impl StubBm {
             .route("/ban-lists", get(ban_lists))
             .route("/bans", get(bans).post(create_ban))
             .route("/bans/{id}", patch(patch_ban).delete(delete_ban))
+            .route("/servers", get(servers))
+            .route("/players", get(players))
+            .route("/players/{id}/relationships/notes", get(player_notes))
             .with_state(state.clone());
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("stub serve loop");
@@ -417,6 +536,133 @@ async fn bans(
     Json(doc).into_response()
 }
 
+async fn servers(
+    State(state): State<Arc<StubState>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, None) {
+        return short;
+    }
+    // filter[organizations] is ignored: the stub serves one org's worth of data.
+    let query = parse_query(uri.query());
+    let size = page_size(&query);
+    let offset = page_offset(&query);
+    let total = state.servers.len();
+    let end = (offset + size).min(total);
+    let slice: &[StubServer] = if offset < total {
+        &state.servers[offset..end]
+    } else {
+        &[]
+    };
+    let data: Vec<Value> = slice.iter().map(server_resource).collect();
+
+    let mut doc = json!({ "data": data });
+    if end < total {
+        let next = format!(
+            "{}/servers?page[size]={size}&page[key]={end}",
+            state.base_url
+        );
+        doc["links"] = json!({ "next": next });
+    }
+    Json(doc).into_response()
+}
+
+async fn players(
+    State(state): State<Arc<StubState>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, None) {
+        return short;
+    }
+    let query = parse_query(uri.query());
+    let size = page_size(&query);
+    let offset = page_offset(&query);
+    let include_ids = query
+        .get("include")
+        .is_some_and(|v| v.split(',').any(|p| p == "identifiers"));
+
+    let total = state.players.len();
+    let end = (offset + size).min(total);
+    let page: &[StubPlayer] = if offset < total {
+        &state.players[offset..end]
+    } else {
+        &[]
+    };
+
+    // Identifier resources get response-unique ids the player's relationship references.
+    let mut seq = 1u64;
+    let mut included: Vec<Value> = Vec::new();
+    let data: Vec<Value> = page
+        .iter()
+        .map(|p| {
+            let mut refs: Vec<Value> = Vec::new();
+            for (kind, value) in &p.identifiers {
+                let rid = seq.to_string();
+                seq += 1;
+                refs.push(json!({ "type": "identifier", "id": rid }));
+                if include_ids {
+                    included.push(json!({
+                        "type": "identifier",
+                        "id": rid,
+                        "attributes": { "type": kind, "identifier": value },
+                    }));
+                }
+            }
+            player_resource(p, refs)
+        })
+        .collect();
+
+    let mut doc = json!({ "data": data, "included": included });
+    if end < total {
+        let mut q = format!("page[size]={size}");
+        if include_ids {
+            q.push_str("&include=identifiers");
+        }
+        q.push_str(&format!("&page[key]={end}"));
+        doc["links"] = json!({ "next": format!("{}/players?{q}", state.base_url) });
+    }
+    Json(doc).into_response()
+}
+
+async fn player_notes(
+    State(state): State<Arc<StubState>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    if let Some(short) = intercept(&state, &method, &uri, &headers, None) {
+        return short;
+    }
+    let query = parse_query(uri.query());
+    let size = page_size(&query);
+    let offset = page_offset(&query);
+    let empty = Vec::new();
+    let notes = state.notes_by_player.get(&id).unwrap_or(&empty);
+    let total = notes.len();
+    let end = (offset + size).min(total);
+    let slice: &[StubNote] = if offset < total {
+        &notes[offset..end]
+    } else {
+        &[]
+    };
+    let data: Vec<Value> = slice.iter().map(note_resource).collect();
+
+    let mut doc = json!({ "data": data });
+    if end < total {
+        let next = format!(
+            "{}/players/{id}/relationships/notes?page[size]={size}&page[key]={end}",
+            state.base_url
+        );
+        doc["links"] = json!({ "next": next });
+    }
+    Json(doc).into_response()
+}
+
 async fn create_ban(
     State(state): State<Arc<StubState>>,
     method: Method,
@@ -570,6 +816,44 @@ fn ban_resource(ban: &StubBan) -> Value {
         "attributes": attributes,
         "relationships": {
             "banList": { "data": { "type": "banList", "id": ban.ban_list_id } },
+        },
+    })
+}
+
+fn server_resource(s: &StubServer) -> Value {
+    json!({
+        "type": "server",
+        "id": s.id,
+        "attributes": {
+            "name": s.name,
+            "ip": s.ip,
+            "port": s.port,
+            "portQuery": s.port_query,
+        },
+    })
+}
+
+fn player_resource(p: &StubPlayer, identifier_refs: Vec<Value>) -> Value {
+    json!({
+        "type": "player",
+        "id": p.id,
+        "attributes": {
+            "name": p.name,
+            "createdAt": p.created_at,
+        },
+        "relationships": {
+            "identifiers": { "data": identifier_refs },
+        },
+    })
+}
+
+fn note_resource(n: &StubNote) -> Value {
+    json!({
+        "type": "playerNote",
+        "id": n.id,
+        "attributes": {
+            "note": n.note,
+            "createdAt": n.created_at,
         },
     })
 }

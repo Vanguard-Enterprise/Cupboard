@@ -1,6 +1,7 @@
 //! One runner per claimed BM connection: decrypts the token, owns the rate-limited
 //! client, heartbeats the lease, and executes live import jobs to completion.
 
+use super::fleet_client::FleetClient;
 use crate::domain::bm;
 use cupboard_bmapi::BmClient;
 use cupboard_crypto::Envelope;
@@ -11,6 +12,7 @@ use uuid::Uuid;
 
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     pool: sqlx::PgPool,
     conn: bm::BmConnection,
@@ -18,6 +20,7 @@ pub async fn run(
     bm_api_base: String,
     claimer: String,
     pepper: Vec<u8>,
+    fleet: Option<FleetClient>,
 ) {
     let envelope = Envelope {
         wrapped_dek: conn.token_dek.clone(),
@@ -132,7 +135,14 @@ pub async fn run(
         match bm::next_live_job(&pool, conn.id).await {
             Ok(Some(job)) => {
                 let signal = super::import::execute_job(
-                    &pool, &client, &conn, job, &pepper, &lost, &claimer,
+                    &pool,
+                    &client,
+                    &conn,
+                    job,
+                    &pepper,
+                    &lost,
+                    &claimer,
+                    fleet.as_ref(),
                 )
                 .await;
                 if matches!(signal, super::import::RunnerSignal::Stop) {

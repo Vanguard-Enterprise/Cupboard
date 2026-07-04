@@ -4,7 +4,7 @@
 use crate::domain::bm::{BmConnection, ImportedBan, ImportedBanList};
 use chrono::Utc;
 use cupboard_bmapi::ban_content_hash;
-use cupboard_bmapi::types::{BanAttrs, BanIdentifier, BanListAttrs, Resource};
+use cupboard_bmapi::types::{BanAttrs, BanIdentifier, BanListAttrs, PlayerAttrs, Resource};
 use std::collections::HashMap;
 
 pub(crate) fn imported_list(res: &Resource<BanListAttrs>, conn: &BmConnection) -> ImportedBanList {
@@ -108,6 +108,20 @@ pub(crate) fn imported_ban(
         content_hash,
         meta,
     })
+}
+
+/// A player's `(kind, value)` identifiers, dereferenced from the page's `included`
+/// resources via the player's `identifiers` relationship. Kinds stay in BM's vocabulary
+/// (`steamID`, `ip`, `eosID`, ...); the players phase picks steam for graph resolution
+/// and keeps the rest in the map row's meta.
+pub(crate) fn resolved_player_identifiers(
+    res: &Resource<PlayerAttrs>,
+    ids_map: &HashMap<String, (String, String)>,
+) -> Vec<(String, String)> {
+    res.rel_ids("identifiers")
+        .into_iter()
+        .filter_map(|id| ids_map.get(id).cloned())
+        .collect()
 }
 
 /// Map a fetched page: importable bans plus the count of skipped (no usable
