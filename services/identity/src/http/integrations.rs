@@ -170,6 +170,30 @@ pub async fn start_import(
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
+#[derive(Deserialize)]
+pub struct ResolveConflictRequest {
+    pub choice: String,
+}
+
+/// Resolve a sync conflict: acknowledge the local outcome or re-apply BM's side.
+pub async fn resolve_conflict(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Json(req): Json<ResolveConflictRequest>,
+) -> Result<Json<bm::ConflictView>, AppError> {
+    let org = claims.require(Permission::IntegrationsManage)?;
+    let conflict = bm::resolve_conflict(
+        &state.app_pool,
+        TenantId::from(org),
+        claims.0.sub.0,
+        id,
+        &req.choice,
+    )
+    .await?;
+    Ok(Json(conflict))
+}
+
 /// Pause (parks at the next slice boundary), resume, or cancel the live import job.
 pub async fn control_import(
     State(state): State<AppState>,

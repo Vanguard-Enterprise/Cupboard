@@ -1876,6 +1876,79 @@ pub struct ConflictView {
     pub created_at: DateTime<Utc>,
 }
 
+/// Resolve a logged sync conflict. `keep_local` acknowledges it (the automatic
+/// local-won outcome stands); `accept_remote` re-applies BM's side to the local ban:
+/// the revoke is lifted and the remote reason/expiry take effect. No outbox op is
+/// enqueued: the ban already exists on BM (the conflict CAME from a BM edit).
+pub async fn resolve_conflict(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    actor: Uuid,
+    conflict_id: Uuid,
+    choice: &str,
+) -> Result<ConflictView, AppError> {
+    let resolution = match choice {
+        "keep_local" => "manual_resolved",
+        "accept_remote" => "remote_won",
+        _ => return Err(AppError::BadRequest("unknown resolution choice".into())),
+    };
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let conflict = sqlx::query_as::<_, ConflictView>(
+        "UPDATE bm_sync_conflicts SET resolution = $3, resolved_by = $4, resolved_at = now() \
+         WHERE id = $1 AND tenant_id = $2 AND resolved_at IS NULL \
+         RETURNING id, entity_type, external_id, local_id, direction, local_snapshot, \
+                   remote_snapshot, resolution, created_at",
+    )
+    .bind(conflict_id)
+    .bind(tenant.0)
+    .bind(resolution)
+    .bind(actor)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("no unresolved conflict with that id".into()))?;
+
+    if choice == "accept_remote" && conflict.entity_type == "ban" {
+        if let Some(local_id) = conflict.local_id {
+            let remote = conflict.remote_snapshot.clone().unwrap_or_default();
+            let expires: Option<DateTime<Utc>> = remote
+                .get("expires_at")
+                .and_then(|v| v.as_str())
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|t| t.with_timezone(&Utc));
+            let status = if expires.is_some_and(|e| e <= Utc::now()) {
+                "expired"
+            } else {
+                "active"
+            };
+            sqlx::query(
+                "UPDATE bans SET status = $2, reason = $3, expires_at = $4, \
+                   revoked_by = NULL, revoked_at = NULL, revoke_reason = NULL \
+                 WHERE id = $1 AND tenant_id = $5",
+            )
+            .bind(local_id)
+            .bind(status)
+            .bind(remote.get("reason").and_then(|v| v.as_str()))
+            .bind(expires)
+            .bind(tenant.0)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
+    crate::domain::audit::record_in_tx(
+        &mut tx,
+        Some(tenant.0),
+        Some(actor),
+        "integrations.bm.conflict.resolve",
+        Some("bm_sync_conflict"),
+        Some(conflict.id),
+        Some(serde_json::json!({ "choice": choice })),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(conflict)
+}
+
 pub async fn list_conflicts(
     app_pool: &PgPool,
     tenant: TenantId,
@@ -2474,6 +2547,103 @@ mod tests {
         .await
         .expect_err("enable on an errored connection must fail loudly");
         assert!(matches!(err, AppError::BadRequest(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn conflict_resolution_paths() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP conflict_resolution_paths: TEST_DATABASE_URL unset");
+            return;
+        };
+        let tenant = TenantId(Uuid::new_v4());
+        let pepper = b"bm-pepper";
+        let actor = Uuid::new_v4();
+
+        // Two revoked bans, each edited on BM afterwards: two logged conflicts.
+        let mut conflict_ids = Vec::new();
+        for (ext, subject) in [
+            ("cr-1", format!("7656119{}", rand_digits())),
+            ("cr-2", format!("7656119{}", rand_digits())),
+        ] {
+            let mut tx = pool.begin().await.unwrap();
+            apply_ban_page(
+                &mut tx,
+                tenant.0,
+                pepper,
+                std::slice::from_ref(&imported_ban(ext, &subject, "original")),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            sqlx::query(
+                "UPDATE bans SET status = 'revoked', revoked_at = now() \
+                 WHERE tenant_id = $1 AND subject_value = $2",
+            )
+            .bind(tenant.0)
+            .bind(&subject)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let mut tx = pool.begin().await.unwrap();
+            apply_ban_page(
+                &mut tx,
+                tenant.0,
+                pepper,
+                std::slice::from_ref(&imported_ban(ext, &subject, "bm edit")),
+            )
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            let id: Uuid = sqlx::query_scalar(
+                "SELECT id FROM bm_sync_conflicts WHERE tenant_id = $1 AND external_id = $2",
+            )
+            .bind(tenant.0)
+            .bind(ext)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            conflict_ids.push((id, subject));
+        }
+
+        // accept_remote lifts the revoke and applies BM's fields.
+        let resolved = resolve_conflict(&pool, tenant, actor, conflict_ids[0].0, "accept_remote")
+            .await
+            .unwrap();
+        assert_eq!(resolved.resolution, "remote_won");
+        let (status, reason): (String, Option<String>) = sqlx::query_as(
+            "SELECT status, reason FROM bans WHERE tenant_id = $1 AND subject_value = $2",
+        )
+        .bind(tenant.0)
+        .bind(&conflict_ids[0].1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (status.as_str(), reason.as_deref()),
+            ("active", Some("bm edit"))
+        );
+
+        // keep_local acknowledges without touching the ban.
+        resolve_conflict(&pool, tenant, actor, conflict_ids[1].0, "keep_local")
+            .await
+            .unwrap();
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM bans WHERE tenant_id = $1 AND subject_value = $2",
+        )
+        .bind(tenant.0)
+        .bind(&conflict_ids[1].1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "revoked", "keep_local must not resurrect");
+
+        // Double-resolution is rejected.
+        assert!(
+            resolve_conflict(&pool, tenant, actor, conflict_ids[0].0, "keep_local")
+                .await
+                .is_err(),
+            "a resolved conflict is terminal"
+        );
     }
 
     #[tokio::test]
