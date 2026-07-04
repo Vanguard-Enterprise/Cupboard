@@ -3,6 +3,7 @@ import { getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
 import { AutoRefresh } from "../auto-refresh";
 import { BmTabs } from "../bm-tabs";
+import { RetryOutboxForm } from "../retry-outbox-form";
 import {
   CONNECTION_STATUS_STYLES,
   EMPTY_OUTBOX,
@@ -150,7 +151,10 @@ export default async function BattlemetricsStatusPage() {
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-neutral-300">Push queue</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium text-neutral-300">Push queue</h2>
+          {outbox.failed > 0 && <RetryOutboxForm />}
+        </div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatTile label="Pending" value={String(outbox.pending)} />
           <StatTile label="Awaiting verification" value={String(outbox.needs_verify)} />

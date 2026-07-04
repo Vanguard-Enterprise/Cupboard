@@ -66,6 +66,8 @@ pub struct StubBan {
     pub identifiers: Value,
     /// Echoed back as `attributes.orgWide` on GET and mutation responses alike.
     pub org_wide: bool,
+    /// BM server id for a server-scoped ban, echoed back under `relationships.server`.
+    pub server_id: Option<String>,
     /// Player-identifier resources emitted under `included` when `include=playerIdentifiers`
     /// is requested: `(resource id, type, identifier value)`.
     pub included_identifiers: Vec<(String, String, String)>,
@@ -89,6 +91,7 @@ impl StubBan {
             expires: None,
             identifiers: json!([]),
             org_wide: false,
+            server_id: None,
             included_identifiers: Vec::new(),
         }
     }
@@ -111,6 +114,11 @@ impl StubBan {
 
     pub fn org_wide(mut self, org_wide: bool) -> Self {
         self.org_wide = org_wide;
+        self
+    }
+
+    pub fn server_id(mut self, server_id: impl Into<String>) -> Self {
+        self.server_id = Some(server_id.into());
         self
     }
 
@@ -700,6 +708,9 @@ async fn create_ban(
         .get("orgWide")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let server_id = body["data"]["relationships"]["server"]["data"]["id"]
+        .as_str()
+        .map(str::to_string);
 
     let seq = state.next_ban_seq();
     let mut ban = StubBan::new(
@@ -712,6 +723,7 @@ async fn create_ban(
     .note(note)
     .identifiers(identifiers)
     .org_wide(org_wide);
+    ban.server_id = server_id;
     if let Some(expires) = expires {
         ban = ban.expires(expires);
     }
@@ -810,13 +822,17 @@ fn ban_resource(ban: &StubBan) -> Value {
         "orgWide": ban.org_wide,
     });
     attributes["identifiers"] = ban.identifiers.clone();
+    let mut relationships = json!({
+        "banList": { "data": { "type": "banList", "id": ban.ban_list_id } },
+    });
+    if let Some(server_id) = &ban.server_id {
+        relationships["server"] = json!({ "data": { "type": "server", "id": server_id } });
+    }
     json!({
         "type": "ban",
         "id": ban.id,
         "attributes": attributes,
-        "relationships": {
-            "banList": { "data": { "type": "banList", "id": ban.ban_list_id } },
-        },
+        "relationships": relationships,
     })
 }
 

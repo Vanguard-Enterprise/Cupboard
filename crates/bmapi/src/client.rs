@@ -139,9 +139,12 @@ impl BmClient {
     }
 
     /// Bans page filtered to one list + a search term: the outbox's existence check
-    /// before re-issuing an ambiguous create. v1 searches steam ids (digits), so the
-    /// term needs no URL encoding.
+    /// before re-issuing an ambiguous create. The term is percent-encoded: v1 subjects
+    /// are steam ids (digits), but a non-digit value (a pasted profile fragment, a typo)
+    /// carrying `#`/`&` would otherwise truncate or corrupt the query and defeat the
+    /// existence check, duplicating bans on every ambiguous retry.
     pub fn bans_search_page(&self, ban_list_id: &str, search: &str) -> String {
+        let search = percent_encode_query(search);
         self.url(&format!(
             "/bans?filter[banList]={ban_list_id}&filter[search]={search}&include=playerIdentifiers&page[size]={PAGE_SIZE}&sort=-timestamp"
         ))
@@ -249,11 +252,28 @@ pub struct NewBmBan<'a> {
     pub note: Option<&'a str>,
     pub expires: Option<chrono::DateTime<chrono::Utc>>,
     pub identifiers: &'a [(String, String)],
+    /// BM server id for a server-scoped ban (resolved through the sync map). `Some`
+    /// sends a `server` relationship and `orgWide: false`; `None` is an org-wide ban.
+    pub server_id: Option<&'a str>,
     pub org_wide: bool,
 }
 
 impl NewBmBan<'_> {
     fn body(&self) -> serde_json::Value {
+        let mut relationships = serde_json::json!({
+            "organization": {
+                "data": { "type": "organization", "id": self.org_id }
+            },
+            "banList": {
+                "data": { "type": "banList", "id": self.ban_list_id }
+            },
+        });
+        // A server-scoped ban narrows to one server instead of escalating org-wide.
+        if let Some(server_id) = self.server_id {
+            relationships["server"] = serde_json::json!({
+                "data": { "type": "server", "id": server_id }
+            });
+        }
         serde_json::json!({
             "data": {
                 "type": "ban",
@@ -273,14 +293,7 @@ impl NewBmBan<'_> {
                     "orgWide": self.org_wide,
                     "autoAddEnabled": false,
                 },
-                "relationships": {
-                    "organization": {
-                        "data": { "type": "organization", "id": self.org_id }
-                    },
-                    "banList": {
-                        "data": { "type": "banList", "id": self.ban_list_id }
-                    },
-                },
+                "relationships": relationships,
             }
         })
     }
@@ -422,6 +435,23 @@ impl BmClient {
     }
 }
 
+/// Minimal RFC3986 percent-encoder for a query-string value. No new deps: only the
+/// unreserved set passes through; every other byte becomes `%XX`. Used for the ambiguous
+/// -create existence check's search term, which is operator-supplied and could carry
+/// URL-significant characters.
+fn percent_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 fn retry_after(res: &reqwest::Response) -> Option<Duration> {
     let secs: u64 = res
         .headers()
@@ -472,6 +502,7 @@ mod tests {
             note: None,
             expires: Some(chrono::Utc.with_ymd_and_hms(2027, 1, 2, 3, 4, 5).unwrap()),
             identifiers: &identifiers,
+            server_id: None,
             org_wide: true,
         };
         let body = ban.body();
@@ -494,6 +525,43 @@ mod tests {
         assert_eq!(
             body["data"]["relationships"]["organization"]["data"]["id"],
             "42"
+        );
+        // No server relationship on an org-wide ban.
+        assert!(body["data"]["relationships"]["server"].is_null());
+    }
+
+    #[test]
+    fn create_ban_body_carries_server_relationship() {
+        let identifiers = vec![("steamID".to_string(), "76561198000000001".to_string())];
+        let ban = NewBmBan {
+            org_id: "42",
+            ban_list_id: "list-1",
+            reason: None,
+            note: None,
+            expires: None,
+            identifiers: &identifiers,
+            server_id: Some("srv-9"),
+            org_wide: false,
+        };
+        let body = ban.body();
+        assert_eq!(body["data"]["attributes"]["orgWide"], false);
+        assert_eq!(
+            body["data"]["relationships"]["server"]["data"]["id"],
+            "srv-9"
+        );
+        assert_eq!(
+            body["data"]["relationships"]["server"]["data"]["type"],
+            "server"
+        );
+    }
+
+    #[test]
+    fn search_term_is_percent_encoded() {
+        let c = BmClient::new("https://stub.example", "t");
+        let url = c.bans_search_page("list-1", "765#61&198");
+        assert!(
+            url.contains("filter[search]=765%2361%26198"),
+            "search term must be percent-encoded: {url}"
         );
     }
 

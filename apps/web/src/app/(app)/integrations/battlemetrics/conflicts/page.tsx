@@ -88,10 +88,12 @@ export default async function BattlemetricsConflictsPage() {
       <div>
         <h1 className="text-2xl font-semibold">Sync conflicts</h1>
         <p className="mt-1 text-sm text-neutral-400">
-          When BattleMetrics edits a ban a moderator had revoked here, the revoke
+          Inbound: when BattleMetrics edits a ban a moderator had revoked here, the revoke
           stands (the edited fields are still recorded on the ban) and the conflict is
           logged. Keep revoked to acknowledge that outcome, or Accept BattleMetrics to
-          lift the revoke and let the ban run as BattleMetrics has it.
+          lift the revoke and let the ban run as BattleMetrics has it. Outbound:
+          BattleMetrics removed a ban Cupboard pushed. Re-push it to BattleMetrics to keep
+          it, or Accept removal to revoke it here too.
         </p>
       </div>
 
@@ -139,10 +141,21 @@ export default async function BattlemetricsConflictsPage() {
                         <td colSpan={4} className="px-3 py-3">
                           <div className="grid gap-3 sm:grid-cols-2">
                             <SnapshotCard title="Local at conflict time" snapshot={c.local_snapshot} />
-                            <SnapshotCard title="BattleMetrics" snapshot={c.remote_snapshot} />
+                            {c.direction === "outbound" ? (
+                              <div className="rounded border border-neutral-800 p-3">
+                                <div className="text-xs font-medium text-neutral-400">
+                                  BattleMetrics
+                                </div>
+                                <p className="mt-2 text-sm text-neutral-300">
+                                  BattleMetrics removed this pushed ban.
+                                </p>
+                              </div>
+                            ) : (
+                              <SnapshotCard title="BattleMetrics" snapshot={c.remote_snapshot} />
+                            )}
                           </div>
                           <div className="mt-3">
-                            <ResolveConflictForm id={c.id} />
+                            <ResolveConflictForm id={c.id} direction={c.direction} />
                           </div>
                         </td>
                       </tr>

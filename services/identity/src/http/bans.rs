@@ -54,6 +54,16 @@ pub async fn create(
             "subject_type must be steam or eac".into(),
         ));
     }
+    // A steam subject flows verbatim into BM's search URL on an outbound verify; only
+    // digit ids are valid, and rejecting others here keeps a stray `#`/`&` from ever
+    // corrupting that query (belt-and-braces with the search-term encoding).
+    if req.subject_type == "steam"
+        && (subject_value.len() > 32 || !subject_value.chars().all(|c| c.is_ascii_digit()))
+    {
+        return Err(AppError::BadRequest(
+            "steam subject_value must be 1-32 digits".into(),
+        ));
+    }
     match req.scope.as_str() {
         "network" => {}
         "server" => {

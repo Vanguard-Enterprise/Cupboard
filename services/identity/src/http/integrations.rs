@@ -163,6 +163,20 @@ pub async fn connect(
     Ok((StatusCode::CREATED, Json(view)))
 }
 
+/// Requeue terminally-failed outbound pushes (`failed` -> `pending`). A BM outage that
+/// outlasts the retry window parks ops as failed; this is the operator's manual reset.
+pub async fn retry_outbox(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::IntegrationsManage)?;
+    // Requeued ops need a runner to drain them, and runners need the master key.
+    master_key(&state)?;
+    let requeued =
+        bm::retry_failed_outbox(&state.app_pool, TenantId::from(org), claims.0.sub.0).await?;
+    Ok(Json(json!({ "requeued": requeued })))
+}
+
 pub async fn start_import(
     State(state): State<AppState>,
     claims: AuthClaims,

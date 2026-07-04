@@ -108,7 +108,7 @@ No CI build-matrix change (no new service); identity's Cargo.toml gains
 - New OpenBao KV key `cupboard/staging/identity -> master_key` (32-byte base64;
   envelope master key for BM tokens); ExternalSecret + `IDENTITY_MASTER_KEY` env on the
   identity Deployment.
-- Identity also needs `FLEET_SERVICE_URL` + the existing internal token env to call
+- Identity also needs `FLEET_INTERNAL_URL` + the existing internal token env to call
   fleet's `/internal/servers/import` (PR4).
 - Recurring gotchas: `use1` app-of-apps is `syncPolicy: None` (apply changed Application
   CRs manually); use the direct `cupboard-rw` service, not the pooler, where
@@ -121,7 +121,7 @@ No CI build-matrix change (no new service); identity's Cargo.toml gains
 | Local ban create/revoke/enforce | ok | ok | ok | ok (outbox absorbs) | ok |
 | Import job | wizard prompts | fails fast, `status=error`, resumable after token replace | auto-throttles | backoff, then `failed` with cursor kept | ok (import is independent) |
 | Inbound sync | off | paused + banner | cadence stretches | ticks skipped, `last_error` surfaced | off |
-| Outbound push | off | outbox stays `pending`, alert | delayed | delayed (backoff) | not enqueued |
+| Outbound push | off | still enqueues (`pending`); drains after reconnect | delayed | retries indefinitely (capped backoff), operator retry button for `failed` | not enqueued |
 
 Invariant: **no BM failure mode ever blocks local moderation or enforcement**. BM I/O
 happens only inside the runner, never on a request path.

@@ -238,6 +238,7 @@ async fn create_ban_happy_path() {
         note: None,
         expires: None,
         identifiers: &identifiers,
+        server_id: None,
         org_wide: true,
     };
 
@@ -356,6 +357,7 @@ async fn create_ban_server_error_is_ambiguous_no_retry() {
         note: None,
         expires: None,
         identifiers: &identifiers,
+        server_id: None,
         org_wide: false,
     };
 
@@ -384,6 +386,7 @@ async fn create_ban_rate_limited_then_succeeds() {
         note: None,
         expires: None,
         identifiers: &identifiers,
+        server_id: None,
         org_wide: false,
     };
 

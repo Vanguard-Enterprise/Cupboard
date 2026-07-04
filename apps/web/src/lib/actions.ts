@@ -340,6 +340,21 @@ export async function updateBmOutboundAction(
   return { ok: true, backfilled: data.backfilled };
 }
 
+export type BmRetryOutboxState = { error?: string; requeued?: number };
+
+/** Requeue terminally-failed outbound pushes (`failed` -> `pending`) after a BM outage
+ * that outlasted the retry window. A healthy runner drains them on its next tick. */
+export async function retryBmOutboxAction(
+  _prev: BmRetryOutboxState,
+  _form: FormData,
+): Promise<BmRetryOutboxState> {
+  const res = await apiFetch("/integrations/bm/outbox/retry", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  const data = await res.json();
+  revalidatePath("/integrations/battlemetrics/status");
+  return { requeued: data.requeued };
+}
+
 export type BmImportControlFormState = { error?: string; ok?: boolean };
 
 /** Pause, resume, or cancel the tenant's live BattleMetrics import job (action comes

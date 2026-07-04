@@ -62,6 +62,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(integrations::control_import),
         )
         .route(
+            "/integrations/bm/outbox/retry",
+            axum::routing::post(integrations::retry_outbox),
+        )
+        .route(
             "/integrations/bm/conflicts/{id}/resolve",
             axum::routing::post(integrations::resolve_conflict),
         )

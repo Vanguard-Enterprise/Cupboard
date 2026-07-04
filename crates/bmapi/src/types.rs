@@ -123,9 +123,12 @@ pub struct BanAttrs {
     pub reason: Option<String>,
     /// BM's private staff note on the ban.
     pub note: Option<String>,
-    /// `None` = permanent.
-    #[serde(deserialize_with = "lenient_ts")]
-    pub expires: Option<DateTime<Utc>>,
+    /// Raw BM `expires` value (`None` = permanent). Kept as a string and parsed lazily
+    /// via [`BanAttrs::parsed_expires`]: a lenient decode that silently turned an
+    /// unparseable expiry into `None` would import a temporary ban as permanent, keeping
+    /// a player banned forever once the real BM expiry passed.
+    #[serde(rename = "expires")]
+    pub expires: Option<String>,
     /// Fully lenient: `null` or an unexpected shape decodes to empty (the ban is then
     /// counted as skipped by the import) rather than sinking the page.
     #[serde(default, deserialize_with = "lenient_identifiers")]
@@ -133,6 +136,31 @@ pub struct BanAttrs {
     pub org_wide: Option<bool>,
     pub auto_add_enabled: Option<bool>,
     pub native_enabled: Option<bool>,
+}
+
+impl BanAttrs {
+    /// Parse `expires` into an instant. `Ok(None)` = permanent (absent/empty); `Ok(Some)`
+    /// = a real expiry; `Err(())` = a non-empty value we could not parse. Callers skip a
+    /// ban on `Err` rather than treating a parse failure as the strongest possible value
+    /// (a permanent ban). Accepts RFC3339 plus BM's colon-less-offset variants
+    /// (`...+0000`, with or without fractional seconds). The unit error is intentional:
+    /// the only fact a caller needs is "unparseable".
+    #[allow(clippy::result_unit_err)]
+    pub fn parsed_expires(&self) -> Result<Option<DateTime<Utc>>, ()> {
+        let Some(raw) = self
+            .expires
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok(None);
+        };
+        DateTime::parse_from_rfc3339(raw)
+            .or_else(|_| DateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f%z"))
+            .or_else(|_| DateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%z"))
+            .map(|t| Some(t.with_timezone(&Utc)))
+            .map_err(|_| ())
+    }
 }
 
 /// Any-shape tolerance for the identifiers array: element-level oddities are already
@@ -289,7 +317,11 @@ mod tests {
         let ban = &doc.data[0];
         assert_eq!(ban.attributes.uid.as_deref(), Some("abc12345"));
         assert!(ban.attributes.timestamp.is_some());
-        assert!(ban.attributes.expires.is_none(), "malformed ts -> None");
+        assert_eq!(ban.attributes.expires.as_deref(), Some("not-a-timestamp"));
+        assert!(
+            ban.attributes.parsed_expires().is_err(),
+            "an unparseable expiry is an error, not a silent permanent ban"
+        );
         assert_eq!(ban.attributes.identifiers.len(), 3);
         assert!(matches!(
             ban.attributes.identifiers[0],
@@ -308,6 +340,33 @@ mod tests {
             ids.get("7"),
             Some(&("steamID".to_string(), "76561198000000002".to_string()))
         );
+    }
+
+    #[test]
+    fn parsed_expires_accepts_offset_without_colon_and_flags_garbage() {
+        let parse = |raw: serde_json::Value| -> Result<Option<DateTime<Utc>>, ()> {
+            let doc: ListDoc<BanAttrs> = serde_json::from_value(serde_json::json!({
+                "data": [{ "type": "ban", "id": "1", "attributes": { "expires": raw } }]
+            }))
+            .expect("decode");
+            doc.data[0].attributes.parsed_expires()
+        };
+        // RFC3339 with a Z.
+        assert!(parse(serde_json::json!("2026-08-01T00:00:00.000Z"))
+            .unwrap()
+            .is_some());
+        // Offset without a colon (BM's shape), with and without fractional seconds: must
+        // parse now instead of skipping the ban.
+        assert!(parse(serde_json::json!("2026-08-01T00:00:00+0000"))
+            .unwrap()
+            .is_some());
+        assert!(parse(serde_json::json!("2026-08-01T00:00:00.123+0000"))
+            .unwrap()
+            .is_some());
+        // Absent = permanent.
+        assert_eq!(parse(serde_json::json!(null)), Ok(None));
+        // Garbage = error: the caller skips the ban, never imports it as permanent.
+        assert!(parse(serde_json::json!("not-a-timestamp")).is_err());
     }
 
     #[test]

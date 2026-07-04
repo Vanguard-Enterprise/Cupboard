@@ -103,6 +103,7 @@ export const PHASE_COUNT_LABELS: Record<string, string> = {
   bans_updated: "Bans updated",
   bans_unchanged: "Bans unchanged",
   bans_skipped_no_identifier: "Bans skipped (no identifier)",
+  bans_skipped_bad_expiry: "Bans skipped (bad expiry)",
   servers_imported: "Servers imported",
   servers_skipped_unconfigured: "Servers skipped (unconfigured)",
   servers_skipped_disabled: "Servers skipped (disabled)",

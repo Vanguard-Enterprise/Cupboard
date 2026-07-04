@@ -60,14 +60,19 @@ fn pick_primary(resolved: &[(String, String)]) -> Option<(&'static str, String)>
     best.map(|(_, kind, value)| (kind, value.to_string()))
 }
 
-/// Map one BM ban resource to an importable ban. `None` = no usable identifier
-/// (counted, per decision F). The full resolved array + BM extras ride `meta`.
+/// Map one BM ban resource to an importable ban. `None` = skip (no usable identifier, or
+/// an unparseable expiry, per decision F and the expiry-precision fix). The full resolved
+/// array + BM extras ride `meta`.
 pub(crate) fn imported_ban(
     res: &Resource<BanAttrs>,
     ids_map: &HashMap<String, (String, String)>,
     list_id: &str,
 ) -> Option<ImportedBan> {
     let a = &res.attributes;
+    // A BM temp ban whose expiry we cannot parse must be SKIPPED, never imported as
+    // permanent: a lenient decode to `None` would keep a player banned forever once the
+    // real expiry passed. Checked first so it dominates the skip classification.
+    let expires = a.parsed_expires().ok()?;
     let mut resolved: Vec<(String, String)> = Vec::new();
     let mut unresolved = 0u32;
     for ident in &a.identifiers {
@@ -81,8 +86,7 @@ pub(crate) fn imported_ban(
         }
     }
     let (subject_type, subject_value) = pick_primary(&resolved)?;
-    let content_hash =
-        ban_content_hash(a.reason.as_deref(), a.expires, &resolved, a.note.as_deref());
+    let content_hash = ban_content_hash(a.reason.as_deref(), expires, &resolved, a.note.as_deref());
     let meta = serde_json::json!({
         "uid": a.uid,
         "note": a.note,
@@ -104,7 +108,7 @@ pub(crate) fn imported_ban(
         subject_value,
         reason: a.reason.clone(),
         issued_at: a.timestamp.unwrap_or_else(Utc::now),
-        expires_at: a.expires,
+        expires_at: expires,
         content_hash,
         meta,
     })
@@ -124,19 +128,39 @@ pub(crate) fn resolved_player_identifiers(
         .collect()
 }
 
-/// Map a fetched page: importable bans plus the count of skipped (no usable
-/// identifier) resources.
+/// Per-page skip breakdown. Both kinds are unmappable and must count as "seen" for the
+/// delete sweep, but they carry distinct import counters.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct PageSkips {
+    pub no_identifier: usize,
+    pub bad_expiry: usize,
+}
+
+impl PageSkips {
+    pub(crate) fn total(&self) -> usize {
+        self.no_identifier + self.bad_expiry
+    }
+}
+
+/// Map a fetched page: importable bans plus a breakdown of skipped (unmappable)
+/// resources. A resource with an unparseable expiry is classified as `bad_expiry` (that
+/// check dominates in `imported_ban`); anything else that skips lacked a usable
+/// identifier.
 pub(crate) fn imported_ban_page(
     data: &[Resource<BanAttrs>],
     ids_map: &HashMap<String, (String, String)>,
     list_id: &str,
-) -> (Vec<ImportedBan>, usize) {
-    let bans: Vec<ImportedBan> = data
-        .iter()
-        .filter_map(|res| imported_ban(res, ids_map, list_id))
-        .collect();
-    let skipped = data.len() - bans.len();
-    (bans, skipped)
+) -> (Vec<ImportedBan>, PageSkips) {
+    let mut bans = Vec::new();
+    let mut skips = PageSkips::default();
+    for res in data {
+        match imported_ban(res, ids_map, list_id) {
+            Some(ban) => bans.push(ban),
+            None if res.attributes.parsed_expires().is_err() => skips.bad_expiry += 1,
+            None => skips.no_identifier += 1,
+        }
+    }
+    (bans, skips)
 }
 
 #[cfg(test)]
@@ -176,6 +200,27 @@ mod tests {
         }))
         .unwrap();
         assert!(imported_ban(&res, &HashMap::new(), "l1").is_none());
+    }
+
+    #[test]
+    fn unparseable_expiry_skips_the_ban_and_counts_bad_expiry() {
+        // A temp ban whose expiry we cannot parse must be skipped, never imported as a
+        // permanent ban.
+        let res: Resource<BanAttrs> = serde_json::from_value(serde_json::json!({
+            "type": "ban",
+            "id": "b-bad",
+            "attributes": {
+                "reason": "cheating",
+                "expires": "not-a-timestamp",
+                "identifiers": [ {"type": "steamID", "identifier": "76561198000000001"} ]
+            }
+        }))
+        .unwrap();
+        assert!(imported_ban(&res, &HashMap::new(), "l1").is_none());
+        let (bans, skips) = imported_ban_page(std::slice::from_ref(&res), &HashMap::new(), "l1");
+        assert!(bans.is_empty());
+        assert_eq!(skips.bad_expiry, 1);
+        assert_eq!(skips.no_identifier, 0);
     }
 
     #[test]

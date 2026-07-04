@@ -25,6 +25,11 @@ pub(crate) struct SyncSettings {
     pub rescan: Duration,
 }
 
+/// Interleave an outbound drain every N pages of a long walk so a staff unban never waits
+/// behind a bulk BM scan (a big org is thousands of pages). Mirrors the import path's
+/// PAGES_PER_SLICE discipline.
+const DRAIN_EVERY_PAGES: usize = 10;
+
 /// Cadences from the connection's settings jsonb, clamped to sane bounds.
 pub(crate) fn settings_from(settings: &serde_json::Value) -> SyncSettings {
     let secs = |key: &str, default: u64, min: u64, max: u64| {
@@ -111,12 +116,15 @@ pub(crate) async fn tail_poll(
     deep: bool,
 ) -> Result<(), SyncError> {
     let lists = bm::import_enabled_list_ids_pool(pool, conn.tenant_id).await?;
+    // A deep walk can span many pages; interleave the outbound drain so a staff unban does
+    // not wait behind it (see full_rescan for the same discipline).
+    let mut pages_since_drain = 0usize;
     for list_id in &lists {
         let mut url = client.bans_first_page(list_id);
         loop {
             let doc = client.list_page::<BanAttrs>(&url).await?;
             let ids_map = included_identifier_map(&doc.included);
-            let (page, _skipped) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
+            let (page, _skips) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
 
             let mut tx = pool.begin().await?;
             // Fenced like the import path's per-page save: a stale runner must
@@ -130,6 +138,15 @@ pub(crate) async fn tail_poll(
                 tracing::info!(tenant = %conn.tenant_id, list = %list_id,
                     inserted = outcome.inserted, updated = outcome.updated,
                     conflicts = outcome.conflicts, "tail poll applied changes");
+            }
+            if deep {
+                pages_since_drain += 1;
+                if pages_since_drain >= DRAIN_EVERY_PAGES {
+                    pages_since_drain = 0;
+                    if conn.sync_bans_outbound {
+                        super::outbox::drain(pool, client, conn, claimer).await?;
+                    }
+                }
             }
             match doc.links.next {
                 Some(next) if deep || outcome.inserted + outcome.updated > 0 => url = next,
@@ -160,6 +177,7 @@ pub(crate) async fn full_rescan(
         .map_err(AppError::from)?;
     let lists = bm::import_enabled_list_ids_pool(pool, conn.tenant_id).await?;
 
+    let mut pages_since_drain = 0usize;
     for list_id in &lists {
         let mut url = client.bans_first_page(list_id);
         loop {
@@ -175,7 +193,7 @@ pub(crate) async fn full_rescan(
 
             let doc = client.list_page::<BanAttrs>(&url).await?;
             let ids_map = included_identifier_map(&doc.included);
-            let (page, skipped) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
+            let (page, skips) = mapping::imported_ban_page(&doc.data, &ids_map, list_id);
 
             let mut tx = pool.begin().await?;
             if !bm::claim_held_in_tx(&mut tx, conn.id, claimer).await? {
@@ -183,13 +201,24 @@ pub(crate) async fn full_rescan(
             }
             bm::apply_ban_page(&mut tx, conn.tenant_id, pepper, &page).await?;
             // Every id BM returned counts as seen, INCLUDING unmappable ones
-            // (skipped rows): a ban BM still serves must never be swept because one
-            // fetch of it failed to map.
-            if skipped > 0 {
+            // (skipped rows, either kind): a ban BM still serves must never be swept
+            // because one fetch of it failed to map.
+            if skips.total() > 0 {
                 let all_ids: Vec<String> = doc.data.iter().map(|r| r.id.clone()).collect();
                 bm::touch_seen_external_ids(&mut tx, conn.tenant_id, &all_ids).await?;
             }
             tx.commit().await?;
+
+            // Interleave the outbound drain so a staff unban does not wait behind the
+            // whole scan; auth errors propagate as a SyncError. The drained count is
+            // irrelevant here.
+            pages_since_drain += 1;
+            if pages_since_drain >= DRAIN_EVERY_PAGES {
+                pages_since_drain = 0;
+                if conn.sync_bans_outbound {
+                    super::outbox::drain(pool, client, conn, claimer).await?;
+                }
+            }
 
             match doc.links.next {
                 Some(next) => url = next,
@@ -209,10 +238,17 @@ pub(crate) async fn full_rescan(
     }
     let revoked =
         bm::revoke_bans_absent_from_scan(&mut tx, conn.tenant_id, scan_start, &lists).await?;
+    // BM deleting one of OUR pushed (cupboard-origin) bans is a disagreement, not an
+    // authority: log an outbound conflict for review instead of revoking locally.
+    let flagged = bm::flag_outbound_deletions(&mut tx, conn.tenant_id, scan_start, &lists).await?;
     tx.commit().await?;
     if !revoked.is_empty() {
         tracing::info!(tenant = %conn.tenant_id, count = revoked.len(),
             "re-scan revoked bans removed on BattleMetrics");
+    }
+    if !flagged.is_empty() {
+        tracing::info!(tenant = %conn.tenant_id, count = flagged.len(),
+            "re-scan flagged pushed bans removed on BattleMetrics for review");
     }
     Ok(ScanOutcome::Completed)
 }

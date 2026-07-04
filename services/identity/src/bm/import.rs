@@ -578,7 +578,7 @@ async fn run_phases(
                     .unwrap_or_else(|| client.bans_first_page(&list_id));
                 let doc = client.list_page::<BanAttrs>(&url).await?;
                 let ids_map = included_identifier_map(&doc.included);
-                let (page, skipped) = mapping::imported_ban_page(&doc.data, &ids_map, &list_id);
+                let (page, skips) = mapping::imported_ban_page(&doc.data, &ids_map, &list_id);
 
                 let mut tx = pool.begin().await?;
                 let outcome = bm::apply_ban_page(&mut tx, conn.tenant_id, pepper, &page)
@@ -587,7 +587,8 @@ async fn run_phases(
                 counts.add("bans_imported", outcome.inserted);
                 counts.add("bans_updated", outcome.updated);
                 counts.add("bans_unchanged", outcome.unchanged);
-                counts.add("bans_skipped_no_identifier", skipped);
+                counts.add("bans_skipped_no_identifier", skips.no_identifier);
+                counts.add("bans_skipped_bad_expiry", skips.bad_expiry);
                 counts.add("sync_conflicts", outcome.conflicts);
                 cursor.next_url = doc.links.next.clone();
                 if cursor.next_url.is_none() {
