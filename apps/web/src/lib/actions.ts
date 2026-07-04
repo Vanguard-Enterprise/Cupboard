@@ -356,6 +356,32 @@ export async function controlBmImportAction(
   return { ok: true };
 }
 
+export type BmResolveConflictFormState = { error?: string; ok?: boolean };
+
+/** Resolve a BattleMetrics sync conflict: `keep_local` acknowledges the automatic
+ * local-won outcome; `accept_remote` re-applies BM's side to the local ban. The choice
+ * comes from the submit button; a 404 (already resolved by someone else) surfaces as an
+ * error. */
+export async function resolveBmConflictAction(
+  _prev: BmResolveConflictFormState,
+  form: FormData,
+): Promise<BmResolveConflictFormState> {
+  const id = form.get("id");
+  const choice = form.get("choice");
+  if (typeof id !== "string" || !id) return { error: "missing conflict id" };
+  if (choice !== "keep_local" && choice !== "accept_remote") {
+    return { error: "missing resolution choice" };
+  }
+  const res = await apiFetch(`/integrations/bm/conflicts/${id}/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ choice }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics/conflicts");
+  return { ok: true };
+}
+
 export type BmImportScopeFormState = { error?: string; ok?: boolean };
 
 /** Persist which BM entity types (servers/players/notes) the next import job pulls. */
