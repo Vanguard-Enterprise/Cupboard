@@ -35,6 +35,8 @@ pub async fn status(
     let ban_lists = bm::list_ban_lists(&state.app_pool, tenant).await?;
     let conflicts = bm::list_conflicts(&state.app_pool, tenant).await?;
     let outbox = bm::outbox_summary(&state.app_pool, tenant).await?;
+    let (has_completed_import, unresolved_conflicts) =
+        bm::sync_health_counts(&state.app_pool, tenant).await?;
     Ok(Json(json!({
         "configured": state.config.identity_master_key.is_some(),
         "connection": connection,
@@ -42,6 +44,8 @@ pub async fn status(
         "ban_lists": ban_lists,
         "conflicts": conflicts,
         "outbox": outbox,
+        "has_completed_import": has_completed_import,
+        "unresolved_conflicts": unresolved_conflicts,
     })))
 }
 

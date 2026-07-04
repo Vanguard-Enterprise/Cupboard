@@ -61,6 +61,8 @@ export type BmStatus = {
   ban_lists: BmBanList[];
   conflicts: BmConflict[];
   outbox: BmOutbox;
+  has_completed_import: boolean;
+  unresolved_conflicts: number;
 };
 
 export const EMPTY_OUTBOX: BmOutbox = {

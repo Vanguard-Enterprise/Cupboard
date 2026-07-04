@@ -3,7 +3,14 @@
 > Turns ROADMAP Phase 4 ("BattleMetrics migration", size L) + ARCHITECTURE
 > "BattleMetrics import & sync" (decisions #20-22) into a sequenced, de-risked build.
 > Follows the shape that worked for Phases 2 and 3.
-> **Status:** approved decisions recorded (2026-07-03); PR1 in progress on branch `phase4`.
+> **Status (2026-07-04):** PR1-PR5 built, high-effort-reviewed, and pushed (draft PR #7).
+> Each PR's review findings were fixed in dedicated commits (9 + 10 + 16 + PR5's pending).
+> Remaining: PR6 (staging deploy: OpenBao `cupboard/staging/identity -> master_key`,
+> `IDENTITY_MASTER_KEY` + `FLEET_INTERNAL_URL` envs; real-org import; degradation
+> matrix) — gated on the Frank-side BM org bootstrap. Notable deltas from plan: flags
+> import deferred to PR6 empirical validation (BM flags API unconfirmed); imports run
+> in bounded slices so outbound pushes interleave; outbound enable implies sync
+> enabled.
 
 ## Definition of Done (from ROADMAP)
 

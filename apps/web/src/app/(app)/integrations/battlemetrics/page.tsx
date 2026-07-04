@@ -107,7 +107,7 @@ export default async function BattlemetricsPage() {
   const outbox = status?.outbox ?? EMPTY_OUTBOX;
   const outboxVisible =
     outbox.pending > 0 || outbox.needs_verify > 0 || outbox.failed > 0 || outbox.abandoned > 0;
-  const unresolved = conflicts.filter((c) => isConflictReviewable(c.resolution)).length;
+  const unresolved = status?.unresolved_conflicts ?? 0;
   const jobActive = latestJob?.status === "queued" || latestJob?.status === "running";
   // A paused job still occupies the live-job slot (Run import stays disabled) but isn't
   // progressing, so it shouldn't force the fast 3s poll on its own.
@@ -117,9 +117,13 @@ export default async function BattlemetricsPage() {
 
   const connected = !!connection;
   const importDone = latestJob?.status === "completed";
-  // Step 4 opens once a full import has landed at least once, or if inbound sync is
-  // already running (a reconnect keeps sync on without a fresh import).
-  const syncUnlocked = importDone || !!connection?.sync_enabled;
+  // Step 4 opens once ANY import has ever completed (the latest one alone misleads
+  // after a failed re-run), or if sync is already configured either direction: the
+  // toggles must never become unreachable for an operator who had them.
+  const syncUnlocked =
+    (status?.has_completed_import ?? false) ||
+    !!connection?.sync_enabled ||
+    !!connection?.sync_bans_outbound;
   const completes = [connected, banLists.length > 0, importDone, !!connection?.sync_enabled];
   // Current step = the first incomplete one. `-1` once every step is complete.
   const currentIndex = completes.findIndex((c) => !c);

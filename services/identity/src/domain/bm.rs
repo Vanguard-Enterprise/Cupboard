@@ -1837,6 +1837,31 @@ pub struct OutboxSummary {
     pub abandoned: i64,
 }
 
+/// Health facts for the status payload: whether ANY import ever completed (the
+/// wizard's sync-step unlock; the latest job alone misleads after a failed re-run)
+/// and how many conflicts still await review (the list is windowed; the count is not).
+pub async fn sync_health_counts(
+    app_pool: &PgPool,
+    tenant: TenantId,
+) -> Result<(bool, i64), AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let has_completed_import: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM bm_import_jobs WHERE tenant_id = $1 \
+           AND status = 'completed')",
+    )
+    .bind(tenant.0)
+    .fetch_one(&mut *tx)
+    .await?;
+    let unresolved_conflicts: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM bm_sync_conflicts WHERE tenant_id = $1 AND resolved_at IS NULL",
+    )
+    .bind(tenant.0)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok((has_completed_import, unresolved_conflicts))
+}
+
 pub async fn outbox_summary(
     app_pool: &PgPool,
     tenant: TenantId,
@@ -1909,26 +1934,21 @@ pub async fn resolve_conflict(
 
     if choice == "accept_remote" && conflict.entity_type == "ban" {
         if let Some(local_id) = conflict.local_id {
-            let remote = conflict.remote_snapshot.clone().unwrap_or_default();
-            let expires: Option<DateTime<Utc>> = remote
-                .get("expires_at")
-                .and_then(|v| v.as_str())
-                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-                .map(|t| t.with_timezone(&Utc));
-            let status = if expires.is_some_and(|e| e <= Utc::now()) {
-                "expired"
-            } else {
-                "active"
-            };
+            // The ban row already carries BM's CURRENT fields: apply_ban_page wrote
+            // them when it logged the conflict, and again for any later BM edits.
+            // Only the revoke stood. Accepting the remote side therefore just lifts
+            // the revoke and recomputes status from the row's own expiry.
+            // Re-applying the conflict's frozen snapshot would resurrect stale values
+            // that the echo-guard hash (already matching BM's current content) would
+            // never let a re-scan repair.
             sqlx::query(
-                "UPDATE bans SET status = $2, reason = $3, expires_at = $4, \
+                "UPDATE bans SET \
+                   status = CASE WHEN expires_at IS NOT NULL AND expires_at <= now() \
+                                 THEN 'expired' ELSE 'active' END, \
                    revoked_by = NULL, revoked_at = NULL, revoke_reason = NULL \
-                 WHERE id = $1 AND tenant_id = $5",
+                 WHERE id = $1 AND tenant_id = $2 AND status = 'revoked'",
             )
             .bind(local_id)
-            .bind(status)
-            .bind(remote.get("reason").and_then(|v| v.as_str()))
-            .bind(expires)
             .bind(tenant.0)
             .execute(&mut *tx)
             .await?;
@@ -1958,7 +1978,7 @@ pub async fn list_conflicts(
         "SELECT id, entity_type, external_id, local_id, direction, local_snapshot, \
                 remote_snapshot, resolution, created_at \
          FROM bm_sync_conflicts WHERE tenant_id = $1 \
-         ORDER BY created_at DESC LIMIT 100",
+         ORDER BY (resolved_at IS NULL) DESC, created_at DESC LIMIT 100",
     )
     .bind(tenant.0)
     .fetch_all(&mut *tx)
@@ -2605,7 +2625,20 @@ mod tests {
             conflict_ids.push((id, subject));
         }
 
-        // accept_remote lifts the revoke and applies BM's fields.
+        // A newer BM edit lands after conflict A was logged (and logs conflict B):
+        // accepting the OLDER conflict must lift the revoke while preserving the
+        // row's newest fields, never resurrecting the stale snapshot.
+        let mut tx = pool.begin().await.unwrap();
+        apply_ban_page(
+            &mut tx,
+            tenant.0,
+            pepper,
+            std::slice::from_ref(&imported_ban("cr-1", &conflict_ids[0].1, "newest edit")),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
         let resolved = resolve_conflict(&pool, tenant, actor, conflict_ids[0].0, "accept_remote")
             .await
             .unwrap();
@@ -2620,7 +2653,8 @@ mod tests {
         .unwrap();
         assert_eq!(
             (status.as_str(), reason.as_deref()),
-            ("active", Some("bm edit"))
+            ("active", Some("newest edit")),
+            "accept_remote lifts the revoke and keeps the row's current fields"
         );
 
         // keep_local acknowledges without touching the ban.

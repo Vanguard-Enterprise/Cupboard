@@ -18,7 +18,7 @@ export function ResolveConflictForm({ id }: { id: string }) {
           disabled={pending}
           className="rounded bg-neutral-800 px-3 py-2 text-sm font-medium hover:bg-neutral-700 disabled:opacity-50"
         >
-          {pending ? "Saving…" : "Keep local"}
+          {pending ? "Saving…" : "Keep revoked"}
         </button>
         <button
           name="choice"

@@ -51,7 +51,7 @@ export default async function BattlemetricsStatusPage() {
   const banLists = status?.ban_lists ?? [];
   const conflicts = status?.conflicts ?? [];
   const outbox = status?.outbox ?? EMPTY_OUTBOX;
-  const unresolved = conflicts.filter((c) => isConflictReviewable(c.resolution)).length;
+  const unresolved = status?.unresolved_conflicts ?? 0;
 
   return (
     <div className="flex flex-col gap-8">

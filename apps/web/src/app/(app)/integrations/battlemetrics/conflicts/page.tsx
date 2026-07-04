@@ -79,17 +79,19 @@ export default async function BattlemetricsConflictsPage() {
   const loadFailed = statusResult === "error";
   const status = loadFailed ? null : statusResult;
   const conflicts = status?.conflicts ?? [];
-  const unresolved = conflicts.filter((c) => isConflictReviewable(c.resolution)).length;
+  const unresolved = status?.unresolved_conflicts ?? 0;
 
   return (
     <div className="flex flex-col gap-8">
-      <AutoRefresh active={loadFailed} intervalMs={15000} />
+      <AutoRefresh active intervalMs={15000} />
 
       <div>
         <h1 className="text-2xl font-semibold">Sync conflicts</h1>
         <p className="mt-1 text-sm text-neutral-400">
-          When a ban changed on both sides, Cupboard keeps its local copy and logs the
-          conflict for review. Accept BattleMetrics to re-apply its version instead.
+          When BattleMetrics edits a ban a moderator had revoked here, the revoke
+          stands (the edited fields are still recorded on the ban) and the conflict is
+          logged. Keep revoked to acknowledge that outcome, or Accept BattleMetrics to
+          lift the revoke and let the ban run as BattleMetrics has it.
         </p>
       </div>
 
@@ -102,7 +104,7 @@ export default async function BattlemetricsConflictsPage() {
         </p>
       )}
 
-      {!loadFailed && conflicts.length === 0 ? (
+      {loadFailed ? null : conflicts.length === 0 ? (
         <p className="text-sm text-neutral-500">No sync conflicts. Everything is aligned.</p>
       ) : (
         <div className="overflow-hidden rounded border border-neutral-800">
@@ -136,7 +138,7 @@ export default async function BattlemetricsConflictsPage() {
                       <tr className="border-t border-neutral-900 bg-neutral-950/50">
                         <td colSpan={4} className="px-3 py-3">
                           <div className="grid gap-3 sm:grid-cols-2">
-                            <SnapshotCard title="Local (Cupboard)" snapshot={c.local_snapshot} />
+                            <SnapshotCard title="Local at conflict time" snapshot={c.local_snapshot} />
                             <SnapshotCard title="BattleMetrics" snapshot={c.remote_snapshot} />
                           </div>
                           <div className="mt-3">
