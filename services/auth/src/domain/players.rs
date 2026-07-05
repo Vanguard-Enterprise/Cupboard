@@ -41,34 +41,14 @@ pub async fn resolve_or_create(
     .await?;
 
     let account_id = match existing {
-        Some(id) => {
-            // Refresh the cached profile on both the identity and the account.
-            sqlx::query(
-                "UPDATE player_identities SET display_name = COALESCE($3, display_name), \
-                     avatar_url = COALESCE($4, avatar_url) \
-                 WHERE provider = $1 AND subject = $2",
-            )
-            .bind(provider)
-            .bind(subject)
-            .bind(display_name)
-            .bind(avatar_url)
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query(
-                "UPDATE player_accounts SET last_login_at = now(), \
-                     display_name = COALESCE($2, display_name), \
-                     avatar_url = COALESCE($3, avatar_url) \
-                 WHERE id = $1",
-            )
-            .bind(id)
-            .bind(display_name)
-            .bind(avatar_url)
-            .execute(&mut *tx)
-            .await?;
-            id
-        }
+        Some(id) => id,
         None => {
-            let id: Uuid = sqlx::query_scalar(
+            // Race-safe first link: create an account, then claim the identity with an
+            // ON CONFLICT guard. `player_identities.UNIQUE(provider, subject)` is the
+            // single source of truth: if a concurrent first-login won the race, our
+            // insert affects zero rows and we drop the orphan account, then read the
+            // winner's id.
+            let new_account: Uuid = sqlx::query_scalar(
                 "INSERT INTO player_accounts (display_name, avatar_url) VALUES ($1, $2) \
                  RETURNING id",
             )
@@ -76,28 +56,65 @@ pub async fn resolve_or_create(
             .bind(avatar_url)
             .fetch_one(&mut *tx)
             .await?;
-            sqlx::query(
+            let claimed = sqlx::query(
                 "INSERT INTO player_identities \
                      (player_account_id, provider, subject, display_name, avatar_url) \
-                 VALUES ($1, $2, $3, $4, $5)",
+                 VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (provider, subject) DO NOTHING",
             )
-            .bind(id)
+            .bind(new_account)
             .bind(provider)
             .bind(subject)
             .bind(display_name)
             .bind(avatar_url)
             .execute(&mut *tx)
-            .await?;
-            id
+            .await?
+            .rows_affected();
+            if claimed == 0 {
+                sqlx::query("DELETE FROM player_accounts WHERE id = $1")
+                    .bind(new_account)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT player_account_id FROM player_identities \
+                     WHERE provider = $1 AND subject = $2",
+                )
+                .bind(provider)
+                .bind(subject)
+                .fetch_one(&mut *tx)
+                .await?
+            } else {
+                new_account
+            }
         }
     };
 
-    let account = sqlx::query_as::<_, (Uuid,)>("SELECT id FROM player_accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    // Refresh the cached profile + last-login on the resolved account (and its identity).
+    sqlx::query(
+        "UPDATE player_identities SET display_name = COALESCE($3, display_name), \
+             avatar_url = COALESCE($4, avatar_url) \
+         WHERE provider = $1 AND subject = $2",
+    )
+    .bind(provider)
+    .bind(subject)
+    .bind(display_name)
+    .bind(avatar_url)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE player_accounts SET last_login_at = now(), \
+             display_name = COALESCE($2, display_name), \
+             avatar_url = COALESCE($3, avatar_url) \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .bind(display_name)
+    .bind(avatar_url)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
-    Ok(PlayerAccount { id: account.0 })
+    Ok(PlayerAccount { id: account_id })
 }
 
 /// Record a Steam OpenID response nonce; returns `false` if it was already seen (replay).
@@ -239,13 +256,15 @@ pub async fn find_session_by_token(
     pepper: &[u8],
 ) -> Result<Option<PlayerSession>, AppError> {
     let hash = cupboard_crypto::hash_token(refresh_token, pepper);
+    // Touch last_used_at and return the live session joined to its (earliest-linked)
+    // Steam identity. Deterministic ORDER BY so a multi-identity account is stable.
     let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Option<String>)>(
-        "SELECT s.id, s.player_account_id, s.tenant_id, \
+        "UPDATE player_sessions s SET last_used_at = now() \
+         WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
+         RETURNING s.id, s.player_account_id, s.tenant_id, \
                 (SELECT subject FROM player_identities \
                    WHERE player_account_id = s.player_account_id AND provider = 'steam' \
-                   LIMIT 1) \
-         FROM player_sessions s \
-         WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()",
+                   ORDER BY linked_at ASC LIMIT 1)",
     )
     .bind(&hash)
     .fetch_optional(pool)

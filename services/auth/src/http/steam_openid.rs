@@ -46,18 +46,18 @@ fn valid_host(host: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
 }
 
-fn callback_url(cfg: &PlayerAuthConfig, tenant: Uuid, site_host: &str) -> String {
-    // Query params are echoed + signed by Steam inside return_to.
+fn callback_url(cfg: &PlayerAuthConfig, site_host: &str) -> String {
+    // site_host is echoed + signed by Steam inside return_to; the OWNING TENANT is not
+    // trusted from the URL at all: the callback resolves it authoritatively from the
+    // tenant service (an attacker-chosen host resolves to nothing and is rejected).
     format!(
-        "{}/auth/player/steam/callback?tenant={}&site_host={}",
-        cfg.callback_base_url, tenant, site_host
+        "{}/auth/player/steam/callback?site_host={}",
+        cfg.callback_base_url, site_host
     )
 }
 
 #[derive(Deserialize)]
 pub struct StartParams {
-    /// The tenant (org) id whose site the player is on (from the BFF's resolved site).
-    pub tenant: Uuid,
     /// The storefront host (from the BFF's verified `x-cb-site-host`).
     pub site_host: String,
 }
@@ -73,7 +73,7 @@ pub async fn start(
     if !valid_host(&site_host) {
         return Err(AppError::BadRequest("invalid site host".into()));
     }
-    let return_to = callback_url(cfg, params.tenant, &site_host);
+    let return_to = callback_url(cfg, &site_host);
     let url = reqwest::Url::parse_with_params(
         STEAM_OPENID_ENDPOINT,
         &[
@@ -116,10 +116,6 @@ pub async fn callback(
         .into_owned()
         .collect();
 
-    let tenant: Uuid = params
-        .get("tenant")
-        .and_then(|t| t.parse().ok())
-        .ok_or_else(|| AppError::BadRequest("missing tenant".into()))?;
     let site_host = params
         .get("site_host")
         .cloned()
@@ -128,9 +124,22 @@ pub async fn callback(
 
     // Exact return_to match: it must be the callback URL we minted (defense in depth on
     // top of Steam's signature over return_to).
-    let expected_return_to = callback_url(cfg, tenant, &site_host);
+    let expected_return_to = callback_url(cfg, &site_host);
     if params.get("openid.return_to").map(String::as_str) != Some(expected_return_to.as_str()) {
         return Err(AppError::BadRequest("return_to mismatch".into()));
+    }
+
+    // The identity fields must actually be covered by the signature. `check_authentication`
+    // only attests the fields NAMED in `openid.signed`; if `claimed_id`/`identity` are not
+    // in that list, an attacker could append an unsigned claimed_id. Require both.
+    let signed: Vec<&str> = params
+        .get("openid.signed")
+        .map(|s| s.split(',').collect())
+        .unwrap_or_default();
+    if !signed.contains(&"claimed_id") || !signed.contains(&"identity") {
+        return Err(AppError::BadRequest(
+            "Steam assertion did not sign the identity fields".into(),
+        ));
     }
 
     // Verify the assertion with Steam: echo every openid.* field back with
@@ -172,6 +181,13 @@ pub async fn callback(
             ));
         }
     }
+
+    // SECURITY: resolve the storefront host to its owning tenant AUTHORITATIVELY via the
+    // tenant service. A login code is issued only for a real registered storefront, so a
+    // self-initiated flow with an attacker-chosen host resolves to nothing and is
+    // rejected (this closes the account-takeover / open-redirect vector: an attacker
+    // cannot have the victim's code redirected to a host they control).
+    let tenant = resolve_tenant_for_host(&state, cfg, &site_host).await?;
 
     let claimed_id = params
         .get("openid.claimed_id")
@@ -215,6 +231,65 @@ pub async fn callback(
 
     let dest = format!("https://{site_host}/login/complete?code={code}");
     Ok(Redirect::to(&dest).into_response())
+}
+
+/// Authoritatively resolve a storefront host to its owning tenant via the tenant
+/// service's internal endpoint. A host that is not a real storefront (404) is rejected,
+/// which is what makes the login-code handoff safe against attacker-supplied hosts.
+async fn resolve_tenant_for_host(
+    state: &AppState,
+    cfg: &PlayerAuthConfig,
+    site_host: &str,
+) -> Result<Uuid, AppError> {
+    let url = format!(
+        "{}/internal/sites/resolve?host={}",
+        cfg.tenant_internal_url,
+        urlencoding_light(site_host)
+    );
+    let resp = state
+        .http
+        .get(&url)
+        .header("x-internal-token", &cfg.internal_api_token)
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "tenant host-resolution call failed");
+            AppError::Unavailable("could not validate the storefront; try again".into())
+        })?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(AppError::BadRequest(
+            "this host is not a registered storefront".into(),
+        ));
+    }
+    if !resp.status().is_success() {
+        return Err(AppError::Unavailable(format!(
+            "storefront validation returned {}",
+            resp.status()
+        )));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| AppError::Unavailable(format!("storefront validation parse error: {e}")))?;
+    body["tenant_id"]
+        .as_str()
+        .and_then(|s| s.parse::<Uuid>().ok())
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("tenant service returned no tenant_id")))
+}
+
+/// Minimal percent-encoding for a DNS host in a query string. Hosts are already
+/// charset-validated (`valid_host`) to `[a-z0-9.-]`, none of which need encoding, so this
+/// is a defensive pass-through that escapes anything unexpected.
+fn urlencoding_light(host: &str) -> String {
+    host.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect()
 }
 
 /// Best-effort Steam persona name + avatar via GetPlayerSummaries. Returns (name, avatar),

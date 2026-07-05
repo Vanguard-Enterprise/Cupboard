@@ -1,5 +1,6 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
+mod internal;
 pub mod public;
 mod sites;
 mod store;
@@ -42,6 +43,10 @@ pub fn router(state: AppState) -> Router {
         // `/public/*` route; cluster-internal callers only, never internet-exposed).
         .route("/public/sites/resolve", get(public::resolve))
         .route("/public/store/catalog", get(public::catalog))
+        // Cross-service internal endpoint: authoritative host -> tenant resolution the
+        // auth service uses to validate a storefront host during player login. Not via
+        // the gateway; X-Internal-Token guarded.
+        .route("/internal/sites/resolve", get(internal::resolve_site))
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))

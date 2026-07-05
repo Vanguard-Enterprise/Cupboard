@@ -37,6 +37,11 @@ pub struct Config {
 
     /// PayNow API base, injectable so tests run against the in-process stub.
     pub paynow_api_base: String,
+
+    /// Shared secret the auth service presents (`X-Internal-Token`) to the cross-service
+    /// `/internal/*` endpoints (host -> tenant resolution on the player-login path).
+    /// `None` disables those endpoints (fail closed).
+    pub internal_api_token: Option<String>,
 }
 
 impl Config {
@@ -94,6 +99,9 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| crate::providers::paynow::DEFAULT_BASE.into()),
+            internal_api_token: env::var("INTERNAL_API_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }

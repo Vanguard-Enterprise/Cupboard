@@ -13,7 +13,9 @@ const REFRESH = "cb_player_refresh";
 export type Player = {
   id: string;
   tenant: string;
-  steam_id: string;
+  // Nullable: the backend returns steam_id from an Option (a future Discord-only player
+  // has no Steam identity). Consumers must guard before slicing/formatting it.
+  steam_id: string | null;
   display_name: string | null;
   avatar_url: string | null;
 };
@@ -57,8 +59,18 @@ export async function playerRefreshToken(): Promise<string | undefined> {
 }
 
 async function setPlayerAccess(accessToken: string): Promise<void> {
-  const jar = await cookies();
-  jar.set(ACCESS, accessToken, cookieBase());
+  // Next.js forbids cookies().set() during a Server Component render (only Server Actions
+  // and Route Handlers may write cookies). getPlayer() is called from both contexts, so
+  // this is best-effort: when it throws in a render context we still use the freshly
+  // refreshed token for THIS request; the next action/handler that calls getPlayer()
+  // persists it. This keeps a returning player with an expired access token but a valid
+  // refresh token from crashing the page.
+  try {
+    const jar = await cookies();
+    jar.set(ACCESS, accessToken, cookieBase());
+  } catch {
+    // Rendering context; the new access token is still used for the current request.
+  }
 }
 
 async function fetchMe(token: string | undefined): Promise<Response> {

@@ -58,14 +58,7 @@ pub struct ResolveQuery {
     pub host: String,
 }
 
-/// How a request host maps onto the sites model.
-enum HostKind {
-    /// `{slug}.{SITES_SUFFIX}`: the default hostname every site gets.
-    DefaultSubdomain(String),
-    /// Anything else: a (future) custom domain. PR5 wires `site_domains` and gives this
-    /// variant the domain payload; until then these resolve to nothing.
-    Custom,
-}
+use crate::domain::sites::SiteLocator;
 
 /// Normalize an incoming host: lowercase, strip any port and trailing dot, and reject
 /// anything that is not a plausible DNS name (this is an internet-tainted value; the
@@ -85,17 +78,23 @@ fn normalize_host(raw: &str) -> Option<String> {
     Some(host.to_string())
 }
 
-fn classify(host: &str, sites_suffix: &str) -> HostKind {
+fn classify(host: &str, sites_suffix: &str) -> SiteLocator {
     match host
         .strip_suffix(sites_suffix)
         .and_then(|p| p.strip_suffix('.'))
     {
         // Exactly one label in front of the suffix; deeper subdomains are not sites.
         Some(label) if !label.is_empty() && !label.contains('.') => {
-            HostKind::DefaultSubdomain(label.to_string())
+            SiteLocator::DefaultSubdomain(label.to_string())
         }
-        _ => HostKind::Custom,
+        _ => SiteLocator::Custom,
     }
+}
+
+/// Normalize + classify in one step, returning `None` for hosts that fail normalization.
+/// Shared with the internal resolve endpoint.
+pub fn normalize_and_classify(raw_host: &str, sites_suffix: &str) -> Option<SiteLocator> {
+    normalize_host(raw_host).map(|h| classify(&h, sites_suffix))
 }
 
 /// Cache-first host resolution shared by the resolve and catalog endpoints.
@@ -122,12 +121,12 @@ async fn resolve_host(
     }
 
     let resolved = match classify(&host, &state.config.sites_suffix) {
-        HostKind::DefaultSubdomain(slug) => {
+        SiteLocator::DefaultSubdomain(slug) => {
             sites::resolve_by_slug(&state.owner_pool, &slug).await?
         }
         // Custom domains land in PR5 (`site_domains` lookup). Unknown hosts are still
         // negative-cached below so repeat junk traffic is absorbed by Redis.
-        HostKind::Custom => None,
+        SiteLocator::Custom => None,
     };
 
     state.cache.put(&key, &resolved).await;
@@ -210,26 +209,26 @@ mod tests {
         let suffix = "sites.example.com";
         assert!(matches!(
             classify("acme.sites.example.com", suffix),
-            HostKind::DefaultSubdomain(s) if s == "acme"
+            SiteLocator::DefaultSubdomain(s) if s == "acme"
         ));
         // Deeper labels, the bare suffix, and unrelated hosts are all "custom".
         assert!(matches!(
             classify("a.b.sites.example.com", suffix),
-            HostKind::Custom
+            SiteLocator::Custom
         ));
         assert!(matches!(
             classify("sites.example.com", suffix),
-            HostKind::Custom
+            SiteLocator::Custom
         ));
         assert!(matches!(
             classify("store.some-community.gg", suffix),
-            HostKind::Custom
+            SiteLocator::Custom
         ));
         // A host merely *ending* in the suffix string without a dot boundary must not
         // match (e.g. "evilsites.example.com" vs suffix "sites.example.com").
         assert!(matches!(
             classify("evilsites.example.com", suffix),
-            HostKind::Custom
+            SiteLocator::Custom
         ));
     }
 }

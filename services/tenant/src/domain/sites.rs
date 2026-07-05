@@ -59,6 +59,15 @@ pub struct Site {
     pub updated_at: DateTime<Utc>,
 }
 
+/// How a request host maps onto the sites model.
+pub enum SiteLocator {
+    /// `{slug}.{SITES_SUFFIX}`: the default hostname every site gets.
+    DefaultSubdomain(String),
+    /// Anything else: a (future) custom domain. PR5 wires `site_domains`; until then
+    /// these resolve to nothing.
+    Custom,
+}
+
 /// What the public storefront needs to render a host: the payload of
 /// `GET /public/sites/resolve` and the value stored in the Redis cache.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]

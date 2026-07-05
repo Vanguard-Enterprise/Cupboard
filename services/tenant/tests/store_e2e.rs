@@ -74,6 +74,7 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         tenant_master_key: Some(MASTER_KEY),
         consumer_name: "test-tenant".into(),
         paynow_api_base: paynow_base,
+        internal_api_token: None,
     };
     AppState {
         owner_pool: owner,
@@ -452,4 +453,75 @@ async fn rls_isolates_store_connections() {
         .expect("count");
     tx.commit().await.unwrap();
     assert_eq!(visible, 0, "tenant B must not see tenant A's connection");
+}
+
+/// The internal host-resolution endpoint auth uses during player login: token-guarded,
+/// maps a default-subdomain host to its owning tenant, and 404s unknown hosts (which is
+/// what makes the login-code handoff safe against attacker-supplied hosts).
+#[tokio::test]
+async fn internal_resolve_site_maps_host_and_guards_token() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP internal_resolve_site_maps_host_and_guards_token: TEST_DATABASE_URL unset");
+        return;
+    };
+    let mut state = test_state(owner.clone(), app.clone(), "http://unused".into());
+    // Enable the internal endpoint with a known token.
+    let cfg = (*state.config).clone();
+    state.config = Arc::new(Config {
+        internal_api_token: Some("secret-token".into()),
+        ..cfg
+    });
+
+    let tenant = Uuid::new_v4();
+    let slug = format!("ir-{}", &Uuid::new_v4().simple().to_string()[..10]);
+    sqlx::query("INSERT INTO sites (tenant_id, slug) VALUES ($1, $2)")
+        .bind(tenant)
+        .bind(&slug)
+        .execute(&owner)
+        .await
+        .expect("seed site");
+    let host = format!("{slug}.sites.test");
+
+    let call = |token: Option<&str>, host: String| {
+        let state = state.clone();
+        let token = token.map(str::to_string);
+        async move {
+            let mut req = Request::builder()
+                .method("GET")
+                .uri(format!("/internal/sites/resolve?host={host}"));
+            if let Some(t) = token {
+                req = req.header("x-internal-token", t);
+            }
+            let resp = http::router(state)
+                .oneshot(req.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = resp.status();
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let val: serde_json::Value =
+                serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+            (status, val)
+        }
+    };
+
+    // No token -> 401.
+    assert_eq!(call(None, host.clone()).await.0, StatusCode::UNAUTHORIZED);
+    // Wrong token -> 401.
+    assert_eq!(
+        call(Some("nope"), host.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // Correct token, real host -> 200 with the owning tenant.
+    let (status, body) = call(Some("secret-token"), host).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["tenant_id"].as_str().unwrap(), tenant.to_string());
+    // Unknown host -> 404 (an attacker-supplied host resolves to nothing).
+    assert_eq!(
+        call(Some("secret-token"), "attacker.com".into()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(Some("secret-token"), "nope.sites.test".into()).await.0,
+        StatusCode::NOT_FOUND
+    );
 }

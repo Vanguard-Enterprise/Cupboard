@@ -11,7 +11,9 @@ export default async function AccountPage() {
   if (!player) redirect("/login");
 
   const avatar = safeHttpUrl(player.avatar_url);
-  const name = player.display_name?.trim() || `Player ${player.steam_id.slice(-4)}`;
+  const name =
+    player.display_name?.trim() ||
+    (player.steam_id ? `Player ${player.steam_id.slice(-4)}` : "Player");
 
   return (
     <div className="mx-auto max-w-md py-12">
@@ -36,7 +38,9 @@ export default async function AccountPage() {
           )}
           <div className="min-w-0">
             <h1 className="truncate text-2xl font-bold tracking-tight">{name}</h1>
-            <p className="mt-1 font-mono text-xs text-[var(--sf-fg)]/60">{player.steam_id}</p>
+            {player.steam_id ? (
+              <p className="mt-1 font-mono text-xs text-[var(--sf-fg)]/60">{player.steam_id}</p>
+            ) : null}
           </div>
         </div>
 

@@ -67,6 +67,14 @@ pub struct PlayerAuthConfig {
     /// player Discord `redirect_uri`) point here; the browser is handed back to the
     /// tenant site via a one-time code.
     pub callback_base_url: String,
+    /// Internal base URL of the tenant service, used to authoritatively resolve a
+    /// storefront host to its owning tenant during the Steam callback (so a login code
+    /// can only ever be issued for a real registered storefront, never an
+    /// attacker-supplied host). Required for player login.
+    pub tenant_internal_url: String,
+    /// Shared secret presented (`X-Internal-Token`) to the tenant service's internal
+    /// host-resolution endpoint. Required for player login.
+    pub internal_api_token: String,
 }
 
 impl Config {
@@ -140,21 +148,31 @@ impl Config {
 }
 
 impl PlayerAuthConfig {
-    /// Assembled only when the player keypair and callback host are all present; a
-    /// player Discord app is optional (Steam-only login otherwise).
+    /// Assembled only when the player keypair, callback host, AND the tenant-service
+    /// internal URL + token are all present. The tenant resolution is a security
+    /// requirement (host validation), so player auth stays disabled without it rather
+    /// than falling back to trusting an unvalidated host.
     fn from_env() -> Option<Self> {
-        let (private, public, callback) = match (
+        let (private, public, callback, tenant_url, token) = match (
             env::var("PLAYER_JWT_PRIVATE_KEY_PEM"),
             env::var("PLAYER_JWT_PUBLIC_KEY_PEM"),
             env::var("PLAYER_AUTH_CALLBACK_BASE_URL"),
+            env::var("TENANT_INTERNAL_URL"),
+            env::var("INTERNAL_API_TOKEN"),
         ) {
-            (Ok(pr), Ok(pu), Ok(cb)) if !pr.is_empty() && !pu.is_empty() && !cb.is_empty() => {
-                (pr, pu, cb)
+            (Ok(pr), Ok(pu), Ok(cb), Ok(tu), Ok(tok))
+                if !pr.is_empty()
+                    && !pu.is_empty()
+                    && !cb.is_empty()
+                    && !tu.is_empty()
+                    && !tok.is_empty() =>
+            {
+                (pr, pu, cb, tu, tok)
             }
             _ => {
                 tracing::info!(
-                    "player auth not configured (PLAYER_JWT_* / callback host unset); \
-                     /auth/player/* disabled"
+                    "player auth not configured (PLAYER_JWT_* / callback host / \
+                     TENANT_INTERNAL_URL / INTERNAL_API_TOKEN unset); /auth/player/* disabled"
                 );
                 return None;
             }
@@ -163,6 +181,8 @@ impl PlayerAuthConfig {
             jwt_private_key_pem: private,
             jwt_public_key_pem: public,
             callback_base_url: callback.trim_end_matches('/').to_string(),
+            tenant_internal_url: tenant_url.trim_end_matches('/').to_string(),
+            internal_api_token: token,
         })
     }
 }

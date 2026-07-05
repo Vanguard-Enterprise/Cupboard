@@ -73,6 +73,11 @@ fn test_state(owner: PgPool) -> AppState {
             jwt_private_key_pem: PL_PRIV.into(),
             jwt_public_key_pem: PL_PUB.into(),
             callback_base_url: "https://cupboard-login.test".into(),
+            // The exchange/me/refresh/logout tests seed the login code directly (the
+            // Steam callback, which is what calls the tenant service, needs network);
+            // these fields are unused on those paths.
+            tenant_internal_url: "http://tenant.invalid".into(),
+            internal_api_token: "test-internal-token".into(),
         }),
         steam_web_api_key: None,
     };

@@ -6,27 +6,24 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { gatewayBase } from "@/lib/api";
-import { resolveSite } from "@/lib/site";
 import { clearPlayerSession, playerRefreshToken } from "@/lib/player";
 
-/** Begin Steam sign-in: ask the gateway for the Steam redirect URL (scoped to this
- * tenant + host, resolved server-side) and send the browser there. Any failure sends the
- * player back to the login page with an error flag. */
+/** Begin Steam sign-in: ask the gateway for the Steam redirect URL for this host and send
+ * the browser there. The tenant is NOT passed from here: the auth callback resolves the
+ * host to its owning tenant authoritatively (so an unregistered host is rejected server
+ * side). Any failure sends the player back to the login page with an error flag. */
 export async function startSteamLogin(): Promise<void> {
   const host = (await headers()).get("x-cb-site-host");
   let target: string | null = null;
 
   if (host) {
-    const site = await resolveSite(host);
-    if (site) {
-      const qs = new URLSearchParams({ tenant: site.tenant_id, site_host: host });
-      const res = await fetch(`${gatewayBase()}/auth/player/steam/start?${qs.toString()}`, {
-        cache: "no-store",
-      }).catch(() => null);
-      if (res && res.ok) {
-        const body = (await res.json().catch(() => null)) as { url?: unknown } | null;
-        if (body && typeof body.url === "string") target = body.url;
-      }
+    const qs = new URLSearchParams({ site_host: host });
+    const res = await fetch(`${gatewayBase()}/auth/player/steam/start?${qs.toString()}`, {
+      cache: "no-store",
+    }).catch(() => null);
+    if (res && res.ok) {
+      const body = (await res.json().catch(() => null)) as { url?: unknown } | null;
+      if (body && typeof body.url === "string") target = body.url;
     }
   }
 
