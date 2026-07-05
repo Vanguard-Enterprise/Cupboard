@@ -5,7 +5,9 @@ mod invites;
 mod members;
 mod oauth_discord;
 mod orgs;
+mod player;
 mod roles;
+mod steam_openid;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -48,6 +50,16 @@ pub fn router(state: AppState) -> Router {
         // Discord OAuth (browser redirect flow)
         .route("/auth/discord/start", get(oauth_discord::start))
         .route("/auth/discord/callback", get(oauth_discord::callback))
+        // Player (storefront customer) login: Steam OpenID + one-time-code handoff.
+        // `start` is called cluster-internally by the web BFF; `callback` is public on
+        // the central login host; the rest are BFF-driven session management. Player
+        // tokens use a separate keypair, so these never grant operator access.
+        .route("/auth/player/steam/start", get(steam_openid::start))
+        .route("/auth/player/steam/callback", get(steam_openid::callback))
+        .route("/auth/player/exchange", post(player::exchange))
+        .route("/auth/player/refresh", post(player::refresh))
+        .route("/auth/player/logout", post(player::logout))
+        .route("/auth/player/me", get(player::me))
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))

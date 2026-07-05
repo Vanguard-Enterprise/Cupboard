@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use axum_extra::extract::cookie::Key;
-use cupboard_auth_core::Keys;
+use cupboard_auth_core::{Keys, PlayerKeys};
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -13,10 +13,13 @@ pub struct AppState {
     /// `cupboard_app` pool: request-scoped tenant access (RLS-enforced). Use via
     /// [`cupboard_db::begin_tenant_tx`].
     pub app_pool: PgPool,
-    /// EdDSA signing + verifying keys for access tokens.
+    /// EdDSA signing + verifying keys for operator access tokens.
     pub keys: Arc<Keys>,
+    /// EdDSA signing keys for PLAYER access tokens (disjoint keypair). `None` when player
+    /// auth is unconfigured.
+    pub player_keys: Option<Arc<PlayerKeys>>,
     pub config: Arc<Config>,
-    /// Outbound HTTP client for Discord token/userinfo calls (step 5).
+    /// Outbound HTTP client for Discord token/userinfo and Steam OpenID/Web API calls.
     pub http: reqwest::Client,
     /// Signing key for OAuth state/PKCE cookies; `None` when Discord is unconfigured.
     pub cookie_key: Option<Key>,

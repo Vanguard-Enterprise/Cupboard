@@ -42,6 +42,31 @@ pub struct Config {
     /// 64+ byte key (base64) for signing OAuth state/PKCE cookies. Required when Discord
     /// is configured.
     pub cookie_signing_key: Option<String>,
+
+    /// Player (storefront customer) auth config. `None` disables the `/auth/player/*`
+    /// routes (503); operator auth is unaffected.
+    pub player: Option<PlayerAuthConfig>,
+    /// Steam Web API key for player profile enrichment (persona name + avatar). Optional:
+    /// login works without it, degrading to a steamid-only display name.
+    pub steam_web_api_key: Option<String>,
+}
+
+/// Config for the player-facing auth surface (Steam OpenID + player Discord OAuth + the
+/// one-time-code handoff). Present only when the player JWT keypair and the central
+/// callback host are configured.
+#[derive(Debug, Clone)]
+pub struct PlayerAuthConfig {
+    /// Ed25519 PKCS#8 private key (PEM) - signs PLAYER access tokens. DISJOINT from the
+    /// operator JWT keypair (that separation is the security boundary between the two
+    /// token populations).
+    pub jwt_private_key_pem: String,
+    /// Ed25519 public key (PEM) - the tenant service + web BFF verify player tokens.
+    pub jwt_public_key_pem: String,
+    /// The central public host that serves the player OAuth callbacks, e.g.
+    /// `https://cupboard-login.vngenterprise.com`. Steam `return_to` (and, in PR7, the
+    /// player Discord `redirect_uri`) point here; the browser is handed back to the
+    /// tenant site via a one-time code.
+    pub callback_base_url: String,
 }
 
 impl Config {
@@ -108,6 +133,36 @@ impl Config {
 
             discord,
             cookie_signing_key: env::var("COOKIE_SIGNING_KEY").ok(),
+            player: PlayerAuthConfig::from_env(),
+            steam_web_api_key: env::var("STEAM_WEB_API_KEY").ok().filter(|s| !s.is_empty()),
+        })
+    }
+}
+
+impl PlayerAuthConfig {
+    /// Assembled only when the player keypair and callback host are all present; a
+    /// player Discord app is optional (Steam-only login otherwise).
+    fn from_env() -> Option<Self> {
+        let (private, public, callback) = match (
+            env::var("PLAYER_JWT_PRIVATE_KEY_PEM"),
+            env::var("PLAYER_JWT_PUBLIC_KEY_PEM"),
+            env::var("PLAYER_AUTH_CALLBACK_BASE_URL"),
+        ) {
+            (Ok(pr), Ok(pu), Ok(cb)) if !pr.is_empty() && !pu.is_empty() && !cb.is_empty() => {
+                (pr, pu, cb)
+            }
+            _ => {
+                tracing::info!(
+                    "player auth not configured (PLAYER_JWT_* / callback host unset); \
+                     /auth/player/* disabled"
+                );
+                return None;
+            }
+        };
+        Some(PlayerAuthConfig {
+            jwt_private_key_pem: private,
+            jwt_public_key_pem: public,
+            callback_base_url: callback.trim_end_matches('/').to_string(),
         })
     }
 }

@@ -157,13 +157,28 @@ fn fixture_products(vip_price_final: i64) -> Vec<serde_json::Value> {
     ]
 }
 
+/// Claim THIS test's connection directly (by tenant), so leftover connected rows from
+/// prior test runs cannot crowd it out of the global `claim_ready` LIMIT batch. Sets the
+/// same lease columns a real claim would, satisfying the runner's write fence.
+async fn claim_own(owner: &PgPool, tenant: Uuid, claimer: &str) -> store::StoreConnection {
+    sqlx::query_as::<_, store::StoreConnection>(
+        "UPDATE store_connections SET claimed_by = $2, heartbeat_at = now() \
+         WHERE tenant_id = $1 \
+         RETURNING id, tenant_id, provider, status, api_key_enc, api_key_dek, \
+                   store_external_id, store_name, store_currency, store_live, settings, \
+                   last_error, next_catalog_sync_at, catalog_synced_at, claimed_by, \
+                   heartbeat_at, created_at, updated_at",
+    )
+    .bind(tenant)
+    .bind(claimer)
+    .fetch_one(owner)
+    .await
+    .expect("claim own connection")
+}
+
 /// Fetch + apply one catalog sync the way the runner does (without timers).
 async fn sync_once(owner: &PgPool, stub_base: &str, tenant: Uuid, claimer: &str) -> (u64, u64) {
-    let conns = store::claim_ready(owner, claimer, 8).await.expect("claim");
-    let conn = conns
-        .iter()
-        .find(|c| c.tenant_id == tenant)
-        .expect("connection claimed");
+    let conn = claim_own(owner, tenant, claimer).await;
     let key_enc = conn.api_key_enc.clone().expect("key present");
     let client = PayNowClient::new(
         stub_base.to_string(),
@@ -171,7 +186,7 @@ async fn sync_once(owner: &PgPool, stub_base: &str, tenant: Uuid, claimer: &str)
         Some(conn.store_external_id.clone()),
     );
     let snapshot = client.fetch_catalog().await.expect("fetch catalog");
-    store::apply_catalog(owner, conn, claimer, &key_enc, &snapshot)
+    store::apply_catalog(owner, &conn, claimer, &key_enc, &snapshot)
         .await
         .expect("apply catalog")
 }
@@ -294,10 +309,9 @@ async fn connect_sync_diff_sweep_and_public_catalog() {
     );
 
     // Fence: a stale claimer's snapshot must not land.
-    let conns = store::claim_ready(&owner, claimer, 8).await.unwrap();
-    let conn = conns.iter().find(|c| c.tenant_id == tenant).unwrap();
+    let conn = claim_own(&owner, tenant, claimer).await;
     let key_enc = conn.api_key_enc.clone().unwrap();
-    let err = store::apply_catalog(&owner, conn, "someone-else", &key_enc, &Default::default())
+    let err = store::apply_catalog(&owner, &conn, "someone-else", &key_enc, &Default::default())
         .await
         .expect_err("stale claimer must not apply");
     assert!(matches!(err, cupboard_tenant::error::AppError::Conflict(_)));
