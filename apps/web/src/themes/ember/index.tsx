@@ -1,4 +1,4 @@
-// "Ember" — the v1 dark storefront theme. Deliberately dependency-free: Tailwind
+// "Ember": the v1 dark storefront theme. Deliberately dependency-free: Tailwind
 // utilities over `--sf-*` CSS variables set from the site config.
 import type { CSSProperties, ReactNode } from "react";
 import type { SiteConfig, ThemeDefinition, ThemeProps } from "@/themes/registry";
@@ -50,7 +50,7 @@ function Shell({ site, config, children }: ThemeProps & { children: ReactNode })
       </header>
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-10">{children}</main>
       <footer className="border-t border-white/10 py-6 text-center text-xs text-[var(--sf-fg)]/50">
-        {name} — powered by Cupboard
+        {name} · powered by Cupboard
       </footer>
     </div>
   );

@@ -191,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
             )),
         )
         // Public storefront reads (tenant service): site resolution + (later) catalog.
-        // Deliberately NOT behind the JWT gate — callers are the web app's SSR path for
+        // Deliberately NOT behind the JWT gate: callers are the web app's SSR path for
         // public tenant sites; the tenant service rate/shape-guards these itself.
         .route("/public/{*path}", any(proxy::proxy_tenant))
         // A JWT-validated route proving front-door auth; real /api routes follow.

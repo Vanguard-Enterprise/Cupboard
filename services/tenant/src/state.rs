@@ -2,6 +2,7 @@
 
 use crate::cache::SiteCache;
 use crate::config::Config;
+use crate::http::public::MissBudget;
 use cupboard_auth_core::Keys;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -17,5 +18,7 @@ pub struct AppState {
     pub keys: Arc<Keys>,
     /// Best-effort Redis cache for public site resolution (misses fall back to Postgres).
     pub cache: SiteCache,
+    /// Per-pod budget for resolve cache-misses reaching Postgres (flood damping).
+    pub miss_budget: Arc<MissBudget>,
     pub config: Arc<Config>,
 }

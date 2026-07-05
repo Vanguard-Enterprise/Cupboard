@@ -44,8 +44,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
 /// (`apps/web/src/themes/registry.ts`); extend both together.
 pub const ALLOWED_THEMES: &[&str] = &["ember"];
 
-/// Site config JSONB size ceiling. The config is operator-supplied free-form JSON
-/// (validated structurally by the web editor); the service only bounds it.
+/// Site config JSONB size ceiling; see `validate_config` for the field-level rules.
 const MAX_CONFIG_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -119,11 +118,16 @@ pub fn validate_theme(theme_id: &str) -> Result<(), AppError> {
     }
 }
 
+/// Validate a site config. Beyond the size bound, every KNOWN field is type- and
+/// content-checked here, at the API boundary, so a stored config can never crash public
+/// storefront rendering (the web side casts, it does not validate) and operator-supplied
+/// URLs can never smuggle a non-http(s) scheme onto public pages (stored XSS via
+/// `javascript:` hrefs). Unknown keys pass through untyped for forward compatibility;
+/// JSON `null` is treated as "absent".
 pub fn validate_config(config: &serde_json::Value) -> Result<(), AppError> {
-    if !config.is_object() {
+    let Some(obj) = config.as_object() else {
         return Err(AppError::BadRequest("config must be a JSON object".into()));
-    }
-    // Cheap length bound on the serialized form; the editor enforces structure.
+    };
     let serialized = serde_json::to_string(config)
         .map_err(|e| AppError::BadRequest(format!("config is not serializable: {e}")))?;
     if serialized.len() > MAX_CONFIG_BYTES {
@@ -132,7 +136,95 @@ pub fn validate_config(config: &serde_json::Value) -> Result<(), AppError> {
             serialized.len()
         )));
     }
+
+    check_string(obj.get("name"), "name", 200)?;
+    check_string(obj.get("about"), "about", 8192)?;
+    check_http_url(obj.get("logo_url"), "logo_url")?;
+
+    if let Some(colors) = present(obj.get("colors")) {
+        let colors = colors
+            .as_object()
+            .ok_or_else(|| AppError::BadRequest("config.colors must be an object".into()))?;
+        for (k, v) in colors {
+            check_string(Some(v), &format!("colors.{k}"), 64)?;
+        }
+    }
+
+    if let Some(hero) = present(obj.get("hero")) {
+        let hero = hero
+            .as_object()
+            .ok_or_else(|| AppError::BadRequest("config.hero must be an object".into()))?;
+        check_string(hero.get("title"), "hero.title", 300)?;
+        check_string(hero.get("subtitle"), "hero.subtitle", 1000)?;
+    }
+
+    if let Some(links) = present(obj.get("links")) {
+        let links = links
+            .as_array()
+            .ok_or_else(|| AppError::BadRequest("config.links must be an array".into()))?;
+        if links.len() > 20 {
+            return Err(AppError::BadRequest(
+                "config.links: at most 20 links".into(),
+            ));
+        }
+        for (i, link) in links.iter().enumerate() {
+            let link = link.as_object().ok_or_else(|| {
+                AppError::BadRequest(format!("config.links[{i}] must be an object"))
+            })?;
+            let label = check_string(link.get("label"), &format!("links[{i}].label"), 100)?;
+            if label.is_none_or(|l| l.trim().is_empty()) {
+                return Err(AppError::BadRequest(format!(
+                    "config.links[{i}].label is required"
+                )));
+            }
+            if present(link.get("url")).is_none() {
+                return Err(AppError::BadRequest(format!(
+                    "config.links[{i}].url is required"
+                )));
+            }
+            check_http_url(link.get("url"), &format!("links[{i}].url"))?;
+        }
+    }
     Ok(())
+}
+
+/// Treat both a missing key and JSON `null` as absent.
+fn present(v: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    v.filter(|v| !v.is_null())
+}
+
+/// If present, the field must be a string no longer than `max` bytes.
+fn check_string<'a>(
+    v: Option<&'a serde_json::Value>,
+    field: &str,
+    max: usize,
+) -> Result<Option<&'a str>, AppError> {
+    let Some(v) = present(v) else { return Ok(None) };
+    let s = v
+        .as_str()
+        .ok_or_else(|| AppError::BadRequest(format!("config.{field} must be a string")))?;
+    if s.len() > max {
+        return Err(AppError::BadRequest(format!(
+            "config.{field} too long (max {max} bytes)"
+        )));
+    }
+    Ok(Some(s))
+}
+
+/// If present, the field must be an absolute http:// or https:// URL. This is the
+/// stored-XSS guard for URLs the storefront renders into href/src attributes.
+fn check_http_url(v: Option<&serde_json::Value>, field: &str) -> Result<(), AppError> {
+    let Some(s) = check_string(v, field, 2048)? else {
+        return Ok(());
+    };
+    let lower = s.trim().to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest(format!(
+            "config.{field} must be an http(s) URL"
+        )))
+    }
 }
 
 /// The default hostname a site serves on.
@@ -255,7 +347,7 @@ pub async fn update(
     Ok(Some(site))
 }
 
-/// Cross-tenant public read for hostname resolution — owner pool by design: there is no
+/// Cross-tenant public read for hostname resolution; owner pool by design: there is no
 /// tenant context until the host is resolved (this is what *establishes* it). Read-only.
 pub async fn resolve_by_slug(
     owner_pool: &PgPool,
@@ -268,4 +360,50 @@ pub async fn resolve_by_slug(
     .bind(slug)
     .fetch_optional(owner_pool)
     .await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn config_rejects_unsafe_urls() {
+        assert!(validate_config(&json!({"logo_url": "javascript:alert(1)"})).is_err());
+        assert!(
+            validate_config(&json!({"links": [{"label": "x", "url": "javascript:alert(1)"}]}))
+                .is_err()
+        );
+        assert!(
+            validate_config(&json!({"links": [{"label": "x", "url": "data:text/html,hi"}]}))
+                .is_err()
+        );
+        assert!(validate_config(&json!({"logo_url": "https://ok.example/logo.png"})).is_ok());
+    }
+
+    #[test]
+    fn config_rejects_shape_invalid_known_fields() {
+        assert!(validate_config(&json!({"name": 123})).is_err());
+        assert!(validate_config(&json!({"links": {}})).is_err());
+        assert!(validate_config(&json!({"links": [{"url": "https://x"}]})).is_err());
+        assert!(validate_config(&json!({"links": [{"label": "x"}]})).is_err());
+        assert!(validate_config(&json!({"hero": []})).is_err());
+        assert!(validate_config(&json!({"colors": {"primary": 7}})).is_err());
+        assert!(validate_config(&json!([])).is_err());
+    }
+
+    #[test]
+    fn config_accepts_null_absent_and_unknown_fields() {
+        assert!(validate_config(&json!({})).is_ok());
+        assert!(validate_config(&json!({"name": null, "future_field": {"x": 1}})).is_ok());
+        let full = json!({
+            "name": "n",
+            "logo_url": "https://x.example/l.png",
+            "colors": {"primary": "#fff", "background": "#000"},
+            "hero": {"title": "t", "subtitle": "s"},
+            "about": "a",
+            "links": [{"label": "d", "url": "https://d.example"}]
+        });
+        assert!(validate_config(&full).is_ok());
+    }
 }

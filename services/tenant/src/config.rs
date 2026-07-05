@@ -6,9 +6,9 @@ use std::env;
 #[derive(Clone)]
 pub struct Config {
     pub bind_addr: String,
-    /// Owner-role connection — migrations + cross-tenant public reads (RLS-exempt).
+    /// Owner-role connection: migrations + cross-tenant public reads (RLS-exempt).
     pub database_url: String,
-    /// `cupboard_app` (non-owner) connection — request-scoped tenant CRUD (RLS applies).
+    /// `cupboard_app` (non-owner) connection: request-scoped tenant CRUD (RLS applies).
     /// Falls back to the owner URL in local dev (logged), where RLS then does not isolate.
     pub database_url_app: String,
     pub db_max_connections: u32,
@@ -16,7 +16,7 @@ pub struct Config {
     pub otel_endpoint: Option<String>,
 
     /// Ed25519 public key (PEM) for verifying operator access tokens minted by auth.
-    /// Required — every non-public, non-health route is operator-authenticated.
+    /// Required: every non-public, non-health route is operator-authenticated.
     pub jwt_public_key_pem: String,
 
     /// Redis, for the site-resolve cache on the public SSR path. Optional: when unset the
@@ -36,7 +36,7 @@ impl Config {
             Ok(url) => url,
             Err(_) => {
                 tracing::warn!(
-                    "DATABASE_URL_APP unset — falling back to the owner role; RLS will NOT \
+                    "DATABASE_URL_APP unset; falling back to the owner role. RLS will NOT \
                      isolate tenants on the app pool. Set the cupboard_app URL outside dev."
                 );
                 database_url.clone()

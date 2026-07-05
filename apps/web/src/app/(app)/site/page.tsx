@@ -1,16 +1,8 @@
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
+import type { SiteConfig } from "@/themes/catalog";
 import { CreateSiteForm } from "./create-site-form";
 import { SiteEditor } from "./site-editor";
-
-export type SiteConfig = {
-  name?: string;
-  logo_url?: string;
-  colors?: { primary?: string; background?: string; foreground?: string };
-  hero?: { title?: string; subtitle?: string };
-  about?: string;
-  links?: { label?: string; url?: string }[];
-};
 
 export type Site = {
   id: string;

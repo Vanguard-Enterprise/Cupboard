@@ -3,8 +3,8 @@
 //! `cupboard_app` role exactly as request handlers do (app pool + `set_tenant`).
 //!
 //! Requires a Postgres (PG18 for `uuidv7()`) with the `cupboard_app` role present:
-//!   * `TEST_DATABASE_URL`     — owner role (runs migrations + seeds across tenants)
-//!   * `TEST_DATABASE_URL_APP` — `cupboard_app` role (the RLS-enforced request path)
+//!   * `TEST_DATABASE_URL`     - owner role (runs migrations + seeds across tenants)
+//!   * `TEST_DATABASE_URL_APP` - `cupboard_app` role (the RLS-enforced request path)
 //!
 //! Skips (passes) when `TEST_DATABASE_URL` is unset.
 

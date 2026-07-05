@@ -6,22 +6,31 @@
 // Security shape: the storefront segment is only reachable via this rewrite on non-admin
 // hosts (direct /storefront/* paths on admin hosts 404), and the rewrite stamps the
 // x-cb-site-host request header, which storefront/[host]/layout.tsx re-checks against its
-// path segment — a client cannot render host B's site by crafting a path on host A.
+// path segment: a client cannot render host B's site by crafting a path on host A.
 import { NextRequest, NextResponse } from "next/server";
 
 const DEFAULT_ADMIN_HOSTS = "localhost:3000,127.0.0.1:3000";
 
 function adminHosts(): Set<string> {
+  const raw = process.env.ADMIN_HOSTS;
+  if (!raw && process.env.NODE_ENV === "production") {
+    // Deliberately loud: with the localhost fallback the dashboard host would be
+    // classified as a storefront and 404 everywhere. The k8s readiness probe sends the
+    // admin Host header, so a deploy with this misconfiguration fails readiness and
+    // never takes traffic; this log is the diagnostic breadcrumb for that state.
+    console.error(
+      "ADMIN_HOSTS is unset in production; the dashboard host will be treated as a storefront and fail readiness.",
+    );
+  }
   return new Set(
-    (process.env.ADMIN_HOSTS ?? DEFAULT_ADMIN_HOSTS)
+    (raw ?? DEFAULT_ADMIN_HOSTS)
       .split(",")
       .map((h) => h.trim().toLowerCase())
       .filter(Boolean),
   );
 }
 
-/** Exported for reuse/tests: classify a raw Host header. */
-export function classifyHost(rawHost: string): { admin: boolean; host: string } {
+function classifyHost(rawHost: string): { admin: boolean; host: string } {
   const full = rawHost.trim().toLowerCase();
   const bare = full.split(":")[0];
   const admins = adminHosts();
@@ -55,8 +64,9 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Everything except Next internals and static assets.
-  matcher: [
-    "/((?!_next/|favicon\\.ico|robots\\.txt|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|css|js|map|txt|woff2?)$).*)",
-  ],
+  // Everything except Next's own assets. Deliberately NO static-extension exemption:
+  // paths like /robots.txt or /favicon.ico must be host-classified too, otherwise
+  // storefront hosts would be served from the admin surface (and the admin-host
+  // /storefront guard would be skippable via asset-looking paths).
+  matcher: ["/((?!_next/).*)"],
 };

@@ -22,7 +22,7 @@ pub enum AppError {
     Conflict(String),
     #[error("service unavailable: {0}")]
     Unavailable(String),
-    /// Anything unexpected — logged with detail, shown to the client as a bare 500.
+    /// Anything unexpected: logged with detail, shown to the client as a bare 500.
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }

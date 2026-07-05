@@ -20,7 +20,9 @@ export const resolveSite = cache(async (host: string): Promise<ResolvedSite | nu
     `${gatewayBase()}/public/sites/resolve?host=${encodeURIComponent(host)}`,
     { cache: "no-store" },
   );
-  if (res.status === 404) return null;
+  // Any 4xx means "this host is not a site" (404 unknown, 400 for hostnames the
+  // tenant service rejects, e.g. underscores): render the storefront 404, not a 500.
+  if (res.status >= 400 && res.status < 500) return null;
   if (!res.ok) {
     throw new Error(`site resolve failed: ${res.status}`);
   }

@@ -5,6 +5,7 @@
 // render it via useActionState.
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { DEFAULT_THEME_ID } from "@/themes/catalog";
 import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
 
 export type FormState = { error?: string };
@@ -425,16 +426,30 @@ function trimmed(form: FormData, name: string): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/** URL fields must be absolute http(s) URLs; anything else (javascript:, data:,
+ * scheme-relative) is refused before it reaches the API, which enforces the same rule. */
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 /** Build the site config JSON from the editor's form fields. Empty strings are
  * omitted rather than sent; links missing a label or url are dropped. The config is
- * always sent in full since the API replaces it wholesale. */
-function buildSiteConfig(form: FormData): Record<string, unknown> {
+ * always sent in full since the API replaces it wholesale. Returns an error string
+ * instead when a field is invalid. */
+function buildSiteConfig(
+  form: FormData,
+): { config: Record<string, unknown> } | { error: string } {
   const config: Record<string, unknown> = {};
 
   const name = trimmed(form, "name");
   if (name) config.name = name;
   const logoUrl = trimmed(form, "logo_url");
-  if (logoUrl) config.logo_url = logoUrl;
+  if (logoUrl) {
+    if (!isHttpUrl(logoUrl)) {
+      return { error: "Logo URL must start with http:// or https://" };
+    }
+    config.logo_url = logoUrl;
+  }
 
   const colors: Record<string, string> = {};
   const primary = trimmed(form, "color_primary");
@@ -460,9 +475,14 @@ function buildSiteConfig(form: FormData): Record<string, unknown> {
   const links = labels
     .map((label, i) => ({ label: String(label).trim(), url: String(urls[i] ?? "").trim() }))
     .filter((l) => l.label && l.url);
+  for (const link of links) {
+    if (!isHttpUrl(link.url)) {
+      return { error: `Link "${link.label}": URL must start with http:// or https://` };
+    }
+  }
   if (links.length > 0) config.links = links;
 
-  return config;
+  return { config };
 }
 
 /** Create the tenant's white-label site (one per org). */
@@ -472,12 +492,14 @@ export async function createSiteAction(
 ): Promise<SiteFormState> {
   const slug = trimmed(form, "slug");
   if (!slug) return { error: "slug is required" };
-  const themeId = trimmed(form, "theme_id") || "ember";
+  const themeId = trimmed(form, "theme_id") || DEFAULT_THEME_ID;
+  const built = buildSiteConfig(form);
+  if ("error" in built) return { error: built.error };
 
   const res = await apiFetch("/sites", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ slug, theme_id: themeId, config: buildSiteConfig(form) }),
+    body: JSON.stringify({ slug, theme_id: themeId, config: built.config }),
   });
   if (!res.ok) return { error: await readError(res) };
   revalidatePath("/site");
@@ -491,11 +513,13 @@ export async function updateSiteAction(
 ): Promise<SiteFormState> {
   const slug = trimmed(form, "slug");
   if (!slug) return { error: "slug is required" };
-  const themeId = trimmed(form, "theme_id") || "ember";
+  const themeId = trimmed(form, "theme_id") || DEFAULT_THEME_ID;
+  const built = buildSiteConfig(form);
+  if ("error" in built) return { error: built.error };
   const body = {
     slug,
     theme_id: themeId,
-    config: buildSiteConfig(form),
+    config: built.config,
     published: form.get("published") === "on",
   };
 

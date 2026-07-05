@@ -1,6 +1,6 @@
 // Storefront shell for one tenant site, addressed by hostname. Only reachable through
 // the middleware rewrite (see src/middleware.ts): the [host] path segment must match the
-// x-cb-site-host header the middleware stamped from the actual Host header — a crafted
+// x-cb-site-host header the middleware stamped from the actual Host header; a crafted
 // path like /storefront/other-site.example on some other host renders nothing.
 import type { Metadata } from "next";
 import { headers } from "next/headers";

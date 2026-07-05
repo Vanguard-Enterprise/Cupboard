@@ -51,17 +51,18 @@ async fn main() -> anyhow::Result<()> {
         .context("load Ed25519 JWT verifier")?;
 
     // Site-resolve cache: best-effort. A missing REDIS_URL or an unreachable Redis only
-    // costs cache hits, never availability — resolution falls back to Postgres.
+    // costs cache hits, never availability: resolution falls back to Postgres, and the
+    // connection is established lazily so a Redis outage at boot self-heals.
     let cache = match &config.redis_url {
-        Some(url) => match SiteCache::connect(url).await {
+        Some(url) => match SiteCache::new(url) {
             Ok(cache) => cache,
             Err(e) => {
-                tracing::warn!(error = %e, "redis unavailable; site-resolve cache disabled");
+                tracing::warn!(error = %e, "invalid REDIS_URL; site-resolve cache disabled");
                 SiteCache::disabled()
             }
         },
         None => {
-            tracing::warn!("REDIS_URL unset — site-resolve cache disabled");
+            tracing::warn!("REDIS_URL unset; site-resolve cache disabled");
             SiteCache::disabled()
         }
     };
@@ -71,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         app_pool,
         keys: Arc::new(keys),
         cache,
+        miss_budget: Arc::new(Default::default()),
         config: Arc::new(config.clone()),
     };
 

@@ -1,6 +1,6 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
-mod public;
+pub mod public;
 mod sites;
 
 use crate::error::AppError;
@@ -30,7 +30,7 @@ pub fn router(state: AppState) -> Router {
                 .patch(sites::update),
         )
         // Public, unauthenticated reads for the storefront SSR path (via the gateway's
-        // `/public/*` route; cluster-internal callers only — never internet-exposed).
+        // `/public/*` route; cluster-internal callers only, never internet-exposed).
         .route("/public/sites/resolve", get(public::resolve))
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
@@ -38,7 +38,7 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Liveness — process is up.
+/// Liveness: process is up.
 async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
@@ -47,7 +47,7 @@ async fn healthz(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-/// Readiness — the (owner) database answers.
+/// Readiness: the (owner) database answers.
 async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     match sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.owner_pool)

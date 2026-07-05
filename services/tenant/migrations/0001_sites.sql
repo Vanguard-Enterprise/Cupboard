@@ -1,8 +1,8 @@
--- Phase 5 — Tenant service schema, part 1: white-label sites. Lives in the `tenant`
+-- Phase 5, tenant service schema part 1: white-label sites. Lives in the `tenant`
 -- Postgres schema (search_path=tenant,public) so its objects and its own
 -- `_sqlx_migrations` ledger stay isolated from other services in the shared database.
 --
--- One site per organization (v1): `tenant_id` is UNIQUE. The slug is globally unique —
+-- One site per organization (v1): `tenant_id` is UNIQUE. The slug is globally unique;
 -- it is the leftmost DNS label of the site's default hostname `{slug}.{SITES_SUFFIX}`.
 -- Custom domains arrive in a later migration (`site_domains`).
 --
