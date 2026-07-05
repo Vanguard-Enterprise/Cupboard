@@ -13,6 +13,7 @@ export const Permission = {
   ServersView: "servers.view",
   ServersManage: "servers.manage",
   BillingManage: "billing.manage",
+  IntegrationsManage: "integrations.manage",
 } as const;
 
 export type Perm = (typeof Permission)[keyof typeof Permission];

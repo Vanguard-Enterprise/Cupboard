@@ -35,6 +35,9 @@ hex.workspace = true
 cupboard-db.workspace = true
 cupboard-domain.workspace = true
 cupboard-crypto.workspace = true
+cupboard-auth-core.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 uuid.workspace = true
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"

@@ -33,8 +33,13 @@ pub fn router(state: AppState) -> Router {
             "/fleet/servers/{id}/ingest-token",
             axum::routing::post(servers::issue_ingest_token).delete(servers::revoke_ingest_token),
         )
-        // Cross-tenant, token-guarded endpoints for the Collector (not via the gateway).
+        // Cross-tenant, token-guarded endpoints for the Collector and the BattleMetrics
+        // import runner (not via the gateway).
         .route("/internal/servers", get(internal::list_configs))
+        .route(
+            "/internal/servers/import",
+            axum::routing::post(internal::import),
+        )
         .route(
             "/internal/servers/{id}/status",
             axum::routing::post(internal::update_status),

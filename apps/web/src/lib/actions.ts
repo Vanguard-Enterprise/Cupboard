@@ -243,6 +243,181 @@ async function updateEvasion(form: FormData, verb: "dismiss" | "action"): Promis
   }
 }
 
+export type BmConnectFormState = { error?: string; ok?: boolean };
+
+/** Connect (or reconnect) the tenant's BattleMetrics org + personal access token. The
+ * backend probes the token against BattleMetrics before storing it; the token is
+ * never read back. */
+export async function connectBattlemetricsAction(
+  _prev: BmConnectFormState,
+  form: FormData,
+): Promise<BmConnectFormState> {
+  const bmOrgId = form.get("bm_org_id");
+  const token = form.get("token");
+  if (typeof bmOrgId !== "string" || !bmOrgId.trim()) {
+    return { error: "organization id is required" };
+  }
+  if (typeof token !== "string" || !token.trim()) {
+    return { error: "token is required" };
+  }
+
+  const res = await apiFetch("/integrations/bm/connection", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bm_org_id: bmOrgId, token }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type BmImportFormState = { error?: string; ok?: boolean };
+
+/** Queue a BattleMetrics import job for the tenant's connection. */
+export async function startBmImportAction(
+  _prev: BmImportFormState,
+  _form: FormData,
+): Promise<BmImportFormState> {
+  const res = await apiFetch("/integrations/bm/import", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type BmSyncFormState = { error?: string; ok?: boolean };
+
+/** Toggle inbound BattleMetrics sync (new bans tail in ~1m, edits/deletes re-scan in
+ * ~15m) for the tenant's connection. */
+export async function toggleBmSyncAction(
+  _prev: BmSyncFormState,
+  form: FormData,
+): Promise<BmSyncFormState> {
+  const syncEnabled = form.get("sync_enabled") === "true";
+  const res = await apiFetch("/integrations/bm/sync", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sync_enabled: syncEnabled }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type BmOutboundFormState = { error?: string; ok?: boolean; backfilled?: number };
+
+/** Outbound BattleMetrics sync changes, keyed by explicit intent: `enable` (target
+ * list + optional one-time backfill), `retarget` (save a new target list while
+ * enabled, no toggle), `disable` (only `sync_bans_outbound: false`, never touching
+ * the stored target list). */
+export async function updateBmOutboundAction(
+  _prev: BmOutboundFormState,
+  form: FormData,
+): Promise<BmOutboundFormState> {
+  const intent = form.get("intent");
+  const body: Record<string, unknown> = {};
+  if (intent === "disable") {
+    body.sync_bans_outbound = false;
+  } else {
+    const targetBanList = form.get("target_ban_list");
+    if (typeof targetBanList === "string" && targetBanList) {
+      body.target_ban_list = targetBanList;
+    }
+    if (intent === "enable") {
+      body.sync_bans_outbound = true;
+      body.backfill_existing = form.get("backfill_existing") === "on";
+    } else if (!body.target_ban_list) {
+      return { error: "choose a target ban list first" };
+    }
+  }
+  const res = await apiFetch("/integrations/bm/sync", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const data = await res.json();
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true, backfilled: data.backfilled };
+}
+
+export type BmRetryOutboxState = { error?: string; requeued?: number };
+
+/** Requeue terminally-failed outbound pushes (`failed` -> `pending`) after a BM outage
+ * that outlasted the retry window. A healthy runner drains them on its next tick. */
+export async function retryBmOutboxAction(
+  _prev: BmRetryOutboxState,
+  _form: FormData,
+): Promise<BmRetryOutboxState> {
+  const res = await apiFetch("/integrations/bm/outbox/retry", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  const data = await res.json();
+  revalidatePath("/integrations/battlemetrics/status");
+  return { requeued: data.requeued };
+}
+
+export type BmImportControlFormState = { error?: string; ok?: boolean };
+
+/** Pause, resume, or cancel the tenant's live BattleMetrics import job (action comes
+ * from a hidden form field so one server action covers all three buttons). */
+export async function controlBmImportAction(
+  _prev: BmImportControlFormState,
+  form: FormData,
+): Promise<BmImportControlFormState> {
+  const action = form.get("action");
+  if (typeof action !== "string" || !action) return { error: "missing action" };
+  const res = await apiFetch(`/integrations/bm/import/${action}`, { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type BmResolveConflictFormState = { error?: string; ok?: boolean };
+
+/** Resolve a BattleMetrics sync conflict: `keep_local` acknowledges the automatic
+ * local-won outcome; `accept_remote` re-applies BM's side to the local ban. The choice
+ * comes from the submit button; a 404 (already resolved by someone else) surfaces as an
+ * error. */
+export async function resolveBmConflictAction(
+  _prev: BmResolveConflictFormState,
+  form: FormData,
+): Promise<BmResolveConflictFormState> {
+  const id = form.get("id");
+  const choice = form.get("choice");
+  if (typeof id !== "string" || !id) return { error: "missing conflict id" };
+  if (choice !== "keep_local" && choice !== "accept_remote") {
+    return { error: "missing resolution choice" };
+  }
+  const res = await apiFetch(`/integrations/bm/conflicts/${id}/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ choice }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics/conflicts");
+  return { ok: true };
+}
+
+export type BmImportScopeFormState = { error?: string; ok?: boolean };
+
+/** Persist which BM entity types (servers/players/notes) the next import job pulls. */
+export async function updateBmImportScopeAction(
+  _prev: BmImportScopeFormState,
+  form: FormData,
+): Promise<BmImportScopeFormState> {
+  const res = await apiFetch("/integrations/bm/sync", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      import_servers: form.get("import_servers") === "on",
+      import_players: form.get("import_players") === "on",
+      import_notes: form.get("import_notes") === "on",
+    }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

@@ -2,6 +2,7 @@
 
 pub mod audit;
 pub mod bans;
+pub mod bm;
 pub mod chat;
 pub mod evasion;
 pub mod ingest;

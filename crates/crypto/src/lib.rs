@@ -63,6 +63,27 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MasterKeyError {
+    #[error("{0} must be valid base64")]
+    NotBase64(String),
+    #[error("{0} must decode to exactly 32 bytes (AES-256)")]
+    WrongLength(String),
+}
+
+/// Decode a base64-encoded envelope master key, requiring exactly 32 bytes (AES-256).
+/// `source` names where the key came from (the env var) for error messages. Shared by
+/// every service that opens envelopes (fleet's RCON creds, identity's BM tokens).
+pub fn decode_master_key(b64: &str, source: &str) -> Result<[u8; 32], MasterKeyError> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|_| MasterKeyError::NotBase64(source.to_string()))?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| MasterKeyError::WrongLength(source.to_string()))
+}
+
 /// Plain (unkeyed) SHA-256. Used for the OAuth2 PKCE S256 challenge, where the verifier
 /// is a high-entropy secret and the challenge is its public, non-secret digest.
 pub fn sha256(data: &[u8]) -> [u8; 32] {

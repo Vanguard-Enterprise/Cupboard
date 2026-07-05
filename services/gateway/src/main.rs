@@ -164,6 +164,15 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // BattleMetrics integration (identity service): connection, import, sync.
+        // Identity enforces `integrations.manage`.
+        .route(
+            "/integrations/{*path}",
+            any(proxy::proxy_identity).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // A JWT-validated route proving front-door auth; real /api routes follow.
         .route(
             "/api/whoami",

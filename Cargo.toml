@@ -8,6 +8,7 @@ members = [
     "crates/auth-core",
     "crates/gameconn",
     "crates/bus",
+    "crates/bmapi",
     "services/gateway",
     "services/auth",
     "services/fleet",
@@ -62,7 +63,8 @@ tracing-opentelemetry = "0.33"
 # Errors / utils
 anyhow = "1"
 thiserror = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
+# v7 for client-generated, time-ordered ids in batch inserts (matches DB uuidv7()).
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Auth / crypto
@@ -93,6 +95,7 @@ cupboard-crypto = { path = "crates/crypto" }
 cupboard-auth-core = { path = "crates/auth-core" }
 cupboard-gameconn = { path = "crates/gameconn" }
 cupboard-bus = { path = "crates/bus" }
+cupboard-bmapi = { path = "crates/bmapi" }
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,33 @@
+[package]
+name = "cupboard-bmapi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+cupboard-crypto.workspace = true
+# Only the `stub` feature (in-process test fixture) needs a web framework, so keep it
+# out of production builds of this client crate.
+axum = { workspace = true, optional = true }
+
+[features]
+# In-process BattleMetrics stub server for this crate's integration tests and, later,
+# services/identity tests (which depend on this crate with `features = ["stub"]`).
+stub = ["dep:axum"]
+
+[dev-dependencies]
+axum.workspace = true
+# Paused-clock limiter tests (`start_paused`) need tokio's test-util.
+tokio = { workspace = true, features = ["test-util"] }
+# Turn on `stub` for this crate's own tests so `cargo test -p cupboard-bmapi` builds the
+# fixture without any extra flags (self dev-dependency is the idiomatic way to do this).
+cupboard-bmapi = { path = ".", features = ["stub"] }

@@ -28,7 +28,24 @@ pub struct Config {
 
     /// Shared secret the Collector presents (`X-Internal-Token`) to `/internal/*` (the
     /// connect-time ban enforcement lookup). `None` disables those endpoints (fail closed).
+    /// Reused as the token identity presents to fleet's `/internal/servers/import`:
+    /// v-deployments sets the same value on both services (one cluster-internal token).
     pub internal_api_token: Option<String>,
+
+    /// Fleet's cluster-internal base URL (`FLEET_INTERNAL_URL`, e.g.
+    /// `http://cupboard-fleet:8080`), where the BM import registers discovered servers.
+    /// `None` (or a missing `internal_api_token`) makes the import's servers phase skip
+    /// with a counted reason rather than fail (degradation posture).
+    pub fleet_internal_url: Option<String>,
+
+    /// 32-byte envelope master key (base64 in `IDENTITY_MASTER_KEY`) wrapping per-tenant
+    /// BattleMetrics token data keys (`cupboard_crypto::envelope`). `None` disables the
+    /// BM integration endpoints and the import/sync supervisor (fail closed), so the
+    /// service deploys cleanly before the OpenBao key exists.
+    pub identity_master_key: Option<[u8; 32]>,
+    /// BattleMetrics API base URL. Overridable (`BM_API_BASE`) for the local stub in
+    /// tests/dev; the real default otherwise.
+    pub bm_api_base: String,
 }
 
 impl Config {
@@ -68,6 +85,26 @@ impl Config {
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            fleet_internal_url: env::var("FLEET_INTERNAL_URL")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            identity_master_key: match env::var("IDENTITY_MASTER_KEY") {
+                Ok(b64) if !b64.trim().is_empty() => Some(cupboard_crypto::decode_master_key(
+                    &b64,
+                    "IDENTITY_MASTER_KEY",
+                )?),
+                _ => {
+                    tracing::warn!(
+                        "IDENTITY_MASTER_KEY unset: BattleMetrics integration disabled \
+                         (endpoints 503, supervisor not started)"
+                    );
+                    None
+                }
+            },
+            bm_api_base: env::var("BM_API_BASE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| cupboard_bmapi::DEFAULT_BASE.to_string()),
         })
     }
 }

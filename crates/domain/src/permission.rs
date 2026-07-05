@@ -44,6 +44,8 @@ pub enum Permission {
     SitesEdit,
     /// Manage the organization's Cupboard billing/subscription.
     BillingManage,
+    /// Connect external services like BattleMetrics and manage import/sync.
+    IntegrationsManage,
 }
 
 impl Permission {
@@ -65,6 +67,7 @@ impl Permission {
         Permission::SupportRespond,
         Permission::SitesEdit,
         Permission::BillingManage,
+        Permission::IntegrationsManage,
     ];
 
     /// The stable wire/string identifier (`"bans.create"`).
@@ -85,6 +88,7 @@ impl Permission {
             Permission::SupportRespond => "support.respond",
             Permission::SitesEdit => "sites.edit",
             Permission::BillingManage => "billing.manage",
+            Permission::IntegrationsManage => "integrations.manage",
         }
     }
 
@@ -104,6 +108,7 @@ impl Permission {
             Permission::SupportRespond => "support",
             Permission::SitesEdit => "sites",
             Permission::BillingManage => "billing",
+            Permission::IntegrationsManage => "integrations",
         }
     }
 
@@ -125,6 +130,9 @@ impl Permission {
             Permission::SupportRespond => "Respond to support tickets",
             Permission::SitesEdit => "Edit the white-label site",
             Permission::BillingManage => "Manage Cupboard billing and subscription",
+            Permission::IntegrationsManage => {
+                "Connect external services like BattleMetrics and manage import/sync"
+            }
         }
     }
 
@@ -180,6 +188,7 @@ pub const DEFAULT_ROLE_TEMPLATES: &[RoleTemplate] = &[
             Permission::SupportRespond,
             Permission::SitesEdit,
             Permission::BillingManage,
+            Permission::IntegrationsManage,
         ],
     },
     RoleTemplate {

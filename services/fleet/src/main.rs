@@ -1,20 +1,13 @@
-//! Cupboard Fleet — tenant-configured game-server connections (Phase 2).
-//!
-//! Phase 2 scope: RCON/A2S connections (zero-install). Boots telemetry, opens two
-//! Postgres pools (owner for migrations + the cross-tenant Collector feed, `cupboard_app`
-//! for RLS-scoped tenant CRUD), ensures and migrates the service-owned `fleet` schema,
-//! then serves the HTTP API. Panel adapters (Pelican/Pterodactyl) follow later.
-
-mod config;
-mod domain;
-mod error;
-mod http;
-mod state;
+//! Cupboard Fleet binary: see the crate docs (`lib.rs`) for the architecture. Boots
+//! telemetry, opens two Postgres pools (owner for migrations + the cross-tenant
+//! `/internal` surface, `cupboard_app` for RLS-scoped tenant CRUD), ensures and migrates
+//! the service-owned `fleet` schema, then serves the HTTP API.
 
 use anyhow::Context as _;
-use config::Config;
 use cupboard_auth_core::Keys;
-use state::AppState;
+use cupboard_fleet::config::Config;
+use cupboard_fleet::http;
+use cupboard_fleet::state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
