@@ -6,7 +6,7 @@ export type StoreConnection = {
   store_external_id: string;
   store_name: string | null;
   store_currency: string | null;
-  store_live: boolean;
+  store_live: boolean | null;
   last_error: string | null;
   catalog_synced_at: string | null;
   next_catalog_sync_at: string | null;
@@ -16,12 +16,12 @@ export type StoreConnection = {
 
 export type StoreProduct = {
   external_id: string;
-  slug: string;
+  slug: string | null;
   name: string;
   description: string | null;
   image_url: string | null;
   price_minor: number;
-  price_final_minor: number;
+  price_final_minor: number | null;
   currency: string;
   kind: string;
   interval_value: number | null;

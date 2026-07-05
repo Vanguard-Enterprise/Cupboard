@@ -16,7 +16,12 @@ export default async function StorefrontHome() {
   const config = asSiteConfig(site.config);
   const theme = getTheme(site.theme_id);
 
-  const catalog = await fetchCatalog(host);
+  // The teaser is additive: a catalog-endpoint failure must degrade to "no teaser",
+  // never crash the home page (fetchCatalog throws on 5xx/network errors).
+  const catalog = await fetchCatalog(host).catch((e) => {
+    console.error(`store teaser unavailable for ${host}:`, e);
+    return null;
+  });
   const teaser = catalog
     ? [...catalog.products].sort((a, b) => a.sort_order - b.sort_order).slice(0, 3)
     : [];

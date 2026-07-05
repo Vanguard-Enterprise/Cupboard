@@ -113,7 +113,7 @@ async fn resolve_host(
 
     // Cache miss: the only path that can reach Postgres. Under a distinct-host flood
     // the bucket empties and excess misses 404 without touching the database.
-    if !state.miss_budget.try_take() {
+    if !state.site_miss_budget.try_take() {
         tracing::warn!(
             host,
             "resolve miss budget exhausted; serving 404 without lookup"
@@ -162,7 +162,7 @@ pub async fn catalog(
     if let CacheLookup::Hit(cached) = state.cache.get::<store::PublicCatalog>(&key).await {
         return cached.map(Json).ok_or_else(not_found);
     }
-    if !state.miss_budget.try_take() {
+    if !state.catalog_miss_budget.try_take() {
         tracing::warn!(tenant = %site.tenant_id, "catalog miss budget exhausted; serving 404");
         return Err(not_found());
     }

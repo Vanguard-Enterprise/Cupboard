@@ -441,14 +441,35 @@ pub async fn apply_catalog(
 ) -> Result<(u64, u64), AppError> {
     let mut tx = owner_pool.begin().await?;
 
+    // Batched set-based upserts (one statement per table regardless of catalog size);
+    // the conditional DO UPDATE leaves unchanged rows untouched (no WAL churn).
     let mut written: u64 = 0;
-    for c in &snapshot.categories {
-        let hash = category_content_hash(c);
+    if !snapshot.categories.is_empty() {
+        let mut ext = Vec::new();
+        let mut slug: Vec<Option<String>> = Vec::new();
+        let mut name = Vec::new();
+        let mut desc: Vec<Option<String>> = Vec::new();
+        let mut img: Vec<Option<String>> = Vec::new();
+        let mut sort = Vec::new();
+        let mut hash = Vec::new();
+        for c in &snapshot.categories {
+            ext.push(c.external_id.clone());
+            slug.push(c.slug.clone());
+            name.push(c.name.clone());
+            desc.push(c.description.clone());
+            img.push(c.image_url.clone());
+            sort.push(c.sort_order);
+            hash.push(category_content_hash(c));
+        }
         let res = sqlx::query(
             "INSERT INTO store_categories \
                  (tenant_id, connection_id, external_id, slug, name, description, \
                   image_url, sort_order, content_hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             SELECT $1, $2, u.* FROM UNNEST( \
+                 $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], \
+                 $8::int[], $9::text[]) \
+               AS u(external_id, slug, name, description, image_url, sort_order, \
+                    content_hash) \
              ON CONFLICT (connection_id, external_id) DO UPDATE SET \
                  slug = EXCLUDED.slug, name = EXCLUDED.name, \
                  description = EXCLUDED.description, image_url = EXCLUDED.image_url, \
@@ -459,28 +480,68 @@ pub async fn apply_catalog(
         )
         .bind(conn.tenant_id)
         .bind(conn.id)
-        .bind(&c.external_id)
-        .bind(&c.slug)
-        .bind(&c.name)
-        .bind(&c.description)
-        .bind(&c.image_url)
-        .bind(c.sort_order)
+        .bind(&ext)
+        .bind(&slug)
+        .bind(&name)
+        .bind(&desc)
+        .bind(&img)
+        .bind(&sort)
         .bind(&hash)
         .execute(&mut *tx)
         .await?;
         written += res.rows_affected();
     }
 
-    for p in &snapshot.products {
-        let hash = product_content_hash(p);
+    if !snapshot.products.is_empty() {
+        let n = snapshot.products.len();
+        let mut ext = Vec::with_capacity(n);
+        let mut slug: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut name = Vec::with_capacity(n);
+        let mut desc: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut img: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut price = Vec::with_capacity(n);
+        let mut price_final: Vec<Option<i64>> = Vec::with_capacity(n);
+        let mut currency = Vec::with_capacity(n);
+        let mut kind = Vec::with_capacity(n);
+        let mut ivl_value: Vec<Option<i32>> = Vec::with_capacity(n);
+        let mut ivl_scale: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut cats: Vec<serde_json::Value> = Vec::with_capacity(n);
+        let mut avail = Vec::with_capacity(n);
+        let mut sort = Vec::with_capacity(n);
+        let mut raw: Vec<serde_json::Value> = Vec::with_capacity(n);
+        let mut hash = Vec::with_capacity(n);
+        for p in &snapshot.products {
+            ext.push(p.external_id.clone());
+            slug.push(p.slug.clone());
+            name.push(p.name.clone());
+            desc.push(p.description.clone());
+            img.push(p.image_url.clone());
+            price.push(p.price_minor);
+            price_final.push(p.price_final_minor);
+            currency.push(p.currency.clone());
+            kind.push(p.kind.as_str().to_string());
+            ivl_value.push(p.interval_value);
+            ivl_scale.push(p.interval_scale.clone());
+            cats.push(serde_json::json!(p.category_ids));
+            avail.push(p.available);
+            sort.push(p.sort_order);
+            raw.push(p.raw.clone());
+            hash.push(product_content_hash(p));
+        }
         let res = sqlx::query(
             "INSERT INTO store_products \
                  (tenant_id, connection_id, external_id, slug, name, description, \
                   image_url, price_minor, price_final_minor, currency, kind, \
                   interval_value, interval_scale, category_ids, available, sort_order, \
                   raw, content_hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
-                     $16, $17, $18) \
+             SELECT $1, $2, u.* FROM UNNEST( \
+                 $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], \
+                 $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::int[], \
+                 $13::text[], $14::jsonb[], $15::bool[], $16::int[], $17::jsonb[], \
+                 $18::text[]) \
+               AS u(external_id, slug, name, description, image_url, price_minor, \
+                    price_final_minor, currency, kind, interval_value, interval_scale, \
+                    category_ids, available, sort_order, raw, content_hash) \
              ON CONFLICT (connection_id, external_id) DO UPDATE SET \
                  slug = EXCLUDED.slug, name = EXCLUDED.name, \
                  description = EXCLUDED.description, image_url = EXCLUDED.image_url, \
@@ -498,21 +559,21 @@ pub async fn apply_catalog(
         )
         .bind(conn.tenant_id)
         .bind(conn.id)
-        .bind(&p.external_id)
-        .bind(&p.slug)
-        .bind(&p.name)
-        .bind(&p.description)
-        .bind(&p.image_url)
-        .bind(p.price_minor)
-        .bind(p.price_final_minor)
-        .bind(&p.currency)
-        .bind(p.kind.as_str())
-        .bind(p.interval_value)
-        .bind(&p.interval_scale)
-        .bind(serde_json::json!(p.category_ids))
-        .bind(p.available)
-        .bind(p.sort_order)
-        .bind(&p.raw)
+        .bind(&ext)
+        .bind(&slug)
+        .bind(&name)
+        .bind(&desc)
+        .bind(&img)
+        .bind(&price)
+        .bind(&price_final)
+        .bind(&currency)
+        .bind(&kind)
+        .bind(&ivl_value)
+        .bind(&ivl_scale)
+        .bind(&cats)
+        .bind(&avail)
+        .bind(&sort)
+        .bind(&raw)
         .bind(&hash)
         .execute(&mut *tx)
         .await?;

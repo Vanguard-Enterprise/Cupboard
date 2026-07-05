@@ -99,6 +99,13 @@ pub async fn connect(
     )
     .await?;
 
+    // A reconnect can change the store identity (or revive an errored connection
+    // whose catalog was cache-hidden); drop the cached catalog eagerly.
+    state
+        .cache
+        .invalidate(&[crate::cache::CacheKey::Catalog(org.0)])
+        .await;
+
     let view = store::connection_view(&state.app_pool, TenantId::from(org)).await?;
     Ok((StatusCode::CREATED, Json(json!({ "connection": view }))))
 }

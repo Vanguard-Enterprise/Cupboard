@@ -97,7 +97,17 @@ impl PayNowClient {
             .map_err(|e| ProviderError::Transient(format!("request failed: {e}")))?;
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-            return Err(ProviderError::Auth(format!("paynow returned {status}")));
+            // Only a credentialed call proves anything about the API key. The anonymous
+            // storefront endpoints can 401/403 for store-side reasons (restricted or
+            // maintenance state); erroring the connection over those would send the
+            // operator chasing a "bad key" that is fine.
+            return if auth {
+                Err(ProviderError::Auth(format!("paynow returned {status}")))
+            } else {
+                Err(ProviderError::Rejected(format!(
+                    "paynow returned {status} on an anonymous storefront call"
+                )))
+            };
         }
         if status.as_u16() == 429 || status.is_server_error() {
             return Err(ProviderError::Transient(format!(
@@ -136,22 +146,38 @@ impl PayNowClient {
 }
 
 /// Accept both a bare JSON array and an object wrapping one (`{"data": [...]}` or any
-/// single array-valued field): the exact envelope is unverified against a live store.
-fn as_array_payload(v: &serde_json::Value) -> Vec<serde_json::Value> {
+/// single unambiguous array-valued field): the exact envelope is unverified against a
+/// live store. `None` means "shape not recognized", which callers MUST treat as an
+/// error, never as an empty list: a misread envelope that returned `[]` would make the
+/// sync sweep soft-delete the tenant's entire catalog as a "successful" run.
+fn as_array_payload(v: &serde_json::Value) -> Option<Vec<serde_json::Value>> {
     if let Some(arr) = v.as_array() {
-        return arr.clone();
+        return Some(arr.clone());
     }
     if let Some(obj) = v.as_object() {
         if let Some(arr) = obj.get("data").and_then(|d| d.as_array()) {
-            return arr.clone();
+            return Some(arr.clone());
         }
         let arrays: Vec<&Vec<serde_json::Value>> =
             obj.values().filter_map(|x| x.as_array()).collect();
         if arrays.len() == 1 {
-            return arrays[0].clone();
+            return Some(arrays[0].clone());
         }
     }
-    Vec::new()
+    None
+}
+
+/// Unwrap a list payload or fail the sync with a diagnosable error.
+fn require_array(
+    v: &serde_json::Value,
+    what: &str,
+) -> Result<Vec<serde_json::Value>, ProviderError> {
+    as_array_payload(v).ok_or_else(|| {
+        let brief: String = v.to_string().chars().take(120).collect();
+        ProviderError::Rejected(format!(
+            "unrecognized {what} payload shape (update the PayNow adapter): {brief}"
+        ))
+    })
 }
 
 fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
@@ -165,6 +191,15 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 
 fn i64_field(v: &serde_json::Value, key: &str) -> Option<i64> {
     v.get(key).and_then(|x| x.as_i64())
+}
+
+/// Provider-supplied URLs that public pages render into src attributes: http(s) only
+/// (same stored-XSS posture as site-config URLs; the web render layer guards again).
+fn http_url_field(v: &serde_json::Value, key: &str) -> Option<String> {
+    str_field(v, key).filter(|s| {
+        let lower = s.trim().to_ascii_lowercase();
+        lower.starts_with("https://") || lower.starts_with("http://")
+    })
 }
 
 fn map_product(v: &serde_json::Value) -> Option<ProviderProduct> {
@@ -210,7 +245,7 @@ fn map_product(v: &serde_json::Value) -> Option<ProviderProduct> {
         slug: str_field(v, "slug"),
         name,
         description: str_field(v, "description"),
-        image_url: str_field(v, "image_url"),
+        image_url: http_url_field(v, "image_url"),
         price_minor,
         price_final_minor,
         currency: str_field(v, "currency").unwrap_or_else(|| "USD".into()),
@@ -232,7 +267,7 @@ fn map_category(v: &serde_json::Value) -> Option<ProviderCategory> {
         slug: str_field(v, "slug"),
         name: str_field(v, "name")?,
         description: str_field(v, "description"),
-        image_url: str_field(v, "image_url"),
+        image_url: http_url_field(v, "image_url"),
         sort_order: i64_field(v, "order")
             .or_else(|| i64_field(v, "sort_order"))
             .unwrap_or(0) as i32,
@@ -246,7 +281,7 @@ impl StoreProvider for PayNowClient {
     /// Metadata (name/currency/live) is enriched from the storefront `GET /store`.
     async fn probe(&mut self) -> Result<StoreInfo, ProviderError> {
         let stores_raw = self.get("/stores", true, false, PROBE_TIMEOUT).await?;
-        let stores = as_array_payload(&stores_raw);
+        let stores = require_array(&stores_raw, "stores")?;
 
         let matched = match self.store_id.as_deref() {
             Some(want) => stores
@@ -300,11 +335,11 @@ impl StoreProvider for PayNowClient {
         let tags = self.get_retried("/store/tags", true).await?;
         let products = self.get_retried("/store/products", true).await?;
         Ok(CatalogSnapshot {
-            categories: as_array_payload(&tags)
+            categories: require_array(&tags, "tags")?
                 .iter()
                 .filter_map(map_category)
                 .collect(),
-            products: as_array_payload(&products)
+            products: require_array(&products, "products")?
                 .iter()
                 .filter_map(map_product)
                 .collect(),
@@ -318,12 +353,22 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn array_payload_accepts_bare_and_wrapped() {
-        assert_eq!(as_array_payload(&json!([1, 2])).len(), 2);
-        assert_eq!(as_array_payload(&json!({"data": [1]})).len(), 1);
-        assert_eq!(as_array_payload(&json!({"stores": [1, 2, 3]})).len(), 3);
-        assert!(as_array_payload(&json!({"a": [1], "b": [2]})).is_empty());
-        assert!(as_array_payload(&json!("nope")).is_empty());
+    fn array_payload_accepts_bare_and_wrapped_and_rejects_ambiguity() {
+        assert_eq!(as_array_payload(&json!([1, 2])).unwrap().len(), 2);
+        assert_eq!(as_array_payload(&json!({"data": [1]})).unwrap().len(), 1);
+        assert_eq!(
+            as_array_payload(&json!({"stores": [1, 2, 3]}))
+                .unwrap()
+                .len(),
+            3
+        );
+        // Empty lists are valid (a store with no products), but unrecognized shapes
+        // must be None: treating them as empty would wipe catalogs via the sweep.
+        assert_eq!(as_array_payload(&json!([])).unwrap().len(), 0);
+        assert!(as_array_payload(&json!({"a": [1], "b": [2]})).is_none());
+        assert!(as_array_payload(&json!({"data": {"items": []}})).is_none());
+        assert!(as_array_payload(&json!("nope")).is_none());
+        assert!(require_array(&json!({"weird": 1}), "products").is_err());
     }
 
     #[test]
@@ -355,6 +400,22 @@ mod tests {
         assert_eq!(q.external_id, "42");
         assert_eq!(q.kind, ProductKind::Single);
         assert!(q.available);
+    }
+
+    #[test]
+    fn product_mapping_drops_unsafe_image_urls() {
+        let p = map_product(&json!({
+            "id": "1", "name": "Kit", "price": 1,
+            "image_url": "javascript:alert(1)"
+        }))
+        .unwrap();
+        assert!(p.image_url.is_none());
+        let q = map_product(&json!({
+            "id": "1", "name": "Kit", "price": 1,
+            "image_url": "https://cdn.paynow.gg/x.png"
+        }))
+        .unwrap();
+        assert!(q.image_url.is_some());
     }
 
     #[test]

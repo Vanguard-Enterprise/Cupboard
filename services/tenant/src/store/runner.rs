@@ -188,7 +188,7 @@ async fn sync_catalog(
         }
         Err(ProviderError::Auth(e)) => {
             tracing::warn!(connection = %conn.id, error = %e, "provider rejected credentials");
-            let _ = store::mark_error_fenced(
+            let errored = store::mark_error_fenced(
                 pool,
                 conn.id,
                 claimer,
@@ -196,6 +196,11 @@ async fn sync_catalog(
                 "the provider rejected the API key; reconnect the store with a valid key",
             )
             .await;
+            // status='error' hides the public catalog; drop the cached copy eagerly
+            // like the disconnect handler does.
+            if matches!(errored, Ok(true)) {
+                cache.invalidate(&[CacheKey::Catalog(tenant_id)]).await;
+            }
         }
         Err(ProviderError::Transient(e)) => {
             tracing::warn!(connection = %conn.id, error = %e, "catalog sync transient failure");

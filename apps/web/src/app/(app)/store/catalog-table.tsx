@@ -43,7 +43,7 @@ export function CatalogTable({ products }: { products: StoreProduct[] }) {
                 </td>
                 <td className="px-3 py-2 text-neutral-400">{kindLabel(p)}</td>
                 <td className="px-3 py-2">
-                  {p.price_final_minor < p.price_minor ? (
+                  {p.price_final_minor != null && p.price_final_minor < p.price_minor ? (
                     <>
                       <span className="text-neutral-200">
                         {formatPrice(p.price_final_minor, p.currency)}

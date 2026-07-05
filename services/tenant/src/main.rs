@@ -72,7 +72,8 @@ async fn main() -> anyhow::Result<()> {
         app_pool,
         keys: Arc::new(keys),
         cache,
-        miss_budget: Arc::new(Default::default()),
+        site_miss_budget: Arc::new(Default::default()),
+        catalog_miss_budget: Arc::new(Default::default()),
         config: Arc::new(config.clone()),
     };
 

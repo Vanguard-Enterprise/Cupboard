@@ -18,7 +18,9 @@ pub struct AppState {
     pub keys: Arc<Keys>,
     /// Best-effort Redis cache for public site resolution (misses fall back to Postgres).
     pub cache: SiteCache,
-    /// Per-pod budget for resolve cache-misses reaching Postgres (flood damping).
-    pub miss_budget: Arc<MissBudget>,
+    /// Per-pod budgets for public cache-misses reaching Postgres (flood damping),
+    /// one per query class so a flood on one endpoint cannot starve the other.
+    pub site_miss_budget: Arc<MissBudget>,
+    pub catalog_miss_budget: Arc<MissBudget>,
     pub config: Arc<Config>,
 }

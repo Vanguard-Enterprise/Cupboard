@@ -80,7 +80,8 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         app_pool: app,
         keys: Arc::new(Keys::verifier_from_ed_pem(TEST_PUBLIC_PEM).unwrap()),
         cache: SiteCache::disabled(),
-        miss_budget: Arc::new(Default::default()),
+        site_miss_budget: Arc::new(Default::default()),
+        catalog_miss_budget: Arc::new(Default::default()),
         config: Arc::new(config),
     }
 }

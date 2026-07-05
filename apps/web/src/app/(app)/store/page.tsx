@@ -59,7 +59,7 @@ export default async function StorePage() {
             >
               {connection.status}
             </span>
-            {!connection.store_live && (
+            {connection.store_live === false && (
               <span className="rounded bg-amber-900 px-2 py-0.5 text-xs text-amber-300">
                 Test mode
               </span>
