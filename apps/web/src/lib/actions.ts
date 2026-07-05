@@ -533,6 +533,58 @@ export async function updateSiteAction(
   return { ok: true };
 }
 
+export type StoreConnectFormState = { error?: string; ok?: boolean };
+
+/** Connect the tenant's store to a payment provider (PayNow only for now). The backend
+ * probes the API key before storing it; the key is write-only and never read back. */
+export async function connectStoreAction(
+  _prev: StoreConnectFormState,
+  form: FormData,
+): Promise<StoreConnectFormState> {
+  const provider = form.get("provider");
+  if (provider !== "paynow") return { error: "unsupported provider" };
+  const apiKey = form.get("api_key");
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
+    return { error: "API key is required" };
+  }
+  const body: Record<string, unknown> = { provider, api_key: apiKey };
+  const storeId = trimmed(form, "store_id");
+  if (storeId) body.store_id = storeId;
+
+  const res = await apiFetch("/store/connection", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
+export type StoreFormState = { error?: string; ok?: boolean };
+
+/** Disconnect the tenant's store connection. */
+export async function disconnectStoreAction(
+  _prev: StoreFormState,
+  _form: FormData,
+): Promise<StoreFormState> {
+  const res = await apiFetch("/store/connection", { method: "DELETE" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
+/** Trigger an immediate catalog sync for the tenant's store connection. */
+export async function syncStoreAction(
+  _prev: StoreFormState,
+  _form: FormData,
+): Promise<StoreFormState> {
+  const res = await apiFetch("/store/sync", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

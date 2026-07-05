@@ -26,6 +26,17 @@ pub struct Config {
     /// The base domain under which every tenant site gets its default hostname
     /// (`{slug}.{sites_suffix}`). Staging: `sites.vngenterprise.com`.
     pub sites_suffix: String,
+
+    /// 32-byte envelope master key (base64, from Vault) wrapping per-connection store
+    /// provider credentials. `None` disables the commerce integration entirely (no
+    /// runner; connect endpoints 503) so the service ships before the Vault key exists.
+    pub tenant_master_key: Option<[u8; 32]>,
+
+    /// This replica's name, used as the store-runner claimer id (unique per replica).
+    pub consumer_name: String,
+
+    /// PayNow API base, injectable so tests run against the in-process stub.
+    pub paynow_api_base: String,
 }
 
 impl Config {
@@ -63,6 +74,26 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim_matches('.').to_ascii_lowercase())
                 .unwrap_or_else(|| "sites.localhost".into()),
+            tenant_master_key: match env::var("TENANT_MASTER_KEY") {
+                Ok(b64) if !b64.is_empty() => Some(cupboard_crypto::decode_master_key(
+                    &b64,
+                    "TENANT_MASTER_KEY",
+                )?),
+                _ => {
+                    tracing::warn!(
+                        "TENANT_MASTER_KEY unset; store provider integration disabled \
+                         (no runner, connect endpoints return 503)"
+                    );
+                    None
+                }
+            },
+            consumer_name: env::var("CONSUMER_NAME")
+                .or_else(|_| env::var("HOSTNAME"))
+                .unwrap_or_else(|_| "tenant-1".into()),
+            paynow_api_base: env::var("PAYNOW_API_BASE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| crate::providers::paynow::DEFAULT_BASE.into()),
         })
     }
 }

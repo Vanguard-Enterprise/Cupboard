@@ -76,6 +76,16 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
     };
 
+    // Store runner subsystem: only when the commerce master key is configured
+    // (fail-safe like identity's BM supervisor).
+    if config.tenant_master_key.is_some() {
+        tokio::spawn(cupboard_tenant::store::supervisor::run(
+            state.owner_pool.clone(),
+            state.cache.clone(),
+            Arc::new(config.clone()),
+        ));
+    }
+
     let app = http::router(state);
 
     let addr: SocketAddr = config.bind_addr.parse()?;

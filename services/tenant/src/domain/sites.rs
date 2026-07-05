@@ -138,6 +138,13 @@ pub fn validate_config(config: &serde_json::Value) -> Result<(), AppError> {
     }
 
     check_string(obj.get("name"), "name", 200)?;
+    if let Some(v) = present(obj.get("store_enabled")) {
+        if !v.is_boolean() {
+            return Err(AppError::BadRequest(
+                "config.store_enabled must be a boolean".into(),
+            ));
+        }
+    }
     check_string(obj.get("about"), "about", 8192)?;
     check_http_url(obj.get("logo_url"), "logo_url")?;
 

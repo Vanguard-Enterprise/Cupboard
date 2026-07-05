@@ -2,6 +2,7 @@
 
 pub mod public;
 mod sites;
+mod store;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -29,9 +30,18 @@ pub fn router(state: AppState) -> Router {
                 .post(sites::create)
                 .patch(sites::update),
         )
+        // Operator store management (gateway `/store/*` route; `store.manage`).
+        .route("/store", get(store::get_store))
+        .route(
+            "/store/connection",
+            axum::routing::post(store::connect).delete(store::disconnect),
+        )
+        .route("/store/sync", axum::routing::post(store::sync_now))
+        .route("/store/products", get(store::list_products))
         // Public, unauthenticated reads for the storefront SSR path (via the gateway's
         // `/public/*` route; cluster-internal callers only, never internet-exposed).
         .route("/public/sites/resolve", get(public::resolve))
+        .route("/public/store/catalog", get(public::catalog))
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))

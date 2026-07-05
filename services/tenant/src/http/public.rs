@@ -7,8 +7,8 @@
 //! per-pod token bucket. Under a flood, cache hits keep serving normally and excess
 //! misses become 404s instead of Postgres load.
 
-use crate::cache::CacheLookup;
-use crate::domain::sites;
+use crate::cache::{CacheKey, CacheLookup};
+use crate::domain::{sites, store};
 use crate::error::AppError;
 use crate::state::AppState;
 use axum::extract::{Query, State};
@@ -98,17 +98,17 @@ fn classify(host: &str, sites_suffix: &str) -> HostKind {
     }
 }
 
-pub async fn resolve(
-    State(state): State<AppState>,
-    Query(query): Query<ResolveQuery>,
-) -> Result<Json<sites::ResolvedSite>, AppError> {
+/// Cache-first host resolution shared by the resolve and catalog endpoints.
+async fn resolve_host(
+    state: &AppState,
+    raw_host: &str,
+) -> Result<Option<sites::ResolvedSite>, AppError> {
     let host =
-        normalize_host(&query.host).ok_or_else(|| AppError::BadRequest("invalid host".into()))?;
+        normalize_host(raw_host).ok_or_else(|| AppError::BadRequest("invalid host".into()))?;
+    let key = CacheKey::SiteHost(host.clone());
 
-    if let CacheLookup::Hit(cached) = state.cache.get(&host).await {
-        return cached
-            .map(Json)
-            .ok_or_else(|| AppError::NotFound("no site for this host".into()));
+    if let CacheLookup::Hit(cached) = state.cache.get::<sites::ResolvedSite>(&key).await {
+        return Ok(cached);
     }
 
     // Cache miss: the only path that can reach Postgres. Under a distinct-host flood
@@ -118,7 +118,7 @@ pub async fn resolve(
             host,
             "resolve miss budget exhausted; serving 404 without lookup"
         );
-        return Err(AppError::NotFound("no site for this host".into()));
+        return Ok(None);
     }
 
     let resolved = match classify(&host, &state.config.sites_suffix) {
@@ -130,10 +130,46 @@ pub async fn resolve(
         HostKind::Custom => None,
     };
 
-    state.cache.put(&host, &resolved).await;
-    resolved
+    state.cache.put(&key, &resolved).await;
+    Ok(resolved)
+}
+
+pub async fn resolve(
+    State(state): State<AppState>,
+    Query(query): Query<ResolveQuery>,
+) -> Result<Json<sites::ResolvedSite>, AppError> {
+    resolve_host(&state, &query.host)
+        .await?
         .map(Json)
         .ok_or_else(|| AppError::NotFound("no site for this host".into()))
+}
+
+/// GET /public/store/catalog?host=: the storefront's store pages. 404 when the host has
+/// no site, the site disabled its store pages, or the tenant has no connected store.
+pub async fn catalog(
+    State(state): State<AppState>,
+    Query(query): Query<ResolveQuery>,
+) -> Result<Json<store::PublicCatalog>, AppError> {
+    let not_found = || AppError::NotFound("no store for this host".into());
+    let site = resolve_host(&state, &query.host)
+        .await?
+        .ok_or_else(not_found)?;
+    if site.config.get("store_enabled").and_then(|v| v.as_bool()) == Some(false) {
+        return Err(not_found());
+    }
+
+    let key = CacheKey::Catalog(site.tenant_id);
+    if let CacheLookup::Hit(cached) = state.cache.get::<store::PublicCatalog>(&key).await {
+        return cached.map(Json).ok_or_else(not_found);
+    }
+    if !state.miss_budget.try_take() {
+        tracing::warn!(tenant = %site.tenant_id, "catalog miss budget exhausted; serving 404");
+        return Err(not_found());
+    }
+
+    let catalog = store::public_catalog(&state.owner_pool, site.tenant_id).await?;
+    state.cache.put(&key, &catalog).await;
+    catalog.map(Json).ok_or_else(not_found)
 }
 
 #[cfg(test)]

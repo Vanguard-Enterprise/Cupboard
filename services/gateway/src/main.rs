@@ -175,6 +175,21 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // Store/commerce management (tenant service). Tenant enforces `store.manage`.
+        .route(
+            "/store",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/store/{*path}",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // White-label site management (tenant service). Tenant enforces `sites.edit`.
         .route(
             "/sites",

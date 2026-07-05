@@ -75,7 +75,10 @@ pub async fn create(
 
     state
         .cache
-        .invalidate(&[sites::default_host(&site.slug, &state.config.sites_suffix)])
+        .invalidate(&[crate::cache::CacheKey::SiteHost(sites::default_host(
+            &site.slug,
+            &state.config.sites_suffix,
+        ))])
         .await;
     Ok((StatusCode::CREATED, Json(site_payload(&state, Some(site)))))
 }
@@ -119,13 +122,19 @@ pub async fn update(
     .await?
     .ok_or_else(|| AppError::NotFound("this organization has no site yet".into()))?;
 
-    let mut hosts = vec![sites::default_host(&site.slug, &state.config.sites_suffix)];
+    let mut keys = vec![crate::cache::CacheKey::SiteHost(sites::default_host(
+        &site.slug,
+        &state.config.sites_suffix,
+    ))];
     if let Some(prev) = previous {
         if prev.slug != site.slug {
-            hosts.push(sites::default_host(&prev.slug, &state.config.sites_suffix));
+            keys.push(crate::cache::CacheKey::SiteHost(sites::default_host(
+                &prev.slug,
+                &state.config.sites_suffix,
+            )));
         }
     }
-    state.cache.invalidate(&hosts).await;
+    state.cache.invalidate(&keys).await;
     Ok(Json(site_payload(&state, Some(site))))
 }
 
