@@ -41,6 +41,7 @@ pub(crate) struct AppState {
     pub identity_service_url: String,
     pub collector_service_url: String,
     pub metrics_service_url: String,
+    pub tenant_service_url: String,
 }
 
 #[tokio::main]
@@ -75,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         identity_service_url: config.identity_service_url.clone(),
         collector_service_url: config.collector_service_url.clone(),
         metrics_service_url: config.metrics_service_url.clone(),
+        tenant_service_url: config.tenant_service_url.clone(),
     };
 
     let app = Router::new()
@@ -173,6 +175,25 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // White-label site management (tenant service). Tenant enforces `sites.edit`.
+        .route(
+            "/sites",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/sites/{*path}",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        // Public storefront reads (tenant service): site resolution + (later) catalog.
+        // Deliberately NOT behind the JWT gate — callers are the web app's SSR path for
+        // public tenant sites; the tenant service rate/shape-guards these itself.
+        .route("/public/{*path}", any(proxy::proxy_tenant))
         // A JWT-validated route proving front-door auth; real /api routes follow.
         .route(
             "/api/whoami",

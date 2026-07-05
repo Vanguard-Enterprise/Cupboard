@@ -61,6 +61,18 @@ pub async fn proxy_metrics(
     proxy_to(&base, state, req).await
 }
 
+/// Reverse-proxy to the tenant service. `/sites/*` + `/store/*` sit behind the JWT gate
+/// (tenant re-validates and enforces `sites.edit`/`store.manage`); `/public/*` is an
+/// unauthenticated passthrough for storefront SSR reads (the web BFF calls it
+/// cluster-internally; the gateway host is not internet-exposed).
+pub async fn proxy_tenant(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, StatusCode> {
+    let base = state.tenant_service_url.clone();
+    proxy_to(&base, state, req).await
+}
+
 /// Shared reverse-proxy: forward the request to `base_url` + original path/query.
 async fn proxy_to(
     base_url: &str,

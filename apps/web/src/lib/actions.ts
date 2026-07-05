@@ -418,6 +418,97 @@ export async function updateBmImportScopeAction(
   return { ok: true };
 }
 
+export type SiteFormState = { error?: string; ok?: boolean };
+
+function trimmed(form: FormData, name: string): string {
+  const v = form.get(name);
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** Build the site config JSON from the editor's form fields. Empty strings are
+ * omitted rather than sent; links missing a label or url are dropped. The config is
+ * always sent in full since the API replaces it wholesale. */
+function buildSiteConfig(form: FormData): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+
+  const name = trimmed(form, "name");
+  if (name) config.name = name;
+  const logoUrl = trimmed(form, "logo_url");
+  if (logoUrl) config.logo_url = logoUrl;
+
+  const colors: Record<string, string> = {};
+  const primary = trimmed(form, "color_primary");
+  if (primary) colors.primary = primary;
+  const background = trimmed(form, "color_background");
+  if (background) colors.background = background;
+  const foreground = trimmed(form, "color_foreground");
+  if (foreground) colors.foreground = foreground;
+  if (Object.keys(colors).length > 0) config.colors = colors;
+
+  const hero: Record<string, string> = {};
+  const heroTitle = trimmed(form, "hero_title");
+  if (heroTitle) hero.title = heroTitle;
+  const heroSubtitle = trimmed(form, "hero_subtitle");
+  if (heroSubtitle) hero.subtitle = heroSubtitle;
+  if (Object.keys(hero).length > 0) config.hero = hero;
+
+  const about = trimmed(form, "about");
+  if (about) config.about = about;
+
+  const labels = form.getAll("link_label");
+  const urls = form.getAll("link_url");
+  const links = labels
+    .map((label, i) => ({ label: String(label).trim(), url: String(urls[i] ?? "").trim() }))
+    .filter((l) => l.label && l.url);
+  if (links.length > 0) config.links = links;
+
+  return config;
+}
+
+/** Create the tenant's white-label site (one per org). */
+export async function createSiteAction(
+  _prev: SiteFormState,
+  form: FormData,
+): Promise<SiteFormState> {
+  const slug = trimmed(form, "slug");
+  if (!slug) return { error: "slug is required" };
+  const themeId = trimmed(form, "theme_id") || "ember";
+
+  const res = await apiFetch("/sites", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug, theme_id: themeId, config: buildSiteConfig(form) }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+/** Update the tenant's site: slug, theme, publish state, and the full config. */
+export async function updateSiteAction(
+  _prev: SiteFormState,
+  form: FormData,
+): Promise<SiteFormState> {
+  const slug = trimmed(form, "slug");
+  if (!slug) return { error: "slug is required" };
+  const themeId = trimmed(form, "theme_id") || "ember";
+  const body = {
+    slug,
+    theme_id: themeId,
+    config: buildSiteConfig(form),
+    published: form.get("published") === "on",
+  };
+
+  const res = await apiFetch("/sites", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

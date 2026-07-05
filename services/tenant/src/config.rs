@@ -1,0 +1,68 @@
+//! Runtime configuration, read from the environment (Vault → ExternalSecret → env
+//! in-cluster; a local `.env`/shell for development).
+
+use std::env;
+
+#[derive(Clone)]
+pub struct Config {
+    pub bind_addr: String,
+    /// Owner-role connection — migrations + cross-tenant public reads (RLS-exempt).
+    pub database_url: String,
+    /// `cupboard_app` (non-owner) connection — request-scoped tenant CRUD (RLS applies).
+    /// Falls back to the owner URL in local dev (logged), where RLS then does not isolate.
+    pub database_url_app: String,
+    pub db_max_connections: u32,
+    pub environment: String,
+    pub otel_endpoint: Option<String>,
+
+    /// Ed25519 public key (PEM) for verifying operator access tokens minted by auth.
+    /// Required — every non-public, non-health route is operator-authenticated.
+    pub jwt_public_key_pem: String,
+
+    /// Redis, for the site-resolve cache on the public SSR path. Optional: when unset the
+    /// cache is disabled and every resolve hits Postgres (fine in dev, not in staging).
+    pub redis_url: Option<String>,
+
+    /// The base domain under which every tenant site gets its default hostname
+    /// (`{slug}.{sites_suffix}`). Staging: `sites.vngenterprise.com`.
+    pub sites_suffix: String,
+}
+
+impl Config {
+    pub fn from_env() -> anyhow::Result<Self> {
+        let database_url =
+            env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL is required"))?;
+        let database_url_app = match env::var("DATABASE_URL_APP") {
+            Ok(url) => url,
+            Err(_) => {
+                tracing::warn!(
+                    "DATABASE_URL_APP unset — falling back to the owner role; RLS will NOT \
+                     isolate tenants on the app pool. Set the cupboard_app URL outside dev."
+                );
+                database_url.clone()
+            }
+        };
+
+        let jwt_public_key_pem = env::var("JWT_PUBLIC_KEY_PEM")
+            .map_err(|_| anyhow::anyhow!("JWT_PUBLIC_KEY_PEM is required"))?;
+
+        Ok(Self {
+            bind_addr: env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".into()),
+            database_url,
+            database_url_app,
+            db_max_connections: env::var("DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+            environment: env::var("ENVIRONMENT").unwrap_or_else(|_| "development".into()),
+            otel_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
+            jwt_public_key_pem,
+            redis_url: env::var("REDIS_URL").ok().filter(|s| !s.is_empty()),
+            sites_suffix: env::var("SITES_SUFFIX")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_matches('.').to_ascii_lowercase())
+                .unwrap_or_else(|| "sites.localhost".into()),
+        })
+    }
+}

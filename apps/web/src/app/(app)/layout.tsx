@@ -63,6 +63,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Integrations
             </Link>
           )}
+          {can(perms, Permission.SitesEdit) && (
+            <Link href="/site" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Site
+            </Link>
+          )}
           {can(perms, Permission.StaffManage) && (
             <Link href="/staff" className="rounded px-2 py-1 hover:bg-neutral-900">
               Staff
