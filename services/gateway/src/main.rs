@@ -209,6 +209,10 @@ async fn main() -> anyhow::Result<()> {
         // Deliberately NOT behind the JWT gate: callers are the web app's SSR path for
         // public tenant sites; the tenant service rate/shape-guards these itself.
         .route("/public/{*path}", any(proxy::proxy_tenant))
+        // Player storefront actions (checkout + entitlements) -> tenant. NOT behind the
+        // operator JWT gate: the tenant service verifies the PLAYER token itself with the
+        // disjoint player keypair (an operator token is rejected there).
+        .route("/player/{*path}", any(proxy::proxy_tenant))
         // A JWT-validated route proving front-door auth; real /api routes follow.
         .route(
             "/api/whoami",

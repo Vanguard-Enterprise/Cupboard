@@ -1,9 +1,11 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
 mod internal;
+mod player;
 pub mod public;
 mod sites;
 mod store;
+mod webhooks;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -39,6 +41,17 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/store/sync", axum::routing::post(store::sync_now))
         .route("/store/products", get(store::list_products))
+        .route("/store/entitlements", get(store::list_entitlements))
+        // Player-facing storefront actions (gateway `/player/*` passthrough; the tenant
+        // service verifies the PLAYER token itself with the disjoint player keypair).
+        .route("/player/checkout", axum::routing::post(player::checkout))
+        .route("/player/entitlements", get(player::entitlements))
+        // Provider webhook receiver (NOT via the gateway; public `cupboard-hooks` host,
+        // per-connection URL, raw-body HMAC).
+        .route(
+            "/webhooks/{provider}/{connection_id}",
+            axum::routing::post(webhooks::receive),
+        )
         // Public, unauthenticated reads for the storefront SSR path (via the gateway's
         // `/public/*` route; cluster-internal callers only, never internet-exposed).
         .route("/public/sites/resolve", get(public::resolve))

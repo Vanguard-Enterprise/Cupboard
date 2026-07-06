@@ -7,19 +7,26 @@
 //! and field extractors expect, and records every request so tests can assert auth and
 //! the storefront header.
 //!
+//! PR4 adds the management store-scoped surfaces the client's checkout, webhook, and
+//! reconcile paths call: `GET/POST /stores/{id}/customers[...]`, `POST /stores/{id}/checkouts`,
+//! `POST /stores/{id}/webhooks`, and `GET /stores/{id}/delivery/items`. Created customers and
+//! webhooks are recorded in state (`customers`, `webhooks`) for assertions, delivery items are
+//! a swappable fixture (`set_delivery_items`), and `sign_webhook` mints a validly-signed
+//! envelope so a test can drive the webhook receiver end to end.
+//!
 //! Two knobs beyond static data: a FIFO of one-shot [`Fault`]s (each consumed by the next
 //! request, ahead of normal handling and regardless of path) for exercising the client's
 //! 401/403/429/5xx branches, and the request log. Fixtures are swappable at runtime
-//! (`set_products`, `set_tags`, `set_stores`, `set_store_meta`) so a test can mutate the
-//! catalog without restarting the stub.
+//! (`set_products`, `set_tags`, `set_stores`, `set_store_meta`, `set_delivery_items`,
+//! `set_webhook_secret`) so a test can mutate the catalog without restarting the stub.
 
-use axum::extract::{OriginalUri, State};
+use axum::extract::{OriginalUri, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 
@@ -53,6 +60,18 @@ struct StubState {
     products: Vec<Value>,
     /// Storefront tags (`GET /store/tags`), served as a bare array.
     tags: Vec<Value>,
+    /// Customers created via `POST /stores/{id}/customers`, each `{"id","steam_id"}`.
+    customers: Vec<Value>,
+    /// Webhooks registered via `POST /stores/{id}/webhooks`, for assertions.
+    webhooks: Vec<Value>,
+    /// Reconcile fixture served as a bare array by `GET /stores/{id}/delivery/items`.
+    delivery_items: Vec<Value>,
+    /// Signing secret returned when a webhook is registered.
+    webhook_secret: String,
+    /// Hosted-checkout URL returned by `POST /stores/{id}/checkouts`.
+    checkout_url: String,
+    /// Monotonic counter minting ids for created customers/checkouts/webhooks.
+    next_id: u64,
     /// One-shot faults, popped by the next request regardless of path.
     faults: VecDeque<Fault>,
     /// Every request seen so far, oldest first.
@@ -82,6 +101,12 @@ impl PayNowStub {
             store_meta: default_store_meta(),
             products: default_products(),
             tags: default_tags(),
+            customers: Vec::new(),
+            webhooks: Vec::new(),
+            delivery_items: Vec::new(),
+            webhook_secret: "whsec_test_secret".to_string(),
+            checkout_url: "https://pay.paynow.gg/checkout/test".to_string(),
+            next_id: 900_000_000_000_000_000,
             faults: VecDeque::new(),
             recorded: Vec::new(),
         }));
@@ -90,6 +115,14 @@ impl PayNowStub {
             .route("/store", get(get_store))
             .route("/store/products", get(get_products))
             .route("/store/tags", get(get_tags))
+            .route(
+                "/stores/{store_id}/customers/lookup",
+                get(get_customer_lookup),
+            )
+            .route("/stores/{store_id}/customers", post(post_customer))
+            .route("/stores/{store_id}/checkouts", post(post_checkout))
+            .route("/stores/{store_id}/webhooks", post(post_webhook))
+            .route("/stores/{store_id}/delivery/items", get(get_delivery_items))
             .with_state(state.clone());
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("stub serve loop");
@@ -125,6 +158,44 @@ impl PayNowStub {
     /// endpoints, so update this in step with the `x-paynow-store-id` a test sends.
     pub fn set_store_meta(&self, store_meta: Value) {
         self.lock().store_meta = store_meta;
+    }
+
+    /// Replace the reconcile fixture (`GET /stores/{id}/delivery/items`), served as a bare
+    /// array. Starts empty; a test sets the delivery-item objects it wants to reconcile.
+    pub fn set_delivery_items(&self, items: Vec<Value>) {
+        self.lock().delivery_items = items;
+    }
+
+    /// Replace the signing secret handed back on webhook registration (and used by
+    /// `sign_webhook`). Defaults to `whsec_test_secret`.
+    pub fn set_webhook_secret(&self, secret: &str) {
+        self.lock().webhook_secret = secret.to_string();
+    }
+
+    /// Webhooks registered so far (via `POST /stores/{id}/webhooks`), for assertions.
+    pub fn webhooks(&self) -> Vec<Value> {
+        self.lock().webhooks.clone()
+    }
+
+    /// Customers created so far (via `POST /stores/{id}/customers`), for assertions.
+    pub fn customers(&self) -> Vec<Value> {
+        self.lock().customers.clone()
+    }
+
+    /// The current webhook signing secret.
+    pub fn webhook_secret(&self) -> String {
+        self.lock().webhook_secret.clone()
+    }
+
+    /// Sign a webhook body exactly as PayNow would, so a test can POST a validly-signed
+    /// envelope to the receiver: `base64(HMAC-SHA256(webhook_secret, "{timestamp_ms}.{raw_body}"))`.
+    pub fn sign_webhook(&self, timestamp_ms: &str, raw_body: &str) -> String {
+        let secret = self.webhook_secret();
+        let mut signed = Vec::with_capacity(timestamp_ms.len() + 1 + raw_body.len());
+        signed.extend_from_slice(timestamp_ms.as_bytes());
+        signed.push(b'.');
+        signed.extend_from_slice(raw_body.as_bytes());
+        hmac_sha256_b64(secret.as_bytes(), &signed)
     }
 
     /// Queue a fault for the next request to consume (status + verbatim body).
@@ -281,6 +352,178 @@ fn require_store(state: &StubState, headers: &HeaderMap) -> Option<Response> {
         )
             .into_response(),
     )
+}
+
+/// Management gate for the store-scoped endpoints: `Authorization` must be
+/// `apikey {expected}`. Returns a 401 JSON error like `GET /stores`, `None` when valid.
+fn require_mgmt_auth(state: &StubState, headers: &HeaderMap) -> Option<Response> {
+    let expected = format!("apikey {}", state.expected_api_key);
+    let provided = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    if provided == Some(expected.as_str()) {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "status": 401,
+                "code": "Unauthorized",
+                "message": "invalid api key"
+            })),
+        )
+            .into_response(),
+    )
+}
+
+/// Mint the next flake-style id (as a string) for a created customer/checkout/webhook.
+fn mint_id(state: &mut StubState) -> String {
+    let id = state.next_id;
+    state.next_id += 1;
+    id.to_string()
+}
+
+/// `GET /stores/{id}/customers/lookup?steam_id=`: return the matching customer (200) or 404.
+async fn get_customer_lookup(
+    State(state): State<Arc<Mutex<StubState>>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    Query(params): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(short) = record_and_fault(&state, &method, uri.path(), &headers) {
+        return short;
+    }
+    let guard = state.lock().expect("stub state lock");
+    if let Some(bad) = require_mgmt_auth(&guard, &headers) {
+        return bad;
+    }
+    let steam_id = params
+        .get("steam_id")
+        .map(String::as_str)
+        .unwrap_or_default();
+    match guard
+        .customers
+        .iter()
+        .find(|c| c.get("steam_id").and_then(Value::as_str) == Some(steam_id))
+    {
+        Some(customer) => Json(customer.clone()).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "status": 404,
+                "code": "NotFound",
+                "message": "customer not found"
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// `POST /stores/{id}/customers`: create `{"id","steam_id"}`, record it, return it 201.
+async fn post_customer(
+    State(state): State<Arc<Mutex<StubState>>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(short) = record_and_fault(&state, &method, uri.path(), &headers) {
+        return short;
+    }
+    let mut guard = state.lock().expect("stub state lock");
+    if let Some(bad) = require_mgmt_auth(&guard, &headers) {
+        return bad;
+    }
+    let steam_id = body
+        .get("steam_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let id = mint_id(&mut guard);
+    let customer = json!({ "id": id, "steam_id": steam_id });
+    guard.customers.push(customer.clone());
+    (StatusCode::CREATED, Json(customer)).into_response()
+}
+
+/// `POST /stores/{id}/checkouts`: return a hosted-checkout session (id + token + url) 201.
+async fn post_checkout(
+    State(state): State<Arc<Mutex<StubState>>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(_body): Json<Value>,
+) -> Response {
+    if let Some(short) = record_and_fault(&state, &method, uri.path(), &headers) {
+        return short;
+    }
+    let mut guard = state.lock().expect("stub state lock");
+    if let Some(bad) = require_mgmt_auth(&guard, &headers) {
+        return bad;
+    }
+    let url = guard.checkout_url.clone();
+    let id = mint_id(&mut guard);
+    (
+        StatusCode::CREATED,
+        Json(json!({ "id": id, "token": format!("ct_{id}"), "url": url })),
+    )
+        .into_response()
+}
+
+/// `POST /stores/{id}/webhooks`: create `{"id","secret","url","subscribed_to"}`, record it, 201.
+async fn post_webhook(
+    State(state): State<Arc<Mutex<StubState>>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Some(short) = record_and_fault(&state, &method, uri.path(), &headers) {
+        return short;
+    }
+    let mut guard = state.lock().expect("stub state lock");
+    if let Some(bad) = require_mgmt_auth(&guard, &headers) {
+        return bad;
+    }
+    let secret = guard.webhook_secret.clone();
+    let id = mint_id(&mut guard);
+    let webhook = json!({
+        "id": id,
+        "secret": secret,
+        "url": body.get("url").cloned().unwrap_or(Value::Null),
+        "subscribed_to": body.get("subscribed_to").cloned().unwrap_or(Value::Null),
+    });
+    guard.webhooks.push(webhook.clone());
+    (StatusCode::CREATED, Json(webhook)).into_response()
+}
+
+/// `GET /stores/{id}/delivery/items`: serve the reconcile fixture as a bare array. One page:
+/// the `?after=` cursor is accepted but ignored (no `cursor` field, so the client stops).
+async fn get_delivery_items(
+    State(state): State<Arc<Mutex<StubState>>>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(short) = record_and_fault(&state, &method, uri.path(), &headers) {
+        return short;
+    }
+    let guard = state.lock().expect("stub state lock");
+    if let Some(bad) = require_mgmt_auth(&guard, &headers) {
+        return bad;
+    }
+    Json(guard.delivery_items.clone()).into_response()
+}
+
+/// `base64(HMAC-SHA256(key, data))`, mirroring `paynow::hmac_sha256_b64` so `sign_webhook`
+/// produces byte-identical signatures to what the receiver verifies.
+fn hmac_sha256_b64(key: &[u8], data: &[u8]) -> String {
+    use base64::Engine as _;
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key).expect("hmac accepts any key length");
+    mac.update(data);
+    base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
 }
 
 /// Default management store list: a single store the key can reach (so `probe` adopts it

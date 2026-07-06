@@ -19,6 +19,8 @@ use std::time::Duration;
 /// How often the runner re-reads its row and checks for due work.
 const LOOP_TICK: Duration = Duration::from_secs(5);
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
+/// Entitlement reconcile cadence (the authoritative backstop for webhook gaps).
+const RECONCILE_EVERY: Duration = Duration::from_secs(15 * 60);
 
 pub async fn run(
     pool: sqlx::PgPool,
@@ -26,6 +28,7 @@ pub async fn run(
     conn: StoreConnection,
     master_key: [u8; 32],
     paynow_base: String,
+    webhook_base: Option<String>,
     claimer: String,
 ) {
     let connection_id = conn.id;
@@ -116,6 +119,10 @@ pub async fn run(
         })
     };
 
+    // Reconcile immediately on start, then on cadence (a fresh claim after a gap catches
+    // up right away); tokio Instant so it advances with the loop.
+    let mut next_reconcile = tokio::time::Instant::now();
+
     let mut ticker = tokio::time::interval(LOOP_TICK);
     loop {
         ticker.tick().await;
@@ -143,17 +150,128 @@ pub async fn run(
             break;
         }
 
+        // Register the webhook once (best-effort; the reconcile poll below keeps the
+        // ledger correct even if webhooks never arrive).
+        if current.webhook_external_id.is_none() {
+            if let Some(base) = &webhook_base {
+                register_webhook(
+                    &pool, &current, &client, &claimer, &key_enc, base, master_key,
+                )
+                .await;
+            }
+        }
+
         if current.next_catalog_sync_at <= chrono::Utc::now() {
             sync_catalog(
                 &pool, &cache, &current, &client, &claimer, &key_enc, tenant_id,
             )
             .await;
         }
+
+        if tokio::time::Instant::now() >= next_reconcile {
+            reconcile_entitlements(&pool, &current, &client, tenant_id).await;
+            next_reconcile = tokio::time::Instant::now() + RECONCILE_EVERY;
+        }
     }
 
     hb.abort();
     let _ = store::release_claim(&pool, connection_id, &claimer).await;
     tracing::info!(connection = %connection_id, "store runner stopped");
+}
+
+/// Register a per-connection webhook endpoint and store its signing secret
+/// (envelope-encrypted, fenced). Best-effort: a failure is logged and retried next tick.
+async fn register_webhook(
+    pool: &sqlx::PgPool,
+    conn: &StoreConnection,
+    client: &PayNowClient,
+    claimer: &str,
+    key_fence: &[u8],
+    webhook_base: &str,
+    master_key: [u8; 32],
+) {
+    let endpoint = format!(
+        "{}/webhooks/{}/{}",
+        webhook_base.trim_end_matches('/'),
+        conn.provider,
+        conn.id
+    );
+    match client.register_webhook(&endpoint).await {
+        Ok(Some(reg)) => {
+            let sealed = match cupboard_crypto::seal(&master_key, reg.signing_secret.as_bytes()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(connection = %conn.id, error = %e, "seal webhook secret failed");
+                    return;
+                }
+            };
+            match store::save_webhook_registration(
+                pool,
+                conn.id,
+                claimer,
+                key_fence,
+                &sealed.ciphertext,
+                &sealed.wrapped_dek,
+                &reg.external_id,
+            )
+            .await
+            {
+                Ok(true) => tracing::info!(connection = %conn.id, "webhook registered"),
+                Ok(false) => tracing::info!(connection = %conn.id, "webhook save fenced out"),
+                Err(e) => tracing::warn!(connection = %conn.id, error = ?e, "webhook save failed"),
+            }
+        }
+        Ok(None) => { /* provider does not support programmatic registration (Tebex) */ }
+        Err(e) => {
+            tracing::warn!(connection = %conn.id, error = ?e, "webhook registration failed");
+        }
+    }
+}
+
+/// Walk the provider's entitlement pages and upsert the ledger (source=reconcile). The
+/// authoritative backstop: whatever webhooks missed, this converges within the cadence.
+async fn reconcile_entitlements(
+    pool: &sqlx::PgPool,
+    conn: &StoreConnection,
+    client: &PayNowClient,
+    tenant_id: uuid::Uuid,
+) {
+    let mut cursor: Option<String> = None;
+    let mut total = 0u64;
+    // Bound the walk defensively so a provider that never terminates the cursor cannot
+    // spin forever.
+    for _ in 0..100 {
+        match client.reconcile(cursor.as_deref()).await {
+            Ok(page) => {
+                match crate::domain::entitlements::apply_reconcile_page(
+                    pool,
+                    tenant_id,
+                    conn.id,
+                    conn.provider.as_str(),
+                    &page.entitlements,
+                )
+                .await
+                {
+                    Ok(n) => total += n,
+                    Err(e) => {
+                        tracing::warn!(connection = %conn.id, error = ?e, "reconcile apply failed");
+                        return;
+                    }
+                }
+                match page.next_cursor {
+                    Some(c) => cursor = Some(c),
+                    None => break,
+                }
+            }
+            Err(e) => {
+                tracing::warn!(connection = %conn.id, error = ?e, "reconcile fetch failed");
+                return;
+            }
+        }
+    }
+    if total > 0 {
+        tracing::info!(connection = %conn.id, entitlements = total, "entitlements reconciled");
+    }
 }
 
 async fn sync_catalog(

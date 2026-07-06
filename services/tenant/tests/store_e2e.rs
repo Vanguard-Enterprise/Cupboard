@@ -75,11 +75,14 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         consumer_name: "test-tenant".into(),
         paynow_api_base: paynow_base,
         internal_api_token: None,
+        player_jwt_public_key_pem: None,
+        public_webhook_base: None,
     };
     AppState {
         owner_pool: owner,
         app_pool: app,
         keys: Arc::new(Keys::verifier_from_ed_pem(TEST_PUBLIC_PEM).unwrap()),
+        player_keys: None,
         cache: SiteCache::disabled(),
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
@@ -162,19 +165,25 @@ fn fixture_products(vip_price_final: i64) -> Vec<serde_json::Value> {
 /// prior test runs cannot crowd it out of the global `claim_ready` LIMIT batch. Sets the
 /// same lease columns a real claim would, satisfying the runner's write fence.
 async fn claim_own(owner: &PgPool, tenant: Uuid, claimer: &str) -> store::StoreConnection {
-    sqlx::query_as::<_, store::StoreConnection>(
-        "UPDATE store_connections SET claimed_by = $2, heartbeat_at = now() \
-         WHERE tenant_id = $1 \
-         RETURNING id, tenant_id, provider, status, api_key_enc, api_key_dek, \
-                   store_external_id, store_name, store_currency, store_live, settings, \
-                   last_error, next_catalog_sync_at, catalog_synced_at, claimed_by, \
-                   heartbeat_at, created_at, updated_at",
+    // Claim the row, then reload via the domain loader so the returned struct stays in
+    // sync with StoreConnection's columns (which grow across PRs).
+    sqlx::query(
+        "UPDATE store_connections SET claimed_by = $2, heartbeat_at = now() WHERE tenant_id = $1",
     )
     .bind(tenant)
     .bind(claimer)
-    .fetch_one(owner)
+    .execute(owner)
     .await
-    .expect("claim own connection")
+    .expect("claim own connection");
+    let id: Uuid = sqlx::query_scalar("SELECT id FROM store_connections WHERE tenant_id = $1")
+        .bind(tenant)
+        .fetch_one(owner)
+        .await
+        .expect("connection id");
+    store::load_fresh(owner, id)
+        .await
+        .expect("load")
+        .expect("connection present")
 }
 
 /// Fetch + apply one catalog sync the way the runner does (without timers).

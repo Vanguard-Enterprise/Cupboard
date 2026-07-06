@@ -86,6 +86,8 @@ async fn supervisor_claims_and_runner_syncs() {
         consumer_name: "sup-e2e".into(),
         paynow_api_base: stub.base_url(),
         internal_api_token: None,
+        player_jwt_public_key_pem: None,
+        public_webhook_base: None,
     };
     let supervisor = tokio::spawn(cupboard_tenant::store::supervisor::run(
         owner.clone(),

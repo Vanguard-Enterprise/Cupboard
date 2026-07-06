@@ -672,6 +672,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "cupboard-auth-core",
  "cupboard-bmapi",
@@ -681,6 +682,7 @@ dependencies = [
  "cupboard-telemetry",
  "cupboard-tenant",
  "hex",
+ "hmac",
  "http-body-util",
  "redis",
  "reqwest",

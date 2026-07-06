@@ -127,6 +127,106 @@ pub struct CatalogSnapshot {
     pub categories: Vec<ProviderCategory>,
 }
 
+/// Entitlement status as normalized across providers (the `entitlements.status` CHECK).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntitlementStatus {
+    Active,
+    Expired,
+    Revoked,
+    Refunded,
+    Chargeback,
+}
+
+impl EntitlementStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EntitlementStatus::Active => "active",
+            EntitlementStatus::Expired => "expired",
+            EntitlementStatus::Revoked => "revoked",
+            EntitlementStatus::Refunded => "refunded",
+            EntitlementStatus::Chargeback => "chargeback",
+        }
+    }
+}
+
+/// One entitlement's reported state, from either a webhook or a reconcile poll. Keyed by
+/// `external_ref` (the provider "delivery item" id) so both sources converge on one row.
+#[derive(Debug, Clone)]
+pub struct EntitlementRecord {
+    pub external_ref: String,
+    pub steam_id: Option<String>,
+    pub product_external_id: Option<String>,
+    pub product_name: Option<String>,
+    pub kind: ProductKind,
+    pub status: EntitlementStatus,
+    pub granted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Canonical content hash for an entitlement row (change detection on the hot path, like
+/// the catalog).
+pub fn entitlement_content_hash(e: &EntitlementRecord) -> String {
+    let canonical = serde_json::json!({
+        "external_ref": e.external_ref,
+        "steam_id": e.steam_id,
+        "product_external_id": e.product_external_id,
+        "product_name": e.product_name,
+        "kind": e.kind.as_str(),
+        "status": e.status.as_str(),
+        "granted_at": e.granted_at.map(|t| t.timestamp()),
+        "expires_at": e.expires_at.map(|t| t.timestamp()),
+    });
+    sha256_hex(canonical.to_string().as_bytes())
+}
+
+/// A verified, parsed webhook: its dedupe id, type, and any entitlement rows it reports.
+#[derive(Debug, Clone)]
+pub struct NormalizedWebhook {
+    pub event_id: String,
+    pub event_type: String,
+    pub entitlements: Vec<EntitlementRecord>,
+}
+
+/// Outcome of registering a webhook with the provider (PayNow returns a signing secret).
+#[derive(Debug, Clone)]
+pub struct WebhookRegistration {
+    pub external_id: String,
+    pub signing_secret: String,
+}
+
+/// What the checkout endpoint needs to start a purchase.
+#[derive(Debug, Clone)]
+pub struct CheckoutRequest {
+    pub steam_id: String,
+    pub product_external_id: String,
+    pub quantity: i32,
+    pub return_url: String,
+    pub cancel_url: String,
+}
+
+/// The step the storefront must take next after `begin_checkout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutStep {
+    /// Redirect the buyer straight to the provider's hosted checkout (PayNow).
+    Final,
+    /// Provider requires a buyer-auth roundtrip first (Tebex basket auth; PR6).
+    NeedsProviderAuth,
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckoutBegin {
+    pub redirect_url: String,
+    pub provider_ref: Option<String>,
+    pub step: CheckoutStep,
+}
+
+/// A page of reconciled entitlements plus the cursor for the next page (`None` = done).
+#[derive(Debug, Clone, Default)]
+pub struct ReconcilePage {
+    pub entitlements: Vec<EntitlementRecord>,
+    pub next_cursor: Option<String>,
+}
+
 /// The provider adapter. One instance per connection runner (which also makes each
 /// client's process-local rate limiter globally correct per credential).
 pub trait StoreProvider: Send + Sync {
@@ -142,6 +242,27 @@ pub trait StoreProvider: Send + Sync {
     fn fetch_catalog(
         &self,
     ) -> impl std::future::Future<Output = Result<CatalogSnapshot, ProviderError>> + Send;
+
+    /// Register a webhook endpoint with the provider, returning the signing secret to
+    /// store (envelope-encrypted). `Ok(None)` = the provider does not support programmatic
+    /// registration (Tebex; the wizard shows manual instructions in PR6).
+    fn register_webhook(
+        &self,
+        endpoint_url: &str,
+    ) -> impl std::future::Future<Output = Result<Option<WebhookRegistration>, ProviderError>> + Send;
+
+    /// Begin a checkout: for PayNow, upsert the customer by Steam id and create a hosted
+    /// checkout session, returning its redirect URL.
+    fn begin_checkout(
+        &self,
+        req: &CheckoutRequest,
+    ) -> impl std::future::Future<Output = Result<CheckoutBegin, ProviderError>> + Send;
+
+    /// Pull one page of the provider's entitlement truth (the reconcile backstop).
+    fn reconcile(
+        &self,
+        cursor: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<ReconcilePage, ProviderError>> + Send;
 }
 
 /// Canonical content hash for change detection (the bmapi `ban_content_hash` recipe):

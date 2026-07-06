@@ -15,9 +15,11 @@
 //! exact shells are unverified until a real store exists (PR2 live-verify item).
 
 use super::{
-    CatalogSnapshot, ProductKind, ProviderCategory, ProviderError, ProviderProduct, StoreInfo,
-    StoreProvider,
+    CatalogSnapshot, CheckoutBegin, CheckoutRequest, CheckoutStep, EntitlementRecord,
+    EntitlementStatus, NormalizedWebhook, ProductKind, ProviderCategory, ProviderError,
+    ProviderProduct, ReconcilePage, StoreInfo, StoreProvider, WebhookRegistration,
 };
+use base64::Engine as _;
 use cupboard_bmapi::RateLimiter;
 use std::time::Duration;
 
@@ -32,6 +34,10 @@ const PER_MIN: u32 = 120;
 /// lesson: request paths never inherit background retry policy).
 const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
+/// Checkout/customer/webhook/reconcile management calls.
+const MGMT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Max clock skew accepted on a PayNow webhook timestamp.
+const WEBHOOK_MAX_SKEW: chrono::Duration = chrono::Duration::minutes(5);
 /// Catalog GET retry schedule on transient failures (the limiter spaces attempts too).
 const RETRY_BACKOFF: &[Duration] = &[
     Duration::from_millis(500),
@@ -142,6 +148,84 @@ impl PayNowClient {
                 other => return other,
             }
         }
+    }
+
+    /// Store-scoped management path helper: `/stores/{storeId}{suffix}`.
+    fn store_path(&self, suffix: &str) -> Result<String, ProviderError> {
+        Ok(format!("/stores/{}{}", self.store_id()?, suffix))
+    }
+
+    /// Management GET (apikey auth, no store header — the store is in the path).
+    async fn management_get(&self, path: &str) -> Result<serde_json::Value, ProviderError> {
+        self.get(path, true, false, MGMT_TIMEOUT).await
+    }
+
+    /// Management POST (apikey auth). Returns the parsed JSON body.
+    async fn management_post(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ProviderError> {
+        self.limiter.acquire().await;
+        let resp = self
+            .http
+            .post(format!("{}{}", self.base, path))
+            .timeout(MGMT_TIMEOUT)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("apikey {}", self.api_key),
+            )
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Transient(format!("request failed: {e}")))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err(ProviderError::Auth(format!("paynow returned {status}")));
+        }
+        if status.as_u16() == 429 || status.is_server_error() {
+            return Err(ProviderError::Transient(format!(
+                "paynow returned {status}"
+            )));
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let brief: String = body.chars().take(200).collect();
+            return Err(ProviderError::Rejected(format!("{status}: {brief}")));
+        }
+        // Some POSTs (e.g. a 204) may have an empty body; tolerate it.
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ProviderError::Transient(format!("read body: {e}")))?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_str(&text)
+            .map_err(|e| ProviderError::Transient(format!("invalid JSON: {e}")))
+    }
+
+    /// Resolve (or create) the PayNow customer id for a Steam id.
+    async fn upsert_customer(&self, steam_id: &str) -> Result<String, ProviderError> {
+        let lookup = self.store_path(&format!(
+            "/customers/lookup?steam_id={}",
+            urlencoding_light(steam_id)
+        ))?;
+        if let Ok(found) = self.management_get(&lookup).await {
+            if let Some(id) = str_field(&found, "id") {
+                return Ok(id);
+            }
+        }
+        // Not found (or lookup 404'd): create.
+        let created = self
+            .management_post(
+                &self.store_path("/customers")?,
+                &serde_json::json!({ "steam_id": steam_id }),
+            )
+            .await?;
+        str_field(&created, "id")
+            .ok_or_else(|| ProviderError::Transient("customer create returned no id".into()))
     }
 }
 
@@ -345,6 +429,223 @@ impl StoreProvider for PayNowClient {
                 .collect(),
         })
     }
+
+    async fn register_webhook(
+        &self,
+        endpoint_url: &str,
+    ) -> Result<Option<WebhookRegistration>, ProviderError> {
+        // One webhook for the entitlement-grant event; the 15-minute reconcile poll is the
+        // authoritative backstop for renewals/revokes/refunds, so we do not depend on
+        // registering every event (PayNow registers one event per webhook, each with its
+        // own secret). See docs/phase5-plan.md decision E.
+        let created = self
+            .management_post(
+                &self.store_path("/webhooks")?,
+                &serde_json::json!({
+                    "url": endpoint_url,
+                    "subscribed_to": "OnDeliveryItemAdded",
+                    "type": "json_v1",
+                }),
+            )
+            .await?;
+        match (str_field(&created, "id"), str_field(&created, "secret")) {
+            (Some(external_id), Some(signing_secret)) => Ok(Some(WebhookRegistration {
+                external_id,
+                signing_secret,
+            })),
+            _ => Err(ProviderError::Transient(
+                "webhook registration returned no id/secret".into(),
+            )),
+        }
+    }
+
+    async fn begin_checkout(&self, req: &CheckoutRequest) -> Result<CheckoutBegin, ProviderError> {
+        let customer_id = self.upsert_customer(&req.steam_id).await?;
+        let created = self
+            .management_post(
+                &self.store_path("/checkouts")?,
+                &serde_json::json!({
+                    "customer_id": customer_id,
+                    "lines": [{
+                        "product_id": req.product_external_id,
+                        "quantity": req.quantity,
+                    }],
+                    "return_url": req.return_url,
+                    "cancel_url": req.cancel_url,
+                    "auto_redirect": true,
+                }),
+            )
+            .await?;
+        let url = str_field(&created, "url")
+            .ok_or_else(|| ProviderError::Transient("checkout create returned no url".into()))?;
+        Ok(CheckoutBegin {
+            redirect_url: url,
+            provider_ref: str_field(&created, "id"),
+            step: CheckoutStep::Final,
+        })
+    }
+
+    async fn reconcile(&self, cursor: Option<&str>) -> Result<ReconcilePage, ProviderError> {
+        let mut path = self.store_path("/delivery/items?limit=100")?;
+        if let Some(c) = cursor {
+            path.push_str(&format!("&after={}", urlencoding_light(c)));
+        }
+        let body = self.management_get(&path).await?;
+        let items = require_array(&body, "delivery items")?;
+        // The cursor for the next page, if PayNow signals more.
+        let next_cursor = body
+            .get("cursor")
+            .or_else(|| body.get("next"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        Ok(ReconcilePage {
+            entitlements: items.iter().filter_map(map_delivery_item).collect(),
+            next_cursor,
+        })
+    }
+}
+
+/// Parse a PayNow "delivery item" object into a normalized entitlement record.
+fn map_delivery_item(v: &serde_json::Value) -> Option<EntitlementRecord> {
+    let external_ref = str_field(v, "id")?;
+    let product = v.get("product");
+    let product_external_id = product.and_then(|p| str_field(p, "id"));
+    let product_name = product.and_then(|p| str_field(p, "name"));
+    // Customer's Steam id may be nested under customer.steam_id / steam.id.
+    let steam_id = v
+        .get("customer")
+        .and_then(|c| {
+            str_field(c, "steam_id").or_else(|| c.get("steam").and_then(|s| str_field(s, "id")))
+        })
+        .or_else(|| str_field(v, "steam_id"));
+    let status = match v.get("state").and_then(|s| s.as_str()).unwrap_or("active") {
+        "usable" | "active" | "used" | "renewed" => EntitlementStatus::Active,
+        "revoked" => EntitlementStatus::Revoked,
+        "expired" => EntitlementStatus::Expired,
+        other => {
+            tracing::debug!(
+                state = other,
+                "unknown delivery-item state; treating as active"
+            );
+            EntitlementStatus::Active
+        }
+    };
+    let kind = if v
+        .get("subscription_id")
+        .map(|x| !x.is_null())
+        .unwrap_or(false)
+    {
+        ProductKind::Subscription
+    } else {
+        ProductKind::Single
+    };
+    Some(EntitlementRecord {
+        external_ref,
+        steam_id,
+        product_external_id,
+        product_name,
+        kind,
+        status,
+        granted_at: parse_ts(v, "active_at").or_else(|| parse_ts(v, "added_at")),
+        expires_at: parse_ts(v, "expires_at"),
+    })
+}
+
+fn parse_ts(v: &serde_json::Value, key: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// Verify a PayNow webhook signature and parse it into a normalized event. Pure/sync so
+/// it is unit-testable without a server. `PayNow-Signature` is base64 HMAC-SHA256 over
+/// `"{timestamp}.{raw_body}"` with the store's signing secret; `PayNow-Timestamp` is unix
+/// millis and must be within the skew window (replay protection).
+pub fn verify_and_parse_webhook(
+    secret: &str,
+    signature_b64: &str,
+    timestamp_ms: &str,
+    raw_body: &[u8],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<NormalizedWebhook, WebhookError> {
+    // Timestamp freshness.
+    let ts: i64 = timestamp_ms
+        .trim()
+        .parse()
+        .map_err(|_| WebhookError::Malformed("bad timestamp"))?;
+    let sent = chrono::DateTime::from_timestamp_millis(ts)
+        .ok_or(WebhookError::Malformed("timestamp out of range"))?;
+    if (now - sent).abs() > WEBHOOK_MAX_SKEW {
+        return Err(WebhookError::StaleTimestamp);
+    }
+
+    // Signature.
+    let mut signed = Vec::with_capacity(timestamp_ms.len() + 1 + raw_body.len());
+    signed.extend_from_slice(timestamp_ms.trim().as_bytes());
+    signed.push(b'.');
+    signed.extend_from_slice(raw_body);
+    let expected = hmac_sha256_b64(secret.as_bytes(), &signed);
+    let presented = signature_b64.trim();
+    if !constant_time_str_eq(&expected, presented) {
+        return Err(WebhookError::BadSignature);
+    }
+
+    // Parse envelope {event_type, event_id, body}.
+    let doc: serde_json::Value =
+        serde_json::from_slice(raw_body).map_err(|_| WebhookError::Malformed("bad JSON"))?;
+    let event_id = str_field(&doc, "event_id").ok_or(WebhookError::Malformed("no event_id"))?;
+    let event_type = str_field(&doc, "event_type").unwrap_or_default();
+    // Delivery-item events carry the item as `body`; other events (orders/subs) are
+    // recorded for dedupe but leave entitlement convergence to the reconcile poll.
+    let entitlements = doc
+        .get("body")
+        .and_then(map_delivery_item)
+        .into_iter()
+        .collect();
+    Ok(NormalizedWebhook {
+        event_id,
+        event_type,
+        entitlements,
+    })
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum WebhookError {
+    #[error("bad signature")]
+    BadSignature,
+    #[error("stale timestamp")]
+    StaleTimestamp,
+    #[error("malformed webhook: {0}")]
+    Malformed(&'static str),
+}
+
+fn hmac_sha256_b64(key: &[u8], data: &[u8]) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key).expect("hmac accepts any key length");
+    mac.update(data);
+    base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+}
+
+/// Constant-time string comparison (length-independent short-circuit only on mismatch of
+/// the byte content, not length; both are attacker-influenced but not secret-length).
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    cupboard_crypto::constant_time_eq(a.as_bytes(), b.as_bytes())
+}
+
+/// Minimal percent-encoding for query values already known to be simple (steam ids,
+/// cursors); escapes anything unexpected defensively.
+fn urlencoding_light(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~') {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -422,5 +723,74 @@ mod tests {
     fn product_mapping_rejects_incomplete_rows() {
         assert!(map_product(&json!({"name": "no id"})).is_none());
         assert!(map_product(&json!({"id": "1"})).is_none());
+    }
+
+    fn signed_webhook(secret: &str, ts: &str, body: &str) -> String {
+        let mut signed = ts.as_bytes().to_vec();
+        signed.push(b'.');
+        signed.extend_from_slice(body.as_bytes());
+        hmac_sha256_b64(secret.as_bytes(), &signed)
+    }
+
+    #[test]
+    fn webhook_verify_accepts_valid_and_extracts_entitlement() {
+        let secret = "whsec_test";
+        let now = chrono::Utc::now();
+        let ts = now.timestamp_millis().to_string();
+        let body = json!({
+            "event_type": "ON_DELIVERY_ITEM_ADDED",
+            "event_id": "459276186938060800",
+            "body": {
+                "id": "di_1",
+                "state": "active",
+                "product": {"id": "p_1", "name": "VIP"},
+                "customer": {"steam_id": "76561198000000000"},
+                "active_at": "2026-07-05T00:00:00Z"
+            }
+        })
+        .to_string();
+        let sig = signed_webhook(secret, &ts, &body);
+        let parsed = verify_and_parse_webhook(secret, &sig, &ts, body.as_bytes(), now).unwrap();
+        assert_eq!(parsed.event_id, "459276186938060800");
+        assert_eq!(parsed.entitlements.len(), 1);
+        let e = &parsed.entitlements[0];
+        assert_eq!(e.external_ref, "di_1");
+        assert_eq!(e.steam_id.as_deref(), Some("76561198000000000"));
+        assert_eq!(e.status, EntitlementStatus::Active);
+    }
+
+    #[test]
+    fn webhook_verify_rejects_bad_signature_and_stale_ts() {
+        let secret = "whsec_test";
+        let now = chrono::Utc::now();
+        let ts = now.timestamp_millis().to_string();
+        let body = json!({"event_id": "1", "event_type": "X", "body": {}}).to_string();
+        // Wrong signature.
+        assert!(matches!(
+            verify_and_parse_webhook(secret, "not-a-sig", &ts, body.as_bytes(), now),
+            Err(WebhookError::BadSignature)
+        ));
+        // Correct signature but a timestamp 10 minutes old.
+        let stale = (now - chrono::Duration::minutes(10))
+            .timestamp_millis()
+            .to_string();
+        let sig = signed_webhook(secret, &stale, &body);
+        assert!(matches!(
+            verify_and_parse_webhook(secret, &sig, &stale, body.as_bytes(), now),
+            Err(WebhookError::StaleTimestamp)
+        ));
+    }
+
+    #[test]
+    fn delivery_item_states_map_to_statuses() {
+        let mk = |state: &str| {
+            map_delivery_item(&json!({"id": "x", "state": state}))
+                .unwrap()
+                .status
+        };
+        assert_eq!(mk("active"), EntitlementStatus::Active);
+        assert_eq!(mk("renewed"), EntitlementStatus::Active);
+        assert_eq!(mk("revoked"), EntitlementStatus::Revoked);
+        assert_eq!(mk("expired"), EntitlementStatus::Expired);
     }
 }

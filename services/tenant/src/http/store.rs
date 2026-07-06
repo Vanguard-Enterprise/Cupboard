@@ -153,3 +153,14 @@ pub async fn list_products(
     let products = store::list_products_admin(&state.app_pool, TenantId::from(org)).await?;
     Ok(Json(json!({ "products": products })))
 }
+
+/// GET /store/entitlements: recent entitlements for the admin dashboard.
+pub async fn list_entitlements(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::StoreManage)?;
+    let list =
+        crate::domain::entitlements::list_admin(&state.app_pool, TenantId::from(org), 200).await?;
+    Ok(Json(json!({ "entitlements": list })))
+}

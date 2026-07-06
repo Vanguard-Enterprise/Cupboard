@@ -3,9 +3,11 @@ import { can, Permission } from "@/lib/permissions";
 import { CatalogTable } from "./catalog-table";
 import { ConnectForm } from "./connect-form";
 import { DisconnectButton } from "./disconnect-button";
+import { EntitlementsTable } from "./entitlements-table";
 import {
   CONNECTION_STATUS_STYLES,
   PROVIDER_LABELS,
+  fetchEntitlements,
   fetchProducts,
   relativeTime,
   type StoreConnection,
@@ -30,6 +32,8 @@ export default async function StorePage() {
 
   const products =
     !loadFailed && connection && connection.product_count > 0 ? await fetchProducts() : [];
+
+  const entitlements = !loadFailed && connection ? await fetchEntitlements() : [];
 
   return (
     <div className="flex flex-col gap-8">
@@ -105,6 +109,8 @@ export default async function StorePage() {
       {!loadFailed && connection && connection.product_count > 0 && (
         <CatalogTable products={products} />
       )}
+
+      {!loadFailed && connection && <EntitlementsTable entitlements={entitlements} />}
     </div>
   );
 }

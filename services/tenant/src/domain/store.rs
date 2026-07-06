@@ -24,7 +24,8 @@ const RETRY_TRANSIENT_SECS: i64 = 60;
 const RETRY_REJECTED_SECS: i64 = 15 * 60;
 
 const CONN_COLS: &str = "id, tenant_id, provider, status, api_key_enc, api_key_dek, \
-     store_external_id, store_name, store_currency, store_live, settings, last_error, \
+     store_external_id, store_name, store_currency, store_live, \
+     webhook_secret_enc, webhook_secret_dek, webhook_external_id, settings, last_error, \
      next_catalog_sync_at, catalog_synced_at, claimed_by, heartbeat_at, created_at, \
      updated_at";
 
@@ -40,6 +41,9 @@ pub struct StoreConnection {
     pub store_name: Option<String>,
     pub store_currency: Option<String>,
     pub store_live: Option<bool>,
+    pub webhook_secret_enc: Option<Vec<u8>>,
+    pub webhook_secret_dek: Option<Vec<u8>>,
+    pub webhook_external_id: Option<String>,
     pub settings: serde_json::Value,
     pub last_error: Option<String>,
     pub next_catalog_sync_at: DateTime<Utc>,
@@ -361,7 +365,8 @@ pub async fn release_claim(
 }
 
 /// Fresh row each runner tick so operator changes (disconnect, reconnect, Sync now)
-/// apply within seconds.
+/// apply within seconds. Also used by the webhook receiver to load the connection (and
+/// its webhook secret) by id, since webhooks arrive without a tenant context.
 pub async fn load_fresh(
     owner_pool: &PgPool,
     connection_id: Uuid,
@@ -372,6 +377,34 @@ pub async fn load_fresh(
     .bind(connection_id)
     .fetch_optional(owner_pool)
     .await?)
+}
+
+/// Store the webhook registration (envelope-encrypted secret + provider id), fenced on
+/// the lease + credential like the sync bookkeeping so a stale runner cannot clobber it.
+pub async fn save_webhook_registration(
+    owner_pool: &PgPool,
+    connection_id: Uuid,
+    claimer: &str,
+    key_fence: &[u8],
+    secret_enc: &[u8],
+    secret_dek: &[u8],
+    external_id: &str,
+) -> Result<bool, AppError> {
+    let res = sqlx::query(
+        "UPDATE store_connections SET \
+             webhook_secret_enc = $4, webhook_secret_dek = $5, webhook_external_id = $6, \
+             updated_at = now() \
+         WHERE id = $1 AND claimed_by = $2 AND api_key_enc = $3",
+    )
+    .bind(connection_id)
+    .bind(claimer)
+    .bind(key_fence)
+    .bind(secret_enc)
+    .bind(secret_dek)
+    .bind(external_id)
+    .execute(owner_pool)
+    .await?;
+    Ok(res.rows_affected() == 1)
 }
 
 /// Mark the connection errored, fenced on both the lease and the exact credential bytes

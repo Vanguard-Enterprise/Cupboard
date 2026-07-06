@@ -4,11 +4,26 @@
 import { redirect } from "next/navigation";
 import { getPlayer } from "@/lib/player";
 import { logoutPlayer } from "@/lib/player-actions";
+import { fetchPlayerEntitlements, type Entitlement } from "@/lib/entitlements";
 import { safeHttpUrl } from "@/themes/registry";
+
+/** Format an ISO timestamp as a short calendar date; falls back to the raw string if the
+ * value is not a parseable date. */
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(d);
+}
 
 export default async function AccountPage() {
   const player = await getPlayer();
   if (!player) redirect("/login");
+
+  const entitlements = await fetchPlayerEntitlements();
 
   const avatar = safeHttpUrl(player.avatar_url);
   const name =
@@ -53,6 +68,47 @@ export default async function AccountPage() {
           </button>
         </form>
       </div>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold tracking-tight">Your purchases</h2>
+        {entitlements.length === 0 ? (
+          <p className="mt-3 text-sm text-[var(--sf-fg)]/70">
+            No purchases yet.{" "}
+            <a href="/store" className="text-[var(--sf-primary)] hover:underline">
+              Browse the store
+            </a>
+          </p>
+        ) : (
+          <ul className="mt-4 space-y-3">
+            {entitlements.map((e, i) => (
+              <PurchaseRow key={`${e.product_external_id}-${e.granted_at}-${i}`} entitlement={e} />
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
+  );
+}
+
+function PurchaseRow({ entitlement }: { entitlement: Entitlement }) {
+  const title = entitlement.product_name?.trim() || entitlement.product_external_id;
+  const isSubscription = entitlement.kind === "subscription";
+  return (
+    <li className="rounded-xl border border-white/10 bg-white/5 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="min-w-0 break-words font-medium leading-snug">{title}</h3>
+        <span className="shrink-0 rounded-full border border-[var(--sf-primary)]/40 px-2 py-0.5 text-xs text-[var(--sf-primary)]">
+          {isSubscription ? "Subscription" : "One-time"}
+        </span>
+      </div>
+      <p className="mt-2 text-xs text-[var(--sf-fg)]/60">
+        Purchased {formatDate(entitlement.granted_at)}
+      </p>
+      {entitlement.expires_at ? (
+        <p className="mt-1 text-xs text-[var(--sf-fg)]/60">
+          Expires {formatDate(entitlement.expires_at)}
+        </p>
+      ) : null}
+    </li>
   );
 }

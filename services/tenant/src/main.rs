@@ -67,10 +67,24 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Player token verifier (checkout + entitlement reads). Disjoint keypair from the
+    // operator one; absent -> the /player/* surface returns 503.
+    let player_keys = match &config.player_jwt_public_key_pem {
+        Some(pem) => match cupboard_auth_core::PlayerKeys::verifier_from_ed_pem(pem) {
+            Ok(k) => Some(Arc::new(k)),
+            Err(e) => {
+                tracing::warn!(error = %e, "invalid PLAYER_JWT_PUBLIC_KEY_PEM; player surface disabled");
+                None
+            }
+        },
+        None => None,
+    };
+
     let state = AppState {
         owner_pool,
         app_pool,
         keys: Arc::new(keys),
+        player_keys,
         cache,
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),

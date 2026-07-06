@@ -31,6 +31,17 @@ export type StoreProduct = {
   sort_order: number;
 };
 
+export type Entitlement = {
+  steam_id: string | null;
+  product_name: string | null;
+  kind: string;
+  status: "active" | "expired" | "revoked" | "refunded" | "chargeback";
+  granted_at: string | null;
+  expires_at: string | null;
+  source: "webhook" | "reconcile";
+  updated_at: string;
+};
+
 export const PROVIDER_LABELS: Record<string, string> = {
   paynow: "PayNow",
   tebex: "Tebex",
@@ -47,6 +58,13 @@ export async function fetchProducts(): Promise<StoreProduct[]> {
   if (!res.ok) return [];
   const data = await res.json();
   return data.products ?? [];
+}
+
+export async function fetchEntitlements(): Promise<Entitlement[]> {
+  const res = await apiFetch("/store/entitlements");
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.entitlements ?? [];
 }
 
 // Small dependency-free "3m ago" formatter; "-" for null. Coarse buckets are fine since

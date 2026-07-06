@@ -3,10 +3,15 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { fetchCatalog, formatPrice, intervalLabel } from "@/lib/catalog";
+import { getPlayer } from "@/lib/player";
+import { startCheckout } from "@/lib/checkout-actions";
 
-type Params = { params: Promise<{ product: string }> };
+type Props = {
+  params: Promise<{ product: string }>;
+  searchParams: Promise<{ error?: string }>;
+};
 
-export default async function ProductPage({ params }: Params) {
+export default async function ProductPage({ params, searchParams }: Props) {
   const host = (await headers()).get("x-cb-site-host");
   if (!host) notFound();
   const { product: productId } = await params;
@@ -16,12 +21,21 @@ export default async function ProductPage({ params }: Params) {
   const product = catalog.products.find((p) => p.external_id === productId);
   if (!product) notFound();
 
+  const player = await getPlayer();
+  const { error } = await searchParams;
+
   const interval = intervalLabel(product);
   const final = product.price_final_minor;
   const onSale = final != null && final < product.price_minor;
 
   return (
     <div className="space-y-8">
+      {error === "1" ? (
+        <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          Checkout could not be started. Please try again.
+        </p>
+      ) : null}
+
       <a
         href="/store"
         className="inline-flex items-center gap-1 text-sm text-[var(--sf-fg)]/70 transition-colors hover:text-[var(--sf-primary)]"
@@ -83,16 +97,40 @@ export default async function ProductPage({ params }: Params) {
           ) : null}
 
           <div className="space-y-2 pt-2">
-            <button
-              type="button"
-              disabled
-              className="cursor-not-allowed rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-black/80 opacity-60"
-            >
-              Sign in to purchase
-            </button>
-            <p className="text-xs text-[var(--sf-fg)]/50">
-              Checkout arrives with player accounts
-            </p>
+            {player ? (
+              product.available ? (
+                // Bound server action: the checkout call and provider redirect happen
+                // entirely server-side (no client fetch to the gateway).
+                <form action={startCheckout.bind(null, product.external_id)}>
+                  <button
+                    type="submit"
+                    className="rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-black/90 transition-opacity hover:opacity-90"
+                  >
+                    Buy now
+                  </button>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="cursor-not-allowed rounded-md bg-white/10 px-5 py-2.5 font-medium text-[var(--sf-fg)]/70 opacity-60"
+                >
+                  Sold out
+                </button>
+              )
+            ) : (
+              <>
+                <a
+                  href="/login"
+                  className="inline-block rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-black/90 transition-opacity hover:opacity-90"
+                >
+                  Sign in to purchase
+                </a>
+                <p className="text-xs text-[var(--sf-fg)]/50">
+                  Sign in with Steam to buy this product
+                </p>
+              </>
+            )}
           </div>
         </div>
       </div>

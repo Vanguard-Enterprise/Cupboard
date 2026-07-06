@@ -50,6 +50,7 @@ pub async fn run(owner_pool: sqlx::PgPool, cache: SiteCache, config: Arc<Config>
                 conn,
                 master_key,
                 config.paynow_api_base.clone(),
+                config.public_webhook_base.clone(),
                 claimer.clone(),
             ));
             running.insert(id, handle);
@@ -58,13 +59,24 @@ pub async fn run(owner_pool: sqlx::PgPool, cache: SiteCache, config: Arc<Config>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn runner_entry(
     pool: sqlx::PgPool,
     cache: SiteCache,
     conn: store::StoreConnection,
     master_key: [u8; 32],
     paynow_base: String,
+    webhook_base: Option<String>,
     claimer: String,
 ) {
-    super::runner::run(pool, cache, conn, master_key, paynow_base, claimer).await;
+    super::runner::run(
+        pool,
+        cache,
+        conn,
+        master_key,
+        paynow_base,
+        webhook_base,
+        claimer,
+    )
+    .await;
 }

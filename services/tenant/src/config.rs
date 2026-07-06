@@ -42,6 +42,17 @@ pub struct Config {
     /// `/internal/*` endpoints (host -> tenant resolution on the player-login path).
     /// `None` disables those endpoints (fail closed).
     pub internal_api_token: Option<String>,
+
+    /// Ed25519 PUBLIC key (PEM) for verifying PLAYER access tokens (checkout +
+    /// entitlement reads). Disjoint from the operator key. `None` disables the
+    /// `/player/*` surface (503).
+    pub player_jwt_public_key_pem: Option<String>,
+
+    /// Public base URL where providers deliver webhooks (e.g.
+    /// `https://cupboard-hooks.vngenterprise.com`). The runner registers a per-connection
+    /// endpoint `{base}/webhooks/{provider}/{connection_id}`. `None` = no auto webhook
+    /// registration (the reconcile poll still keeps the ledger current).
+    pub public_webhook_base: Option<String>,
 }
 
 impl Config {
@@ -102,6 +113,13 @@ impl Config {
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            player_jwt_public_key_pem: env::var("PLAYER_JWT_PUBLIC_KEY_PEM")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            public_webhook_base: env::var("PUBLIC_WEBHOOK_BASE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_end_matches('/').to_string()),
         })
     }
 }
