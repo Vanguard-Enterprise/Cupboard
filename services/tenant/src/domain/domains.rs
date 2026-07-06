@@ -90,9 +90,24 @@ pub fn validate_domain(domain: &str, sites_suffix: &str) -> Result<String, AppEr
             "domain may contain only letters, digits, hyphens, and dots (punycode for IDNs)".into(),
         ));
     }
-    if d == sites_suffix || d.ends_with(&format!(".{sites_suffix}")) {
+    // Reject our own hostnames: the wildcard sites suffix AND the platform base domain
+    // that fronts our infrastructure (api/edge/openbao/... .vngenterprise.com). A tenant
+    // must never be able to claim + route one of those. The base is the sites suffix with
+    // its leading label removed, but only when that still leaves a registrable (>=2-label)
+    // name, so a 2-label suffix like "vng.bet" never widens the block to the whole ".bet".
+    let under = |name: &str, base: &str| name == base || name.ends_with(&format!(".{base}"));
+    if under(&d, sites_suffix) {
         return Err(AppError::BadRequest(
             "that is a Cupboard-managed hostname; add your own external domain instead".into(),
+        ));
+    }
+    let platform_base = match sites_suffix.split_once('.') {
+        Some((_, rest)) if rest.contains('.') => rest,
+        _ => sites_suffix,
+    };
+    if under(&d, platform_base) {
+        return Err(AppError::BadRequest(
+            "that hostname belongs to the platform; connect a domain on your own zone".into(),
         ));
     }
     Ok(d)
@@ -117,6 +132,13 @@ pub async fn add_domain(
     domain: &str,
 ) -> Result<SiteDomain, AppError> {
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    // Serialize concurrent adds for this tenant so the count-then-insert cap cannot be
+    // raced past MAX_DOMAINS_PER_TENANT (the check is a non-locking read under READ
+    // COMMITTED; the xact lock releases on commit/rollback).
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(tenant.0)
+        .execute(&mut *tx)
+        .await?;
     let site_id: Option<Uuid> = sqlx::query_scalar("SELECT id FROM sites WHERE tenant_id = $1")
         .bind(tenant.0)
         .fetch_optional(&mut *tx)
@@ -127,6 +149,35 @@ pub async fn add_domain(
             "create your site before adding a custom domain".into(),
         ));
     };
+    // Re-adding a domain the tenant just removed: the row is retained as 'disabled' until
+    // the loop tears down its CRs, and the global UNIQUE(domain) still counts it, so a
+    // plain INSERT would 409. Revive that row instead (does not count against the cap).
+    let existing: Option<SiteDomain> = sqlx::query_as::<_, SiteDomain>(&format!(
+        "SELECT {DOMAIN_COLS} FROM site_domains WHERE tenant_id = $1 AND domain = $2"
+    ))
+    .bind(tenant.0)
+    .bind(domain)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(row) = existing {
+        if row.status == "disabled" {
+            let revived = sqlx::query_as::<_, SiteDomain>(&format!(
+                "UPDATE site_domains SET status = 'pending_dns', attempt_count = 0, \
+                     last_error = NULL, site_id = $2, next_check_at = now(), updated_at = now() \
+                 WHERE id = $1 RETURNING {DOMAIN_COLS}"
+            ))
+            .bind(row.id)
+            .bind(site_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(revived);
+        }
+        tx.rollback().await?;
+        return Err(AppError::Conflict(
+            "that domain is already connected".into(),
+        ));
+    }
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM site_domains WHERE tenant_id = $1 AND status <> 'disabled'",
     )
@@ -175,18 +226,18 @@ pub async fn remove_domain(
     app_pool: &PgPool,
     tenant: TenantId,
     id: Uuid,
-) -> Result<bool, AppError> {
+) -> Result<Option<String>, AppError> {
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
-    let res = sqlx::query(
+    let removed: Option<String> = sqlx::query_scalar(
         "UPDATE site_domains SET status = 'disabled', next_check_at = now(), updated_at = now() \
-         WHERE tenant_id = $1 AND id = $2 AND status <> 'disabled'",
+         WHERE tenant_id = $1 AND id = $2 AND status <> 'disabled' RETURNING domain",
     )
     .bind(tenant.0)
     .bind(id)
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(res.rows_affected() == 1)
+    Ok(removed)
 }
 
 /// Reset a failed domain for a manual retry (attempts back to 0, due now).
@@ -230,28 +281,33 @@ pub async fn claim_due(
 }
 
 /// Record a state transition: status + optional error + attempt count + when to look
-/// again. `last_checked_at` is stamped now.
+/// again. `last_checked_at` is stamped now. Guarded on `expected` (the status the loop
+/// claimed) so a concurrent operator action (remove -> disabled, retry -> pending_dns)
+/// that landed while the loop was mid-flight is never silently reverted; returns whether
+/// the row was still in the expected status and the update applied.
 pub async fn transition(
     owner_pool: &PgPool,
     id: Uuid,
+    expected: &str,
     status: &str,
     last_error: Option<&str>,
     attempt_count: i32,
     next_check_in: Duration,
-) -> Result<(), AppError> {
-    sqlx::query(
-        "UPDATE site_domains SET status = $2, last_error = $3, attempt_count = $4, \
-             last_checked_at = now(), next_check_at = now() + $5, updated_at = now() \
-         WHERE id = $1",
+) -> Result<bool, AppError> {
+    let res = sqlx::query(
+        "UPDATE site_domains SET status = $3, last_error = $4, attempt_count = $5, \
+             last_checked_at = now(), next_check_at = now() + $6, updated_at = now() \
+         WHERE id = $1 AND status = $2",
     )
     .bind(id)
+    .bind(expected)
     .bind(status)
     .bind(last_error)
     .bind(attempt_count)
     .bind(next_check_in)
     .execute(owner_pool)
     .await?;
-    Ok(())
+    Ok(res.rows_affected() == 1)
 }
 
 /// Persist the k8s resource names once the loop derives them.
@@ -313,6 +369,21 @@ mod tests {
         // Our own suffix is rejected (served by the wildcard).
         assert!(validate_domain("acme.sites.test", "sites.test").is_err());
         assert!(validate_domain("sites.test", "sites.test").is_err());
+    }
+
+    #[test]
+    fn validate_domain_rejects_platform_infra_hosts() {
+        let suffix = "sites.vngenterprise.com";
+        // The platform base and its infra subdomains must never be claimable by a tenant.
+        assert!(validate_domain("vngenterprise.com", suffix).is_err());
+        assert!(validate_domain("api.vngenterprise.com", suffix).is_err());
+        assert!(validate_domain("edge.vngenterprise.com", suffix).is_err());
+        assert!(validate_domain("openbao.vngenterprise.com", suffix).is_err());
+        // A tenant's own external zone is still accepted.
+        assert!(validate_domain("store.some-community.gg", suffix).is_ok());
+        // A 2-label suffix must not widen the block to the whole TLD.
+        assert!(validate_domain("someone.bet", "vng.bet").is_ok());
+        assert!(validate_domain("vng.bet", "vng.bet").is_err());
     }
 
     #[test]

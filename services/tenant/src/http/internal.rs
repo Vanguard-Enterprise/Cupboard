@@ -51,20 +51,13 @@ pub async fn resolve_site(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_internal_token(&state, &headers)?;
 
-    // Normalize the host the same way custom domains are stored (lower, no port/dot).
-    let host = query
-        .host
-        .trim()
-        .split(':')
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    let resolved = match normalize_and_classify(&host, &state.config.sites_suffix) {
-        Some(sites::SiteLocator::DefaultSubdomain(slug)) => {
+    // Normalize + classify once; custom domains resolve against the same normalized host
+    // the storefront and player paths use (lowercased, no port/trailing dot).
+    let resolved = match normalize_and_classify(&query.host, &state.config.sites_suffix) {
+        Some((_, sites::SiteLocator::DefaultSubdomain(slug))) => {
             sites::resolve_by_slug(&state.owner_pool, &slug).await?
         }
-        Some(sites::SiteLocator::Custom) => {
+        Some((host, sites::SiteLocator::Custom)) => {
             crate::domain::domains::resolve_by_domain(&state.owner_pool, &host).await?
         }
         None => None,

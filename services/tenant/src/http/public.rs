@@ -91,10 +91,15 @@ fn classify(host: &str, sites_suffix: &str) -> SiteLocator {
     }
 }
 
-/// Normalize + classify in one step, returning `None` for hosts that fail normalization.
-/// Shared with the internal resolve endpoint.
-pub fn normalize_and_classify(raw_host: &str, sites_suffix: &str) -> Option<SiteLocator> {
-    normalize_host(raw_host).map(|h| classify(&h, sites_suffix))
+/// Normalize + classify in one step, returning the normalized host alongside its locator
+/// (`None` for hosts that fail normalization). Shared with the internal resolve endpoint
+/// and the player checkout return-URL check so all three resolve custom domains against an
+/// identically-normalized host (lowercased, no port/trailing dot).
+pub fn normalize_and_classify(raw_host: &str, sites_suffix: &str) -> Option<(String, SiteLocator)> {
+    normalize_host(raw_host).map(|h| {
+        let loc = classify(&h, sites_suffix);
+        (h, loc)
+    })
 }
 
 /// Cache-first host resolution shared by the resolve and catalog endpoints.

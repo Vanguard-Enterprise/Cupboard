@@ -55,10 +55,17 @@ pub async fn remove(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     let org = claims.require(Permission::SitesEdit)?;
-    if domains::remove_domain(&state.app_pool, TenantId::from(org), id).await? {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(AppError::NotFound("no such domain".into()))
+    match domains::remove_domain(&state.app_pool, TenantId::from(org), id).await? {
+        Some(domain) => {
+            // Stop resolving the host at once rather than waiting for the positive cache
+            // entry to lapse (the loop also invalidates when it tears down the CRs).
+            let _ = state
+                .cache
+                .invalidate(&[crate::cache::CacheKey::SiteHost(domain)])
+                .await;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        None => Err(AppError::NotFound("no such domain".into())),
     }
 }
 

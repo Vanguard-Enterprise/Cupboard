@@ -49,6 +49,7 @@ cupboard-db.workspace = true
 cupboard-domain.workspace = true
 cupboard-auth-core.workspace = true
 cupboard-tenant = { path = ".", features = ["stub"] }
+chrono.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 uuid.workspace = true

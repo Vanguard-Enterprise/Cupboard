@@ -111,11 +111,10 @@ async fn main() -> anyhow::Result<()> {
         config.web_service_port,
     ) {
         Some(provisioner) => {
-            let edge_ips = resolve_edge_ips(config.edge_hostname.as_deref()).await;
             tracing::info!(
                 namespace = %config.cert_namespace,
                 issuer = %config.cert_issuer,
-                edge_ips = edge_ips.len(),
+                edge = config.edge_hostname.as_deref().unwrap_or("<none>"),
                 "custom-domain TLS loop enabled"
             );
             tokio::spawn(cupboard_tenant::domains_loop::run(
@@ -123,8 +122,7 @@ async fn main() -> anyhow::Result<()> {
                 Arc::new(provisioner),
                 state.cache.clone(),
                 cupboard_tenant::domains_loop::DomainsConfig {
-                    edge_ips,
-                    sites_suffix: config.sites_suffix.clone(),
+                    edge_hostname: config.edge_hostname.clone(),
                 },
             ));
         }
@@ -143,22 +141,6 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     tracing::info!("tenant stopped; flushing telemetry");
     Ok(())
-}
-
-/// Resolve the edge hostname to the IPs a custom domain must point at for the DNS
-/// pre-check. Empty (unresolvable or unset) => the loop skips the pre-check and lets the
-/// ACME HTTP-01 challenge be the gate.
-async fn resolve_edge_ips(edge_hostname: Option<&str>) -> Vec<std::net::IpAddr> {
-    let Some(host) = edge_hostname else {
-        return Vec::new();
-    };
-    match tokio::net::lookup_host(format!("{host}:443")).await {
-        Ok(addrs) => addrs.map(|s| s.ip()).collect(),
-        Err(e) => {
-            tracing::warn!(edge = host, error = %e, "could not resolve edge hostname; DNS pre-check disabled");
-            Vec::new()
-        }
-    }
 }
 
 /// Resolves on SIGTERM (Kubernetes) or Ctrl-C, letting in-flight requests drain.

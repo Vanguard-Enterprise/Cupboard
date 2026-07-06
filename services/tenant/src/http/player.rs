@@ -83,15 +83,13 @@ async fn validate_storefront_url(
         .ok_or_else(|| AppError::BadRequest(format!("{field} has no host")))?;
     let resolved =
         match crate::http::public::normalize_and_classify(host, &state.config.sites_suffix) {
-            Some(crate::domain::sites::SiteLocator::DefaultSubdomain(slug)) => {
+            Some((_, crate::domain::sites::SiteLocator::DefaultSubdomain(slug))) => {
                 crate::domain::sites::resolve_by_slug(&state.owner_pool, &slug).await?
             }
-            Some(crate::domain::sites::SiteLocator::Custom) => {
-                crate::domain::domains::resolve_by_domain(
-                    &state.owner_pool,
-                    &host.to_ascii_lowercase(),
-                )
-                .await?
+            // Resolve against the normalized host (a trailing-dot FQDN like
+            // `store.example.com.` must match the stored `store.example.com`).
+            Some((norm_host, crate::domain::sites::SiteLocator::Custom)) => {
+                crate::domain::domains::resolve_by_domain(&state.owner_pool, &norm_host).await?
             }
             None => None,
         };

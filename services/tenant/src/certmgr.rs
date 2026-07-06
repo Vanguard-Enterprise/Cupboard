@@ -57,7 +57,6 @@ pub trait CertProvisioner: Send + Sync + 'static {
 /// Raw-HTTP Kubernetes provisioner using the in-cluster ServiceAccount.
 pub struct KubeProvisioner {
     http: reqwest::Client,
-    token: String,
     namespace: String,
     issuer: String,
     web_service: String,
@@ -73,7 +72,9 @@ impl KubeProvisioner {
         web_service: String,
         web_port: u16,
     ) -> Option<Self> {
-        let token = std::fs::read_to_string(SA_TOKEN_PATH).ok()?;
+        // Confirm we are in-cluster (token present); the token itself is read fresh per
+        // request below, not cached, since it is a short-lived BoundServiceAccountToken.
+        std::fs::read_to_string(SA_TOKEN_PATH).ok()?;
         let ca = std::fs::read(SA_CA_PATH).ok()?;
         let ca_cert = reqwest::Certificate::from_pem(&ca).ok()?;
         let http = reqwest::Client::builder()
@@ -83,12 +84,20 @@ impl KubeProvisioner {
             .ok()?;
         Some(Self {
             http,
-            token: token.trim().to_string(),
             namespace,
             issuer,
             web_service,
             web_port,
         })
+    }
+
+    /// Read the current ServiceAccount token. The kubelet rotates the projected token
+    /// (BoundServiceAccountToken, ~1h TTL) in place, so it is read fresh on every request
+    /// rather than cached at startup, else all API calls would 401 after the first hour.
+    fn bearer_token(&self) -> Result<String, ProvisionError> {
+        std::fs::read_to_string(SA_TOKEN_PATH)
+            .map(|t| t.trim().to_string())
+            .map_err(|e| ProvisionError::Transient(format!("reading SA token: {e}")))
     }
 
     fn url(&self, group_version: &str, plural: &str, name: Option<&str>) -> String {
@@ -113,7 +122,7 @@ impl KubeProvisioner {
         let resp = self
             .http
             .post(self.url(group_version, plural, None))
-            .bearer_auth(&self.token)
+            .bearer_auth(self.bearer_token()?)
             .json(body)
             .send()
             .await
@@ -139,7 +148,7 @@ impl KubeProvisioner {
         let resp = self
             .http
             .delete(url)
-            .bearer_auth(&self.token)
+            .bearer_auth(self.bearer_token()?)
             .send()
             .await
             .map_err(|e| ProvisionError::Transient(e.to_string()))?;
@@ -201,7 +210,7 @@ impl CertProvisioner for KubeProvisioner {
         let resp = self
             .http
             .get(self.url(CERT_GV, "certificates", Some(cert_name)))
-            .bearer_auth(&self.token)
+            .bearer_auth(self.bearer_token()?)
             .send()
             .await
             .map_err(|e| ProvisionError::Transient(e.to_string()))?;
