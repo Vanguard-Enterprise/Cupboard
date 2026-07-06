@@ -72,6 +72,11 @@ fn state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         internal_api_token: None,
         player_jwt_public_key_pem: Some(PL_PUB.into()),
         public_webhook_base: Some("https://hooks.test".into()),
+        edge_hostname: None,
+        cert_namespace: "cupboard-web".into(),
+        cert_issuer: "letsencrypt-http01".into(),
+        web_service_name: "cupboard-web".into(),
+        web_service_port: 3000,
     };
     AppState {
         owner_pool: owner,

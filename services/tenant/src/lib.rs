@@ -4,8 +4,10 @@
 //! manage their site and store through the JWT-gated `/sites/*` and `/store/*` surfaces.
 
 pub mod cache;
+pub mod certmgr;
 pub mod config;
 pub mod domain;
+pub mod domains_loop;
 pub mod error;
 pub mod http;
 pub mod providers;

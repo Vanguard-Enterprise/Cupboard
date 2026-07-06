@@ -1,5 +1,6 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
+mod domains;
 mod internal;
 mod player;
 pub mod public;
@@ -32,6 +33,16 @@ pub fn router(state: AppState) -> Router {
             get(sites::get_site)
                 .post(sites::create)
                 .patch(sites::update),
+        )
+        // Custom domains (part of the site surface; `sites.edit`).
+        .route("/sites/domains", get(domains::list).post(domains::add))
+        .route(
+            "/sites/domains/{id}",
+            axum::routing::delete(domains::remove),
+        )
+        .route(
+            "/sites/domains/{id}/retry",
+            axum::routing::post(domains::retry),
         )
         // Operator store management (gateway `/store/*` route; `store.manage`).
         .route("/store", get(store::get_store))

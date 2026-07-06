@@ -86,8 +86,14 @@ async fn validate_storefront_url(
             Some(crate::domain::sites::SiteLocator::DefaultSubdomain(slug)) => {
                 crate::domain::sites::resolve_by_slug(&state.owner_pool, &slug).await?
             }
-            // Custom domains land in PR5; until then only default-subdomain storefronts.
-            _ => None,
+            Some(crate::domain::sites::SiteLocator::Custom) => {
+                crate::domain::domains::resolve_by_domain(
+                    &state.owner_pool,
+                    &host.to_ascii_lowercase(),
+                )
+                .await?
+            }
+            None => None,
         };
     match resolved {
         Some(site) if site.tenant_id == tenant => Ok(()),

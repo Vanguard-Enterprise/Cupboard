@@ -88,6 +88,11 @@ async fn supervisor_claims_and_runner_syncs() {
         internal_api_token: None,
         player_jwt_public_key_pem: None,
         public_webhook_base: None,
+        edge_hostname: None,
+        cert_namespace: "cupboard-web".into(),
+        cert_issuer: "letsencrypt-http01".into(),
+        web_service_name: "cupboard-web".into(),
+        web_service_port: 3000,
     };
     let supervisor = tokio::spawn(cupboard_tenant::store::supervisor::run(
         owner.clone(),

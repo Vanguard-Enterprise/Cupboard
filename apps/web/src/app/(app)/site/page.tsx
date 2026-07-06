@@ -2,6 +2,7 @@ import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
 import type { SiteConfig } from "@/themes/catalog";
 import { CreateSiteForm } from "./create-site-form";
+import { DomainsPanel, type Domain } from "./domains-panel";
 import { SiteEditor } from "./site-editor";
 
 export type Site = {
@@ -17,6 +18,8 @@ export type Site = {
 
 type SitesResponse = { site: Site | null; default_host: string | null };
 
+type DomainsResponse = { domains: Domain[]; edge_target: string | null };
+
 export default async function SitePage() {
   const session = await getSession();
   if (!session) return null;
@@ -26,6 +29,12 @@ export default async function SitePage() {
 
   const res = await apiFetch("/sites");
   const data: SitesResponse = res.ok ? await res.json() : { site: null, default_host: null };
+
+  let domainsData: DomainsResponse = { domains: [], edge_target: null };
+  if (res.ok && data.site) {
+    const domainsRes = await apiFetch("/sites/domains");
+    if (domainsRes.ok) domainsData = await domainsRes.json();
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -42,7 +51,10 @@ export default async function SitePage() {
       )}
       {res.ok && !data.site && <CreateSiteForm />}
       {res.ok && data.site && data.default_host && (
-        <SiteEditor site={data.site} defaultHost={data.default_host} />
+        <>
+          <SiteEditor site={data.site} defaultHost={data.default_host} />
+          <DomainsPanel domains={domainsData.domains} edgeTarget={domainsData.edge_target} />
+        </>
       )}
     </div>
   );

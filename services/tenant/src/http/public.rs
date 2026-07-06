@@ -124,9 +124,11 @@ async fn resolve_host(
         SiteLocator::DefaultSubdomain(slug) => {
             sites::resolve_by_slug(&state.owner_pool, &slug).await?
         }
-        // Custom domains land in PR5 (`site_domains` lookup). Unknown hosts are still
-        // negative-cached below so repeat junk traffic is absorbed by Redis.
-        SiteLocator::Custom => None,
+        // A verified custom domain (active in `site_domains`) resolves to its site;
+        // unknown hosts are negative-cached below so junk traffic is absorbed by Redis.
+        SiteLocator::Custom => {
+            crate::domain::domains::resolve_by_domain(&state.owner_pool, &host).await?
+        }
     };
 
     state.cache.put(&key, &resolved).await;

@@ -533,6 +533,54 @@ export async function updateSiteAction(
   return { ok: true };
 }
 
+export type DomainFormState = { error?: string; ok?: boolean };
+
+/** Connect a custom domain to the tenant's site. The API validates the domain, enforces
+ * the per-tenant cap, and rejects a domain already connected elsewhere (409); those
+ * messages surface inline via readError. */
+export async function addDomainAction(
+  _prev: DomainFormState,
+  form: FormData,
+): Promise<DomainFormState> {
+  const domain = trimmed(form, "domain");
+  if (!domain) return { error: "domain is required" };
+
+  const res = await apiFetch("/sites/domains", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ domain }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+/** Disconnect a custom domain from the tenant's site. */
+export async function removeDomainAction(
+  _prev: DomainFormState,
+  form: FormData,
+): Promise<DomainFormState> {
+  const id = form.get("domain_id");
+  if (typeof id !== "string" || !id) return { error: "missing domain" };
+  const res = await apiFetch(`/sites/domains/${id}`, { method: "DELETE" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+/** Retry DNS/certificate issuance for a domain stuck in a failed status. */
+export async function retryDomainAction(
+  _prev: DomainFormState,
+  form: FormData,
+): Promise<DomainFormState> {
+  const id = form.get("domain_id");
+  if (typeof id !== "string" || !id) return { error: "missing domain" };
+  const res = await apiFetch(`/sites/domains/${id}/retry`, { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
 export type StoreConnectFormState = { error?: string; ok?: boolean };
 
 /** Connect the tenant's store to a payment provider (PayNow only for now). The backend

@@ -53,6 +53,17 @@ pub struct Config {
     /// endpoint `{base}/webhooks/{provider}/{connection_id}`. `None` = no auto webhook
     /// registration (the reconcile poll still keeps the ledger current).
     pub public_webhook_base: Option<String>,
+
+    /// The stable edge hostname operators CNAME their custom domains at (e.g.
+    /// `edge.vngenterprise.com`). Shown in the domains UI; also DNS-resolved to the IPs
+    /// a custom domain must point at before issuance is attempted.
+    pub edge_hostname: Option<String>,
+    /// Custom-domain TLS automation (cert-manager `Certificate` + Traefik `IngressRoute`
+    /// created in this namespace). All must be set for the domain loop to run.
+    pub cert_namespace: String,
+    pub cert_issuer: String,
+    pub web_service_name: String,
+    pub web_service_port: u16,
 }
 
 impl Config {
@@ -120,6 +131,15 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim_end_matches('/').to_string()),
+            edge_hostname: env::var("EDGE_HOSTNAME").ok().filter(|s| !s.is_empty()),
+            cert_namespace: env::var("CERT_NAMESPACE").unwrap_or_else(|_| "cupboard-web".into()),
+            cert_issuer: env::var("CERT_ISSUER").unwrap_or_else(|_| "letsencrypt-http01".into()),
+            web_service_name: env::var("WEB_SERVICE_NAME")
+                .unwrap_or_else(|_| "cupboard-web".into()),
+            web_service_port: env::var("WEB_SERVICE_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3000),
         })
     }
 }
