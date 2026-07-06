@@ -122,6 +122,10 @@ pub async fn run(
     // Reconcile immediately on start, then on cadence (a fresh claim after a gap catches
     // up right away); tokio Instant so it advances with the loop.
     let mut next_reconcile = tokio::time::Instant::now();
+    // Webhook registration is attempted at most once per this window: a POST to the
+    // provider creates a real webhook, so a failed/fenced DB save must NOT re-POST every
+    // 5s tick (that would accumulate duplicate provider webhooks). `None` = never tried.
+    let mut last_webhook_attempt: Option<tokio::time::Instant> = None;
 
     let mut ticker = tokio::time::interval(LOOP_TICK);
     loop {
@@ -150,14 +154,21 @@ pub async fn run(
             break;
         }
 
-        // Register the webhook once (best-effort; the reconcile poll below keeps the
-        // ledger correct even if webhooks never arrive).
+        // Register the webhook (best-effort; the reconcile poll keeps the ledger correct
+        // even if webhooks never arrive). Rate-limited to once per RECONCILE_EVERY so a
+        // repeatedly-failing registration cannot spawn duplicate provider webhooks.
         if current.webhook_external_id.is_none() {
-            if let Some(base) = &webhook_base {
-                register_webhook(
-                    &pool, &current, &client, &claimer, &key_enc, base, master_key,
-                )
-                .await;
+            let due = last_webhook_attempt
+                .map(|t| t.elapsed() >= RECONCILE_EVERY)
+                .unwrap_or(true);
+            if due {
+                if let Some(base) = &webhook_base {
+                    last_webhook_attempt = Some(tokio::time::Instant::now());
+                    register_webhook(
+                        &pool, &current, &client, &claimer, &key_enc, base, master_key,
+                    )
+                    .await;
+                }
             }
         }
 
@@ -230,6 +241,10 @@ async fn register_webhook(
 
 /// Walk the provider's entitlement pages and upsert the ledger (source=reconcile). The
 /// authoritative backstop: whatever webhooks missed, this converges within the cadence.
+/// Bound on the reconcile page walk; more than this and we treat the walk as incomplete
+/// and skip the absent-sweep (a partial view must not expire rows it did not see).
+const RECONCILE_PAGE_CAP: usize = 100;
+
 async fn reconcile_entitlements(
     pool: &sqlx::PgPool,
     conn: &StoreConnection,
@@ -238,11 +253,12 @@ async fn reconcile_entitlements(
 ) {
     let mut cursor: Option<String> = None;
     let mut total = 0u64;
-    // Bound the walk defensively so a provider that never terminates the cursor cannot
-    // spin forever.
-    for _ in 0..100 {
+    let mut seen_refs: Vec<String> = Vec::new();
+    let mut complete = false;
+    for _ in 0..RECONCILE_PAGE_CAP {
         match client.reconcile(cursor.as_deref()).await {
             Ok(page) => {
+                seen_refs.extend(page.entitlements.iter().map(|e| e.external_ref.clone()));
                 match crate::domain::entitlements::apply_reconcile_page(
                     pool,
                     tenant_id,
@@ -260,7 +276,10 @@ async fn reconcile_entitlements(
                 }
                 match page.next_cursor {
                     Some(c) => cursor = Some(c),
-                    None => break,
+                    None => {
+                        complete = true;
+                        break;
+                    }
                 }
             }
             Err(e) => {
@@ -269,6 +288,21 @@ async fn reconcile_entitlements(
             }
         }
     }
+
+    // Only sweep when we saw the WHOLE set: a provider that drops an item entirely (no
+    // terminal-state row) would otherwise leave a stale 'active' entitlement.
+    if complete {
+        match crate::domain::entitlements::sweep_absent_actives(pool, conn.id, &seen_refs).await {
+            Ok(expired) if expired > 0 => {
+                tracing::info!(connection = %conn.id, expired, "swept entitlements absent from provider");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(connection = %conn.id, error = ?e, "reconcile sweep failed"),
+        }
+    } else {
+        tracing::warn!(connection = %conn.id, "reconcile walk hit the page cap; skipping absent-sweep");
+    }
+
     if total > 0 {
         tracing::info!(connection = %conn.id, entitlements = total, "entitlements reconciled");
     }

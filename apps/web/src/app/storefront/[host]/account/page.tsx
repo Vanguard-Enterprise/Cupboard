@@ -101,9 +101,11 @@ function PurchaseRow({ entitlement }: { entitlement: Entitlement }) {
           {isSubscription ? "Subscription" : "One-time"}
         </span>
       </div>
-      <p className="mt-2 text-xs text-[var(--sf-fg)]/60">
-        Purchased {formatDate(entitlement.granted_at)}
-      </p>
+      {entitlement.granted_at ? (
+        <p className="mt-2 text-xs text-[var(--sf-fg)]/60">
+          Purchased {formatDate(entitlement.granted_at)}
+        </p>
+      ) : null}
       {entitlement.expires_at ? (
         <p className="mt-1 text-xs text-[var(--sf-fg)]/60">
           Expires {formatDate(entitlement.expires_at)}

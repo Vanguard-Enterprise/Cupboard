@@ -16,6 +16,7 @@ use cupboard_auth_core::PlayerClaims;
 use cupboard_domain::TenantId;
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 /// Extractor that verifies the `Authorization: Bearer <player-jwt>` and yields the player
 /// claims. Uses the player keypair; 503 when player auth is unconfigured.
@@ -60,13 +61,39 @@ fn one() -> i32 {
     1
 }
 
-fn require_https(url: &str, field: &str) -> Result<(), AppError> {
-    if url.starts_with("https://") || url.starts_with("http://") {
-        Ok(())
-    } else {
-        Err(AppError::BadRequest(format!(
-            "{field} must be an http(s) URL"
-        )))
+/// Validate a provider return/cancel URL. The provider redirects the buyer's browser
+/// here after checkout, so an unvalidated value is an open redirect. Require https AND
+/// that the URL's host is a storefront owned by THIS player's tenant (resolved
+/// authoritatively), so the buyer can only ever be sent back to their own site.
+async fn validate_storefront_url(
+    state: &AppState,
+    tenant: Uuid,
+    url: &str,
+    field: &str,
+) -> Result<(), AppError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| AppError::BadRequest(format!("{field} is not a valid URL")))?;
+    if parsed.scheme() != "https" {
+        return Err(AppError::BadRequest(format!(
+            "{field} must be an https URL"
+        )));
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| AppError::BadRequest(format!("{field} has no host")))?;
+    let resolved =
+        match crate::http::public::normalize_and_classify(host, &state.config.sites_suffix) {
+            Some(crate::domain::sites::SiteLocator::DefaultSubdomain(slug)) => {
+                crate::domain::sites::resolve_by_slug(&state.owner_pool, &slug).await?
+            }
+            // Custom domains land in PR5; until then only default-subdomain storefronts.
+            _ => None,
+        };
+    match resolved {
+        Some(site) if site.tenant_id == tenant => Ok(()),
+        _ => Err(AppError::BadRequest(format!(
+            "{field} must be your own storefront"
+        ))),
     }
 }
 
@@ -81,11 +108,14 @@ pub async fn checkout(
         .steam_id
         .clone()
         .ok_or_else(|| AppError::BadRequest("your account has no linked Steam id".into()))?;
-    if req.quantity < 1 {
-        return Err(AppError::BadRequest("quantity must be at least 1".into()));
+    if !(1..=100).contains(&req.quantity) {
+        return Err(AppError::BadRequest(
+            "quantity must be between 1 and 100".into(),
+        ));
     }
-    require_https(&req.return_url, "return_url")?;
-    require_https(&req.cancel_url, "cancel_url")?;
+    let tenant_id = claims.tenant.0;
+    validate_storefront_url(&state, tenant_id, &req.return_url, "return_url").await?;
+    validate_storefront_url(&state, tenant_id, &req.cancel_url, "cancel_url").await?;
 
     let master_key = state
         .config
@@ -124,6 +154,10 @@ pub async fn checkout(
         ));
     }
 
+    // A per-request client (fresh rate limiter) is intentional here: checkout is
+    // user-driven and low-frequency (a couple of calls per human purchase), unlike the
+    // runner's high-frequency catalog/reconcile polling where one shared limiter per
+    // credential matters. The provider's own limits still apply per key.
     let client = PayNowClient::new(
         state.config.paynow_api_base.clone(),
         api_key,

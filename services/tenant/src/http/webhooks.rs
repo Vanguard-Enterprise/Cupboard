@@ -40,6 +40,12 @@ pub async fn receive(
     if conn.provider != kind.as_str() {
         return Err(AppError::NotFound("provider mismatch".into()));
     }
+    // A disconnected store must stop affecting the ledger even if the provider still has
+    // the webhook registered (disconnect also shreds the secret, so this is belt-and-
+    // braces). Return 404 rather than 200 so the operator's intent is honored.
+    if conn.status != "connected" {
+        return Err(AppError::NotFound("store is not connected".into()));
+    }
 
     // The webhook signing secret must have been registered (runner step); without it we
     // cannot authenticate the event, so reject rather than trust it.

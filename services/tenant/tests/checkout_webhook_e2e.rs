@@ -158,6 +158,16 @@ async fn checkout_then_webhook_then_reconcile() {
     let conn_id = seed_store(&owner, &stub, tenant).await;
     let token = player_token(tenant);
 
+    // The tenant's storefront, so checkout return/cancel URLs on its host validate.
+    let host_slug = format!("cx{}", &Uuid::new_v4().simple().to_string()[..8]);
+    sqlx::query("INSERT INTO sites (tenant_id, slug) VALUES ($1, $2)")
+        .bind(tenant)
+        .bind(&host_slug)
+        .execute(&owner)
+        .await
+        .unwrap();
+    let store_host = format!("{host_slug}.sites.test");
+
     // 1. Checkout: player -> hosted checkout URL, and a customer is upserted at PayNow.
     let (status, body) = send(
         &st,
@@ -169,8 +179,8 @@ async fn checkout_then_webhook_then_reconcile() {
             serde_json::json!({
                 "product_external_id": "p_vip",
                 "quantity": 1,
-                "return_url": "https://acme.sites.test/store/checkout/return",
-                "cancel_url": "https://acme.sites.test/store/p_vip"
+                "return_url": format!("https://{store_host}/store/checkout/return"),
+                "cancel_url": format!("https://{store_host}/store/p_vip")
             })
             .to_string(),
         )),
@@ -324,6 +334,130 @@ async fn checkout_then_webhook_then_reconcile() {
     .await
     .unwrap();
     assert_eq!(revoked, 1, "reconcile converged the ledger to revoked");
+
+    // 5. Terminal-status guard: a LAGGING reconcile that still reports the item active
+    // (provider eventual consistency) must NOT resurrect the revoked entitlement.
+    stub.set_delivery_items(vec![serde_json::json!({
+        "id": "di_100",
+        "state": "active",
+        "product": {"id": "p_vip", "name": "VIP Rank"},
+        "customer": {"steam_id": STEAM_ID}
+    })]);
+    let page = client.reconcile(None).await.expect("reconcile2");
+    entitlements::apply_reconcile_page(&owner, tenant, conn_id, "paynow", &page.entitlements)
+        .await
+        .expect("apply reconcile2");
+    let still_revoked: String =
+        sqlx::query_scalar("SELECT status FROM entitlements WHERE connection_id = $1")
+            .bind(conn_id)
+            .fetch_one(&owner)
+            .await
+            .unwrap();
+    assert_eq!(
+        still_revoked, "revoked",
+        "a stale reconcile must not resurrect a revoked entitlement to active"
+    );
+
+    // 6. Absent-sweep: grant a fresh entitlement via webhook, then a COMPLETE reconcile
+    // that no longer lists it (provider dropped it) expires it.
+    let ts2 = chrono::Utc::now().timestamp_millis().to_string();
+    let body2 = serde_json::json!({
+        "event_type": "ON_DELIVERY_ITEM_ADDED",
+        "event_id": "evt_2",
+        "body": {
+            "id": "di_200", "state": "active",
+            "product": {"id": "p_gold", "name": "Gold"},
+            "customer": {"steam_id": STEAM_ID}
+        }
+    })
+    .to_string();
+    let sig2 = stub.sign_webhook(&ts2, &body2);
+    let (s, _) = send(
+        &st,
+        "POST",
+        &format!("/webhooks/paynow/{conn_id}"),
+        None,
+        &[
+            ("content-type", "application/json"),
+            ("paynow-signature", &sig2),
+            ("paynow-timestamp", &ts2),
+        ],
+        Some(Body::from(body2)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    // Provider now returns an EMPTY delivery list (di_200 dropped entirely).
+    stub.set_delivery_items(vec![]);
+    let page = client.reconcile(None).await.expect("reconcile3");
+    let seen: Vec<String> = page
+        .entitlements
+        .iter()
+        .map(|e| e.external_ref.clone())
+        .collect();
+    entitlements::apply_reconcile_page(&owner, tenant, conn_id, "paynow", &page.entitlements)
+        .await
+        .expect("apply3");
+    let expired = entitlements::sweep_absent_actives(&owner, conn_id, &seen)
+        .await
+        .expect("sweep");
+    assert_eq!(
+        expired, 1,
+        "an entitlement absent from a complete reconcile is expired"
+    );
+    let gold_status: String = sqlx::query_scalar(
+        "SELECT status FROM entitlements WHERE connection_id = $1 AND external_ref = 'di_200'",
+    )
+    .bind(conn_id)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(gold_status, "expired");
+
+    // 7. Checkout URL validation: a return_url on a host NOT owned by this tenant is
+    // rejected (open-redirect guard); a plain http URL is rejected (must be https).
+    let (status, _) = send(
+        &st,
+        "POST",
+        "/player/checkout",
+        Some(&token),
+        &[("content-type", "application/json")],
+        Some(Body::from(
+            serde_json::json!({
+                "product_external_id": "p_vip", "quantity": 1,
+                "return_url": "https://attacker.example/phish",
+                "cancel_url": format!("https://{store_host}/store")
+            })
+            .to_string(),
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "foreign return_url must be rejected"
+    );
+
+    let (status, _) = send(
+        &st,
+        "POST",
+        "/player/checkout",
+        Some(&token),
+        &[("content-type", "application/json")],
+        Some(Body::from(
+            serde_json::json!({
+                "product_external_id": "p_vip", "quantity": 1,
+                "return_url": format!("http://{store_host}/store/checkout/return"),
+                "cancel_url": format!("https://{store_host}/store")
+            })
+            .to_string(),
+        )),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "http (non-https) return_url must be rejected"
+    );
 }
 
 async fn store_ext(owner: &PgPool, conn_id: Uuid) -> String {

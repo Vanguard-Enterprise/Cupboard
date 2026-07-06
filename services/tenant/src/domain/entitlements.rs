@@ -11,8 +11,14 @@ use serde::Serialize;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-/// Apply one entitlement record within an existing transaction (webhook path). Upsert by
+/// Apply one entitlement record within an existing transaction. Upsert by
 /// `(connection_id, external_ref)`, skipping the write when the content hash is unchanged.
+///
+/// Terminal-status guard: a `reconcile` page can lag a real-time webhook (provider
+/// eventual consistency), so it must NOT resurrect a row that a webhook already moved to
+/// a terminal state (revoked/refunded/chargeback) back to active. Webhooks are the
+/// authoritative real-time signal and a genuine re-grant is a NEW delivery item (new
+/// external_ref), so this can never wrongly suppress a real re-purchase.
 pub async fn apply_record_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     tenant_id: Uuid,
@@ -22,6 +28,7 @@ pub async fn apply_record_in_tx(
     rec: &EntitlementRecord,
 ) -> Result<(), sqlx::Error> {
     let hash = entitlement_content_hash(rec);
+    let is_reconcile = source == "reconcile";
     sqlx::query(
         "INSERT INTO entitlements \
              (tenant_id, connection_id, provider, external_ref, steam_id, \
@@ -40,7 +47,9 @@ pub async fn apply_record_in_tx(
              source = EXCLUDED.source, \
              content_hash = EXCLUDED.content_hash, \
              updated_at = now() \
-         WHERE entitlements.content_hash IS DISTINCT FROM EXCLUDED.content_hash",
+         WHERE entitlements.content_hash IS DISTINCT FROM EXCLUDED.content_hash \
+           AND NOT ($15 AND EXCLUDED.status = 'active' \
+                    AND entitlements.status IN ('revoked', 'refunded', 'chargeback'))",
     )
     .bind(tenant_id)
     .bind(connection_id)
@@ -56,6 +65,7 @@ pub async fn apply_record_in_tx(
     .bind(revoked_at(rec))
     .bind(source)
     .bind(&hash)
+    .bind(is_reconcile)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -145,6 +155,26 @@ pub async fn apply_reconcile_page(
     Ok(records.len() as u64)
 }
 
+/// After a COMPLETE reconcile walk, expire any still-active entitlement whose provider
+/// delivery item was not seen this cycle (the provider dropped it entirely rather than
+/// reporting a terminal state). Only safe when `seen_refs` is the full set; a partial
+/// walk must NOT call this. Returns the number expired.
+pub async fn sweep_absent_actives(
+    owner_pool: &PgPool,
+    connection_id: Uuid,
+    seen_refs: &[String],
+) -> Result<u64, AppError> {
+    let res = sqlx::query(
+        "UPDATE entitlements SET status = 'expired', updated_at = now() \
+         WHERE connection_id = $1 AND status = 'active' AND external_ref <> ALL($2)",
+    )
+    .bind(connection_id)
+    .bind(seen_refs)
+    .execute(owner_pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 // ============================ Checkout sessions ============================
 
 pub struct NewCheckout {
@@ -201,10 +231,14 @@ pub async fn list_active_for_steam(
     tenant_id: Uuid,
     steam_id: &str,
 ) -> Result<Vec<EntitlementView>, AppError> {
+    // Exclude entitlements whose expiry has passed even if the provider status has not
+    // yet flipped (the reconcile cadence can lag), so the player-facing list never
+    // reports a lapsed subscription as owned.
     Ok(sqlx::query_as::<_, EntitlementView>(
         "SELECT product_external_id, product_name, kind, status, granted_at, expires_at \
          FROM entitlements \
          WHERE tenant_id = $1 AND steam_id = $2 AND status = 'active' \
+           AND (expires_at IS NULL OR expires_at > now()) \
          ORDER BY granted_at DESC NULLS LAST",
     )
     .bind(tenant_id)

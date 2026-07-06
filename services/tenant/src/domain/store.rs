@@ -199,6 +199,9 @@ pub async fn upsert_connection(
              next_catalog_sync_at = now(), \
              claimed_by = NULL, \
              heartbeat_at = NULL, \
+             webhook_secret_enc = NULL, \
+             webhook_secret_dek = NULL, \
+             webhook_external_id = NULL, \
              updated_at = now() \
          RETURNING {CONN_COLS}"
     ))
@@ -242,6 +245,8 @@ pub async fn disconnect(
     let id: Option<Uuid> = sqlx::query_scalar(
         "UPDATE store_connections SET \
              status = 'disconnected', api_key_enc = NULL, api_key_dek = NULL, \
+             webhook_secret_enc = NULL, webhook_secret_dek = NULL, \
+             webhook_external_id = NULL, \
              last_error = NULL, updated_at = now() \
          WHERE tenant_id = $1 RETURNING id",
     )

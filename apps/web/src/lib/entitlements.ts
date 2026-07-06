@@ -15,7 +15,7 @@ export type Entitlement = {
   product_name: string | null;
   kind: string;
   status: string;
-  granted_at: string;
+  granted_at: string | null;
   // Null for one-time / non-expiring grants.
   expires_at: string | null;
 };

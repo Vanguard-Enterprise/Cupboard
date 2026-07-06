@@ -523,12 +523,16 @@ fn map_delivery_item(v: &serde_json::Value) -> Option<EntitlementRecord> {
         "usable" | "active" | "used" | "renewed" => EntitlementStatus::Active,
         "revoked" => EntitlementStatus::Revoked,
         "expired" => EntitlementStatus::Expired,
+        "refunded" => EntitlementStatus::Refunded,
+        "chargeback" => EntitlementStatus::Chargeback,
         other => {
-            tracing::debug!(
+            // Unknown states are treated conservatively as expired, NOT active: money is
+            // involved, so a state we do not recognize must never keep granting access.
+            tracing::warn!(
                 state = other,
-                "unknown delivery-item state; treating as active"
+                "unknown delivery-item state; treating as expired (no access)"
             );
-            EntitlementStatus::Active
+            EntitlementStatus::Expired
         }
     };
     let kind = if v
