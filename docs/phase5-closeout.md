@@ -26,19 +26,20 @@ precede the middleware-bearing web image).
 
 ## Secrets checklist (OpenBao)
 
-The OpenBao token in `~/.vault-token` is expired (403). Re-auth (OIDC) is required to
-populate the NEW Phase 5 keys. Use `bao kv patch` (never `put`, which would drop sibling
-keys). Mount `kv`, addr `https://openbao.vngenterprise.com`.
+Status: **the required keys are populated (2026-07-08)**. Addr
+`https://openbao.vngenterprise.com`, mount `kv`. When adding to an existing path use
+`bao kv patch` (never `put`, which drops sibling keys); a brand-new path uses `put`.
 
-| Key path | Property | Consumed as | Notes |
-|----------|----------|-------------|-------|
-| `cupboard/staging/tenant` | `master_key` | `TENANT_MASTER_KEY` (tenant) | NEW. 32-byte base64. Envelope-encrypts every provider credential + webhook secret. Absent -> commerce disabled (connect 503, no runner). |
-| `cupboard/staging/auth` | `player_jwt_private_key`, `player_jwt_public_key` | player JWT keypair (auth signs; tenant + web verify) | NEW. Ed25519 PKCS#8 PEM pair, DISJOINT from the operator keypair (the token-separation security boundary). Absent -> `/auth/player/*` and `/player/*` 503. |
-| `cupboard/staging/internal` | `api_token` | `INTERNAL_API_TOKEN` (auth + tenant) | NEW. Random. Guards the auth->tenant host-resolution call on the player-login path. Absent -> player login disabled (fails closed, never falls back to trusting the host). |
-| `cupboard/staging/auth` | `steam_web_api_key` | `STEAM_WEB_API_KEY` (auth) | OPTIONAL. Persona/avatar enrichment; login degrades to steamid-only without it. |
+| Key path | Property | Consumed as | Status |
+|----------|----------|-------------|--------|
+| `cupboard/staging/tenant` | `master_key` | `TENANT_MASTER_KEY` (tenant) | ✅ populated 2026-07-08 (32-byte base64). Envelope key for provider creds + webhook secrets. Absent -> commerce disabled. |
+| `cupboard/staging/auth` | `player_jwt_private_key`, `player_jwt_public_key` | player JWT keypair (auth signs; tenant + web verify) | ✅ populated 2026-07-08 (Ed25519 PKCS#8 pair, DISJOINT from the operator keypair). Absent -> `/auth/player/*` + `/player/*` 503. |
+| `cupboard/staging/internal` | `api_token` | `INTERNAL_API_TOKEN` (auth + tenant) | ✅ already present. Guards the auth->tenant host-resolution call; fails closed. |
+| `cupboard/staging/auth` | `steam_web_api_key` | `STEAM_WEB_API_KEY` (auth) | OPTIONAL, not set. Persona/avatar enrichment; login degrades to steamid-only. |
 
 Already present (pre-Phase-5): `cupboard/staging/pg/{cupboard,cupboard_app}`,
 `cupboard/staging/redis`, `cupboard/staging/auth/{jwt_private_key,jwt_public_key,token_pepper}`.
+Verified via a `vault-global-admin` OIDC login (2026-07-08).
 
 Per-tenant provider secrets (PayNow API key, Tebex Game-Server secret + webhook secret) are
 NOT OpenBao keys: operators enter them in the admin UI and they are sealed under
@@ -124,7 +125,8 @@ Evidence for the key cells:
 
 ## Remaining operator (Frank) prerequisites
 
-1. **OpenBao re-auth + populate** the four NEW keys above.
+1. ~~OpenBao secrets~~ **DONE 2026-07-08** (tenant `master_key` + auth player keypair
+   populated; internal `api_token` already present).
 2. **Router `internet:80 -> 10.1.50.175`** (+ confirm the `:443` forward) for HTTP-01.
 3. **A DNS-only test custom domain** CNAMEd to `edge.vngenterprise.com`.
 4. **A PayNow test store** (API key, free test mode) and/or **a Tebex test webstore**
