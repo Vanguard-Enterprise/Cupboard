@@ -41,6 +41,7 @@ export async function linkDiscord(): Promise<void> {
   if (!token) redirect("/login");
 
   const host = (await headers()).get("x-cb-site-host");
+  if (!host) redirect("/account?discord=error");
   const res = await fetch(`${gatewayBase()}/auth/player/discord/link`, {
     method: "POST",
     headers: {

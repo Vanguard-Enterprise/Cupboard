@@ -31,6 +31,23 @@ fn player_keys(state: &AppState) -> Result<&Arc<PlayerKeys>, AppError> {
         .ok_or_else(|| AppError::Unavailable("player login is not configured".into()))
 }
 
+/// Verify the `Authorization: Bearer <player-jwt>` with the PLAYER keypair and return its
+/// claims. Shared by every player endpoint that authenticates a token, so token validation
+/// lives in one place (503 when player auth is unconfigured, 401 on a missing/invalid one).
+pub(crate) fn verify_player_token(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<PlayerClaims, AppError> {
+    let keys = player_keys(state)?;
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(|| AppError::Unauthorized("missing player token".into()))?;
+    keys.decode(token)
+        .map_err(|_| AppError::Unauthorized("invalid or expired player token".into()))
+}
+
 fn mint_access(
     keys: &PlayerKeys,
     player_id: Uuid,
@@ -149,15 +166,7 @@ pub async fn me(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let keys = player_keys(&state)?;
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("missing bearer token".into()))?;
-    let claims = keys
-        .decode(token)
-        .map_err(|_| AppError::Unauthorized("invalid or expired player token".into()))?;
+    let claims = verify_player_token(&state, &headers)?;
 
     // Load the fresh profile + linked identities for display.
     let profile = sqlx::query_as::<_, (Option<String>, Option<String>)>(

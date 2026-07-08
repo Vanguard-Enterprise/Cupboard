@@ -65,6 +65,10 @@ pub fn router(state: AppState) -> Router {
             "/auth/player/discord/callback",
             get(player_discord::callback),
         )
+        .route(
+            "/auth/player/discord/complete",
+            post(player_discord::complete),
+        )
         .route("/auth/player/exchange", post(player::exchange))
         .route("/auth/player/refresh", post(player::refresh))
         .route("/auth/player/logout", post(player::logout))

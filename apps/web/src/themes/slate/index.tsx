@@ -7,12 +7,15 @@ import type { SiteConfig, ThemeDefinition, ThemeProps } from "@/themes/registry"
 import { siteDisplayName } from "@/themes/registry";
 
 function cssVariables(config: SiteConfig): CSSProperties {
+  const fg = config.colors?.foreground || "#0f172a";
   return {
     "--sf-primary": config.colors?.primary || "#4f46e5",
     "--sf-bg": config.colors?.background || "#f8fafc",
-    "--sf-fg": config.colors?.foreground || "#0f172a",
+    "--sf-fg": fg,
     "--sf-border": "rgba(15,23,42,0.12)",
-    "--sf-muted": "rgba(15,23,42,0.6)",
+    // Derived from fg so muted/secondary text tracks a customized foreground; equals
+    // rgba(15,23,42,0.6) on the default light palette.
+    "--sf-muted": `color-mix(in srgb, ${fg} 60%, transparent)`,
     "--sf-card": "rgba(15,23,42,0.035)",
     "--sf-on-primary": "#ffffff",
   } as CSSProperties;

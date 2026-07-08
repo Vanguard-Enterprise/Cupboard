@@ -5,14 +5,17 @@ import type { SiteConfig, ThemeDefinition, ThemeProps } from "@/themes/registry"
 import { siteDisplayName } from "@/themes/registry";
 
 function cssVariables(config: SiteConfig): CSSProperties {
+  const fg = config.colors?.foreground || "#fafafa";
   return {
     "--sf-primary": config.colors?.primary || "#f97316",
     "--sf-bg": config.colors?.background || "#0a0a0a",
-    "--sf-fg": config.colors?.foreground || "#fafafa",
+    "--sf-fg": fg,
     // Dark-palette values equal to Ember's former hardcoded classes, now exposed as the
     // shared contract so the standalone store/account/login pages can theme against them.
     "--sf-border": "rgba(255,255,255,0.1)",
-    "--sf-muted": "rgba(250,250,250,0.6)",
+    // Derived from fg so muted/secondary text tracks a customized foreground (matching the
+    // former text-[var(--sf-fg)]/60 behavior); equals rgba(250,250,250,0.6) on the default.
+    "--sf-muted": `color-mix(in srgb, ${fg} 60%, transparent)`,
     "--sf-card": "rgba(255,255,255,0.05)",
     "--sf-on-primary": "rgba(0,0,0,0.9)",
   } as CSSProperties;

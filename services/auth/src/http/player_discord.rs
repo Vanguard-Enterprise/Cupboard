@@ -16,23 +16,15 @@ use crate::config::PlayerAuthConfig;
 use crate::domain::{audit, players};
 use crate::error::AppError;
 use crate::http::oauth_discord::exchange_code_for_identity;
+use crate::http::player::verify_player_token;
 use crate::http::steam_openid::{resolve_tenant_for_host, valid_host};
 use crate::state::AppState;
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
-use cupboard_auth_core::PlayerKeys;
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
-
-fn player_keys(state: &AppState) -> Result<&Arc<PlayerKeys>, AppError> {
-    state
-        .player_keys
-        .as_ref()
-        .ok_or_else(|| AppError::Unavailable("player login is not configured".into()))
-}
 
 fn player_cfg(state: &AppState) -> Result<&PlayerAuthConfig, AppError> {
     state
@@ -63,22 +55,13 @@ pub async fn link_start(
     headers: HeaderMap,
     Json(req): Json<LinkStartRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let keys = player_keys(&state)?;
     let cfg = player_cfg(&state)?;
     let discord = state
         .config
         .discord
         .as_ref()
         .ok_or_else(discord_unconfigured)?;
-
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .ok_or_else(|| AppError::Unauthorized("missing player token".into()))?;
-    let claims = keys
-        .decode(token)
-        .map_err(|_| AppError::Unauthorized("invalid or expired player token".into()))?;
+    let claims = verify_player_token(&state, &headers)?;
 
     let site_host = req.site_host.trim().to_ascii_lowercase();
     if !valid_host(&site_host) {
@@ -129,8 +112,10 @@ pub struct CallbackParams {
     pub error: Option<String>,
 }
 
-/// GET /auth/player/discord/callback: complete the link and hand the browser back to the
-/// storefront account page.
+/// GET /auth/player/discord/callback: verify the OAuth result, then hand the browser back
+/// to the storefront with a ONE-TIME LINK CODE. It does NOT link here: the link is
+/// finalized by `complete` under the player's authenticated session, so a relayed/forced
+/// callback cannot bind an identity to an account that is not the completing session's.
 pub async fn callback(
     State(state): State<AppState>,
     Query(params): Query<CallbackParams>,
@@ -142,18 +127,18 @@ pub async fn callback(
         .as_ref()
         .ok_or_else(discord_unconfigured)?;
 
-    // Redeem the single-use state FIRST: it recovers the player + host authoritatively and
-    // is our CSRF guard. A tampered/expired/replayed state has no host to bounce to, so it
+    // Redeem the single-use state FIRST: it recovers the initiating player + host
+    // authoritatively. A tampered/expired/replayed state has no host to bounce to, so it
     // surfaces as an error rather than a redirect (rare; only a bad state reaches here).
     let state_token = params.state.unwrap_or_default();
     let redeemed =
         players::redeem_link_state(&state.owner_pool, &state_token, "discord", state.pepper())
             .await?;
-    let dest = |outcome: &str| format!("https://{}/account?discord={outcome}", redeemed.site_host);
+    let dest = |q: &str| format!("https://{}/account{q}", redeemed.site_host);
 
     // Discord bounced back an error (user denied) or omitted the code: send them home.
     let Some(code) = params.code.filter(|_| params.error.is_none()) else {
-        return Ok(Redirect::to(&dest("error")).into_response());
+        return Ok(Redirect::to(&dest("?discord=error")).into_response());
     };
 
     let redirect_uri = callback_url(cfg);
@@ -162,17 +147,60 @@ pub async fn callback(
             Ok(id) => id,
             Err(e) => {
                 tracing::warn!(error = %e, "discord link exchange failed");
-                return Ok(Redirect::to(&dest("error")).into_response());
+                return Ok(Redirect::to(&dest("?discord=error")).into_response());
             }
         };
 
-    match players::link_identity(
+    // Mint a one-time code carrying the verified identity + the initiating player, and hand
+    // the browser to the storefront where the player completes the link under their session.
+    let link_code = players::issue_link_code(
         &state.owner_pool,
         redeemed.player_account_id,
+        redeemed.tenant_id,
+        &redeemed.site_host,
         "discord",
         &identity.id,
         identity.display_name.as_deref(),
         identity.avatar_url.as_deref(),
+        state.pepper(),
+    )
+    .await?;
+
+    Ok(Redirect::to(&dest(&format!("/discord/complete?code={link_code}"))).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct CompleteRequest {
+    pub code: String,
+}
+
+/// POST /auth/player/discord/complete: finalize the link under the player's authenticated
+/// session. The link only lands if the completing player is the SAME player who initiated
+/// the flow (the code is bound to that player), so a relayed callback links nothing.
+pub async fn complete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CompleteRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claims = verify_player_token(&state, &headers)?;
+
+    let redeemed =
+        players::redeem_link_code(&state.owner_pool, req.code.trim(), state.pepper()).await?;
+    // The completing session MUST be the player who initiated the link (the CSRF fix), and
+    // the code must be for the player's own tenant (defense in depth).
+    if redeemed.player_account_id != claims.sub || redeemed.tenant_id != claims.tenant.0 {
+        return Err(AppError::Unauthorized(
+            "this link request was not started by you".into(),
+        ));
+    }
+
+    match players::link_identity(
+        &state.owner_pool,
+        redeemed.player_account_id,
+        &redeemed.provider,
+        &redeemed.subject,
+        redeemed.display_name.as_deref(),
+        redeemed.avatar_url.as_deref(),
     )
     .await
     {
@@ -187,10 +215,10 @@ pub async fn callback(
                 Some(json!({ "tenant": redeemed.tenant_id })),
             )
             .await;
-            Ok(Redirect::to(&dest("linked")).into_response())
+            Ok(Json(json!({ "outcome": "linked" })))
         }
         // The Discord account is already linked to a different player.
-        Err(AppError::Conflict(_)) => Ok(Redirect::to(&dest("conflict")).into_response()),
+        Err(AppError::Conflict(_)) => Ok(Json(json!({ "outcome": "conflict" }))),
         Err(e) => Err(e),
     }
 }

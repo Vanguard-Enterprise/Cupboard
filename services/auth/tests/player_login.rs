@@ -329,42 +329,35 @@ async fn discord_link_state_and_identity_rules() {
         "a link-state must not be redeemable twice"
     );
 
-    // Linking Discord is idempotent for the same account (no duplicate identity row).
-    let discord_id = format!("d{}", rand_suffix());
-    players::link_identity(
-        &owner,
-        player.id,
-        "discord",
-        &discord_id,
-        Some("cool"),
-        None,
-    )
-    .await
-    .unwrap();
-    players::link_identity(
-        &owner,
-        player.id,
-        "discord",
-        &discord_id,
-        Some("cool2"),
-        None,
-    )
-    .await
-    .unwrap();
+    // Linking Discord is idempotent for the same id (no duplicate identity row)...
+    let discord_a = format!("d{}", rand_suffix());
+    players::link_identity(&owner, player.id, "discord", &discord_a, Some("a"), None)
+        .await
+        .unwrap();
+    players::link_identity(&owner, player.id, "discord", &discord_a, Some("a2"), None)
+        .await
+        .unwrap();
+    // ...and re-linking a DIFFERENT Discord REPLACES the prior one (one per provider).
+    let discord_b = format!("d{}", rand_suffix());
+    players::link_identity(&owner, player.id, "discord", &discord_b, Some("b"), None)
+        .await
+        .unwrap();
     let identities = players::list_identities(&owner, player.id).await.unwrap();
     assert!(identities
         .iter()
         .any(|(p, s, _)| p == "steam" && s == &steam_id));
+    let discord: Vec<_> = identities
+        .iter()
+        .filter(|(p, _, _)| p == "discord")
+        .collect();
+    assert_eq!(discord.len(), 1, "exactly one Discord identity per account");
     assert_eq!(
-        identities
-            .iter()
-            .filter(|(p, s, _)| p == "discord" && s == &discord_id)
-            .count(),
-        1,
-        "re-linking the same Discord id must not duplicate"
+        discord[0].1, discord_b,
+        "the newest link replaces the prior"
     );
 
-    // The same Discord id cannot be linked to a DIFFERENT player.
+    // The current Discord id cannot be linked to a DIFFERENT player (global uniqueness),
+    // and the map to Conflict is race-safe (atomic upsert, no raw 23505 -> 500).
     let other = players::resolve_or_create(
         &owner,
         "steam",
@@ -374,12 +367,39 @@ async fn discord_link_state_and_identity_rules() {
     )
     .await
     .unwrap();
-    let err = players::link_identity(&owner, other.id, "discord", &discord_id, None, None)
+    let err = players::link_identity(&owner, other.id, "discord", &discord_b, None, None)
         .await
         .unwrap_err();
     assert!(
         matches!(err, cupboard_auth::error::AppError::Conflict(_)),
         "a Discord id already linked elsewhere must conflict"
+    );
+
+    // The one-time link code (the CSRF-fix handoff) is single-use and carries the identity.
+    let code = players::issue_link_code(
+        &owner,
+        player.id,
+        tenant.0,
+        SITE_HOST,
+        "discord",
+        &discord_b,
+        Some("b"),
+        None,
+        pepper,
+    )
+    .await
+    .unwrap();
+    let rc = players::redeem_link_code(&owner, &code, pepper)
+        .await
+        .unwrap();
+    assert_eq!(rc.player_account_id, player.id);
+    assert_eq!(rc.subject, discord_b);
+    assert_eq!(rc.tenant_id, tenant.0);
+    assert!(
+        players::redeem_link_code(&owner, &code, pepper)
+            .await
+            .is_err(),
+        "a link code must not be redeemable twice"
     );
 }
 

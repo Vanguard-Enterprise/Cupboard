@@ -133,48 +133,44 @@ pub async fn link_identity(
     avatar_url: Option<&str>,
 ) -> Result<(), AppError> {
     let mut tx = pool.begin().await?;
-    let owner: Option<Uuid> = sqlx::query_scalar(
-        "SELECT player_account_id FROM player_identities WHERE provider = $1 AND subject = $2 \
-         FOR UPDATE",
+    // One identity per (account, provider): a re-link REPLACES any prior identity of this
+    // provider on the account (so the account never accumulates stale rows).
+    sqlx::query(
+        "DELETE FROM player_identities \
+         WHERE player_account_id = $1 AND provider = $2 AND subject <> $3",
     )
+    .bind(player_id)
     .bind(provider)
     .bind(subject)
+    .execute(&mut *tx)
+    .await?;
+    // Claim the identity atomically against the global UNIQUE(provider, subject). The
+    // guarded upsert updates/inserts only when the (conflicting) row belongs to THIS
+    // account; if it belongs to a different player it is a no-op (RETURNING yields no row),
+    // which we surface as a Conflict without ever hitting a raw 23505 (race-safe, unlike a
+    // check-then-insert where a FOR UPDATE on a not-yet-existing row locks nothing).
+    let claimed: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO player_identities \
+             (player_account_id, provider, subject, display_name, avatar_url) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (provider, subject) DO UPDATE SET \
+             display_name = COALESCE(EXCLUDED.display_name, player_identities.display_name), \
+             avatar_url = COALESCE(EXCLUDED.avatar_url, player_identities.avatar_url) \
+         WHERE player_identities.player_account_id = $1 \
+         RETURNING player_account_id",
+    )
+    .bind(player_id)
+    .bind(provider)
+    .bind(subject)
+    .bind(display_name)
+    .bind(avatar_url)
     .fetch_optional(&mut *tx)
     .await?;
-    match owner {
-        Some(existing) if existing == player_id => {
-            sqlx::query(
-                "UPDATE player_identities SET display_name = COALESCE($3, display_name), \
-                     avatar_url = COALESCE($4, avatar_url) \
-                 WHERE provider = $1 AND subject = $2",
-            )
-            .bind(provider)
-            .bind(subject)
-            .bind(display_name)
-            .bind(avatar_url)
-            .execute(&mut *tx)
-            .await?;
-        }
-        Some(_) => {
-            tx.rollback().await?;
-            return Err(AppError::Conflict(
-                "that account is already linked to a different player".into(),
-            ));
-        }
-        None => {
-            sqlx::query(
-                "INSERT INTO player_identities \
-                     (player_account_id, provider, subject, display_name, avatar_url) \
-                 VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(player_id)
-            .bind(provider)
-            .bind(subject)
-            .bind(display_name)
-            .bind(avatar_url)
-            .execute(&mut *tx)
-            .await?;
-        }
+    if claimed.is_none() {
+        tx.rollback().await?;
+        return Err(AppError::Conflict(
+            "that account is already linked to a different player".into(),
+        ));
     }
     tx.commit().await?;
     Ok(())
@@ -259,6 +255,90 @@ pub async fn redeem_link_state(
         player_account_id: row.0,
         tenant_id: row.1,
         site_host: row.2,
+    })
+}
+
+/// One-time LINK CODE TTL: long enough for the OAuth callback -> storefront -> BFF
+/// complete hop, short enough that a leaked redirect URL is near-useless.
+const LINK_CODE_TTL_SECS: i64 = 60;
+
+/// Mint a one-time link code carrying a VERIFIED external identity + the initiating player,
+/// for the account-page complete step. Returns the raw code (goes only in the redirect
+/// URL); only its keyed hash is stored. This is the CSRF fix: the code binds the identity
+/// to the player who initiated the flow, and the link is only performed once the same
+/// authenticated player redeems it (so a relayed callback cannot link anyone to anyone).
+#[allow(clippy::too_many_arguments)]
+pub async fn issue_link_code(
+    pool: &PgPool,
+    player_id: Uuid,
+    tenant_id: Uuid,
+    site_host: &str,
+    provider: &str,
+    subject: &str,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+    pepper: &[u8],
+) -> Result<String, AppError> {
+    let code = cupboard_crypto::random_token();
+    let hash = cupboard_crypto::hash_token(&code, pepper);
+    let expires_at = Utc::now() + Duration::seconds(LINK_CODE_TTL_SECS);
+    sqlx::query(
+        "INSERT INTO player_link_codes \
+             (code_hash, player_account_id, provider, subject, display_name, avatar_url, \
+              tenant_id, site_host, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(hash)
+    .bind(player_id)
+    .bind(provider)
+    .bind(subject)
+    .bind(display_name)
+    .bind(avatar_url)
+    .bind(tenant_id)
+    .bind(site_host)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(code)
+}
+
+/// The verified identity + binding a redeemed link code carries into the complete step.
+pub struct RedeemedLinkCode {
+    pub player_account_id: Uuid,
+    pub tenant_id: Uuid,
+    pub provider: String,
+    pub subject: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+/// Atomically consume a link code (single-use, TTL-bound). Also prunes expired codes.
+pub async fn redeem_link_code(
+    pool: &PgPool,
+    code: &str,
+    pepper: &[u8],
+) -> Result<RedeemedLinkCode, AppError> {
+    let hash = cupboard_crypto::hash_token(code, pepper);
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, Option<String>)>(
+        "DELETE FROM player_link_codes WHERE code_hash = $1 AND expires_at > now() \
+         RETURNING player_account_id, tenant_id, provider, subject, display_name, avatar_url",
+    )
+    .bind(&hash)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::Unauthorized("link code is invalid, expired, or already used".into())
+    })?;
+    let _ = sqlx::query("DELETE FROM player_link_codes WHERE expires_at < now()")
+        .execute(pool)
+        .await;
+    Ok(RedeemedLinkCode {
+        player_account_id: row.0,
+        tenant_id: row.1,
+        provider: row.2,
+        subject: row.3,
+        display_name: row.4,
+        avatar_url: row.5,
     })
 }
 
