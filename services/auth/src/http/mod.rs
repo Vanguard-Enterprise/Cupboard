@@ -6,6 +6,7 @@ mod members;
 mod oauth_discord;
 mod orgs;
 mod player;
+mod player_discord;
 mod roles;
 mod steam_openid;
 
@@ -56,6 +57,14 @@ pub fn router(state: AppState) -> Router {
         // tokens use a separate keypair, so these never grant operator access.
         .route("/auth/player/steam/start", get(steam_openid::start))
         .route("/auth/player/steam/callback", get(steam_openid::callback))
+        .route(
+            "/auth/player/discord/link",
+            post(player_discord::link_start),
+        )
+        .route(
+            "/auth/player/discord/callback",
+            get(player_discord::callback),
+        )
         .route("/auth/player/exchange", post(player::exchange))
         .route("/auth/player/refresh", post(player::refresh))
         .route("/auth/player/logout", post(player::logout))

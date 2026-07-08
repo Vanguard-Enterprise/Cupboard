@@ -9,6 +9,7 @@
 //! Both routes return 503 when Discord is unconfigured (no client creds / cookie key).
 //! End-to-end exercise requires a registered Discord application.
 
+use crate::config::DiscordConfig;
 use crate::domain::{audit, users};
 use crate::error::AppError;
 use crate::http::auth::issue_session_for_org;
@@ -124,54 +125,24 @@ pub async fn callback(
         return Err(AppError::BadRequest("OAuth state mismatch".into()));
     }
 
-    // Exchange the code for an access token.
-    let token: serde_json::Value = state
-        .http
-        .post("https://discord.com/api/oauth2/token")
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("redirect_uri", discord.redirect_uri.as_str()),
-            ("client_id", discord.client_id.as_str()),
-            ("client_secret", discord.client_secret.as_str()),
-            ("code_verifier", verifier.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(upstream)?
-        .error_for_status()
-        .map_err(|_| AppError::Unauthorized("Discord token exchange failed".into()))?
-        .json()
-        .await
-        .map_err(upstream)?;
-    let access = token["access_token"]
-        .as_str()
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Discord returned no access_token")))?;
+    // Exchange the code + fetch the Discord profile (operator flow uses PKCE).
+    let identity = exchange_code_for_identity(
+        &state,
+        discord,
+        code.as_str(),
+        &discord.redirect_uri,
+        Some(&verifier),
+    )
+    .await?;
+    let display = identity.display_name.as_deref().unwrap_or("Discord User");
 
-    // Fetch the Discord profile.
-    let profile: serde_json::Value = state
-        .http
-        .get("https://discord.com/api/users/@me")
-        .bearer_auth(access)
-        .send()
-        .await
-        .map_err(upstream)?
-        .error_for_status()
-        .map_err(upstream)?
-        .json()
-        .await
-        .map_err(upstream)?;
-    let discord_id = profile["id"]
-        .as_str()
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Discord returned no user id")))?;
-    let email = profile["email"].as_str().filter(|e| !e.is_empty());
-    let display = profile["global_name"]
-        .as_str()
-        .or_else(|| profile["username"].as_str())
-        .unwrap_or("Discord User");
-
-    let user =
-        users::find_or_create_by_discord(&state.owner_pool, discord_id, email, display).await?;
+    let user = users::find_or_create_by_discord(
+        &state.owner_pool,
+        &identity.id,
+        identity.email.as_deref(),
+        display,
+    )
+    .await?;
     audit::record(
         &state.owner_pool,
         None,
@@ -194,4 +165,86 @@ pub async fn callback(
         .add(session_cookie("cb_refresh", tokens.refresh_token));
 
     Ok((signed, session, Redirect::to(&state.config.public_base_url)).into_response())
+}
+
+/// The Discord identity fields a callback needs.
+pub(crate) struct DiscordIdentity {
+    pub id: String,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+/// Exchange an OAuth `code` for the Discord identity (token exchange + `/users/@me`).
+/// `redirect_uri` MUST equal the one used in the authorize request. `verifier` is the PKCE
+/// code-verifier for flows that sent a code_challenge (operator login); the
+/// confidential-client player-link flow passes `None`. Shared by both Discord callbacks.
+pub(crate) async fn exchange_code_for_identity(
+    state: &AppState,
+    cfg: &DiscordConfig,
+    code: &str,
+    redirect_uri: &str,
+    verifier: Option<&str>,
+) -> Result<DiscordIdentity, AppError> {
+    let mut form: Vec<(&str, &str)> = vec![
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", cfg.client_id.as_str()),
+        ("client_secret", cfg.client_secret.as_str()),
+    ];
+    if let Some(v) = verifier {
+        form.push(("code_verifier", v));
+    }
+    let token: serde_json::Value = state
+        .http
+        .post("https://discord.com/api/oauth2/token")
+        .form(&form)
+        .send()
+        .await
+        .map_err(upstream)?
+        .error_for_status()
+        .map_err(|_| AppError::Unauthorized("Discord token exchange failed".into()))?
+        .json()
+        .await
+        .map_err(upstream)?;
+    let access = token["access_token"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Discord returned no access_token")))?;
+
+    let profile: serde_json::Value = state
+        .http
+        .get("https://discord.com/api/users/@me")
+        .bearer_auth(access)
+        .send()
+        .await
+        .map_err(upstream)?
+        .error_for_status()
+        .map_err(upstream)?
+        .json()
+        .await
+        .map_err(upstream)?;
+    let id = profile["id"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Discord returned no user id")))?
+        .to_string();
+    let email = profile["email"]
+        .as_str()
+        .filter(|e| !e.is_empty())
+        .map(str::to_string);
+    let display_name = profile["global_name"]
+        .as_str()
+        .or_else(|| profile["username"].as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let avatar_url = profile["avatar"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|hash| format!("https://cdn.discordapp.com/avatars/{id}/{hash}.png"));
+    Ok(DiscordIdentity {
+        id,
+        email,
+        display_name,
+        avatar_url,
+    })
 }

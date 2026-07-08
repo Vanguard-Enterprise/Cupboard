@@ -6,9 +6,9 @@
 export default function CheckoutReturnPage() {
   return (
     <div className="mx-auto max-w-md py-12 text-center">
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-8">
+      <div className="rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-8">
         <h1 className="text-2xl font-bold tracking-tight">Thanks for your purchase</h1>
-        <p className="mt-3 text-sm leading-relaxed text-[var(--sf-fg)]/70">
+        <p className="mt-3 text-sm leading-relaxed text-[var(--sf-muted)]">
           Your payment went through. It can take a moment for the purchase to appear on your
           account while we confirm it.
         </p>
@@ -16,13 +16,13 @@ export default function CheckoutReturnPage() {
         <div className="mt-8 flex flex-col gap-3">
           <a
             href="/account"
-            className="rounded-lg bg-[var(--sf-primary)] px-4 py-2.5 font-medium text-black/90 transition-opacity hover:opacity-90"
+            className="rounded-lg bg-[var(--sf-primary)] px-4 py-2.5 font-medium text-[var(--sf-on-primary)] transition-opacity hover:opacity-90"
           >
             View your purchases
           </a>
           <a
             href="/store"
-            className="rounded-lg border border-white/15 px-4 py-2.5 text-sm font-medium transition-colors hover:border-[var(--sf-primary)] hover:text-[var(--sf-primary)]"
+            className="rounded-lg border border-[var(--sf-border)] px-4 py-2.5 text-sm font-medium transition-colors hover:border-[var(--sf-primary)] hover:text-[var(--sf-primary)]"
           >
             Back to store
           </a>

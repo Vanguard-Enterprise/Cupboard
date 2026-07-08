@@ -3,7 +3,7 @@
 // Server Actions for the storefront player auth flow. Every gateway call is server-side;
 // the browser only ever follows a redirect these return. The tenant is resolved from the
 // verified x-cb-site-host header server-side and never taken from client input.
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { gatewayBase } from "@/lib/api";
 import { clearPlayerSession, playerRefreshToken } from "@/lib/player";
@@ -30,6 +30,33 @@ export async function startSteamLogin(): Promise<void> {
   // redirect() throws NEXT_REDIRECT; keep it out of any try/catch above.
   if (!target) redirect("/login?error=1");
   redirect(target);
+}
+
+/** Begin Discord account linking for the signed-in player: ask the gateway for the Discord
+ * authorize URL (bound to this host and the player's token) and send the browser there. The
+ * gateway callback returns the browser to /account?discord=(linked|conflict|error). A missing
+ * player session bounces to /login; any other failure returns to /account with an error flag. */
+export async function linkDiscord(): Promise<void> {
+  const token = (await cookies()).get("cb_player_access")?.value;
+  if (!token) redirect("/login");
+
+  const host = (await headers()).get("x-cb-site-host");
+  const res = await fetch(`${gatewayBase()}/auth/player/discord/link`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ site_host: host }),
+    cache: "no-store",
+  }).catch(() => null);
+
+  if (res && res.ok) {
+    const body = (await res.json().catch(() => null)) as { url?: unknown } | null;
+    // redirect() throws NEXT_REDIRECT; keep it out of any try/catch above.
+    if (body && typeof body.url === "string") redirect(body.url);
+  }
+  redirect("/account?discord=error");
 }
 
 /** Sign the player out: best-effort revoke at the gateway, drop the cookies, go home. */

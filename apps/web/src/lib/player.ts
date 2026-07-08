@@ -18,6 +18,9 @@ export type Player = {
   steam_id: string | null;
   display_name: string | null;
   avatar_url: string | null;
+  // Linked external accounts (Steam, Discord, ...). Older gateway builds may omit this,
+  // so getPlayer() defaults it to [].
+  identities: { provider: string; subject: string; display_name: string | null }[];
 };
 
 export type PlayerTokens = {
@@ -102,5 +105,5 @@ export async function getPlayer(): Promise<Player | null> {
   }
   if (!res.ok) return null;
   const body = (await res.json()) as { player: Player };
-  return body.player;
+  return { ...body.player, identities: body.player.identities ?? [] };
 }

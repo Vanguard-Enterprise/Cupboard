@@ -42,7 +42,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
 
 /// Themes the service accepts. Mirrored by the web theme registry
 /// (`apps/web/src/themes/registry.ts`); extend both together.
-pub const ALLOWED_THEMES: &[&str] = &["ember"];
+pub const ALLOWED_THEMES: &[&str] = &["ember", "slate"];
 
 /// Site config JSONB size ceiling; see `validate_config` for the field-level rules.
 const MAX_CONFIG_BYTES: usize = 32 * 1024;

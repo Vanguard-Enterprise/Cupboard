@@ -22,9 +22,9 @@ export default async function PlayerLoginPage({ searchParams }: Props) {
 
   return (
     <div className="mx-auto flex max-w-md flex-col items-center py-12">
-      <div className="w-full rounded-2xl border border-white/10 bg-white/5 p-8 text-center">
+      <div className="w-full rounded-2xl border border-[var(--sf-border)] bg-[var(--sf-card)] p-8 text-center">
         <h1 className="text-2xl font-bold tracking-tight">Sign in</h1>
-        <p className="mt-2 text-sm text-[var(--sf-fg)]/70">
+        <p className="mt-2 text-sm text-[var(--sf-muted)]">
           Sign in with your Steam account to manage your purchases.
         </p>
 
@@ -37,7 +37,7 @@ export default async function PlayerLoginPage({ searchParams }: Props) {
         <form action={startSteamLogin} className="mt-8">
           <button
             type="submit"
-            className="w-full rounded-lg bg-[var(--sf-primary)] px-4 py-3 font-semibold text-black/90 transition-opacity hover:opacity-90"
+            className="w-full rounded-lg bg-[var(--sf-primary)] px-4 py-3 font-semibold text-[var(--sf-on-primary)] transition-opacity hover:opacity-90"
           >
             Sign in with Steam
           </button>

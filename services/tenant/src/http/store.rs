@@ -239,13 +239,38 @@ pub async fn list_products(
     Ok(Json(json!({ "products": products })))
 }
 
-/// GET /store/entitlements: recent entitlements for the admin dashboard.
+#[derive(Deserialize)]
+pub struct EntitlementsQuery {
+    /// Optional filter to one player's entitlements (the admin player-profile card).
+    #[serde(default)]
+    pub steam_id: Option<String>,
+}
+
+/// GET /store/entitlements[?steam_id=]: recent entitlements for the admin dashboard, or a
+/// single player's when `steam_id` is given (the player-profile card).
 pub async fn list_entitlements(
     State(state): State<AppState>,
     claims: AuthClaims,
+    axum::extract::Query(query): axum::extract::Query<EntitlementsQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let org = claims.require(Permission::StoreManage)?;
-    let list =
-        crate::domain::entitlements::list_admin(&state.app_pool, TenantId::from(org), 200).await?;
+    let tenant = TenantId::from(org);
+    let list = match query
+        .steam_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(steam_id) => {
+            crate::domain::entitlements::list_admin_for_steam(
+                &state.app_pool,
+                tenant,
+                steam_id,
+                100,
+            )
+            .await?
+        }
+        None => crate::domain::entitlements::list_admin(&state.app_pool, tenant, 200).await?,
+    };
     Ok(Json(json!({ "entitlements": list })))
 }

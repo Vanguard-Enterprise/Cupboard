@@ -117,6 +117,151 @@ pub async fn resolve_or_create(
     Ok(PlayerAccount { id: account_id })
 }
 
+/// Link-state TTL: long enough for the browser -> Discord -> callback roundtrip.
+const LINK_STATE_TTL_SECS: i64 = 600;
+
+/// Link an external identity to an EXISTING player account (the account-page "link"
+/// action). Idempotent when re-linking the same identity to the same account; errors if
+/// the identity already belongs to a DIFFERENT account (identities are globally unique per
+/// provider, so one Discord account maps to one player).
+pub async fn link_identity(
+    pool: &PgPool,
+    player_id: Uuid,
+    provider: &str,
+    subject: &str,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    let owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT player_account_id FROM player_identities WHERE provider = $1 AND subject = $2 \
+         FOR UPDATE",
+    )
+    .bind(provider)
+    .bind(subject)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match owner {
+        Some(existing) if existing == player_id => {
+            sqlx::query(
+                "UPDATE player_identities SET display_name = COALESCE($3, display_name), \
+                     avatar_url = COALESCE($4, avatar_url) \
+                 WHERE provider = $1 AND subject = $2",
+            )
+            .bind(provider)
+            .bind(subject)
+            .bind(display_name)
+            .bind(avatar_url)
+            .execute(&mut *tx)
+            .await?;
+        }
+        Some(_) => {
+            tx.rollback().await?;
+            return Err(AppError::Conflict(
+                "that account is already linked to a different player".into(),
+            ));
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO player_identities \
+                     (player_account_id, provider, subject, display_name, avatar_url) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(player_id)
+            .bind(provider)
+            .bind(subject)
+            .bind(display_name)
+            .bind(avatar_url)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A player's linked identities (provider, subject, display name) for the account page.
+pub async fn list_identities(
+    pool: &PgPool,
+    player_id: Uuid,
+) -> Result<Vec<(String, String, Option<String>)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT provider, subject, display_name FROM player_identities \
+         WHERE player_account_id = $1 ORDER BY linked_at",
+    )
+    .bind(player_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Mint a single-use link-state token binding a player + storefront for an OAuth link
+/// callback. Returns the raw state (goes only in the OAuth `state` param); only its keyed
+/// hash is stored.
+pub async fn create_link_state(
+    pool: &PgPool,
+    player_id: Uuid,
+    tenant: OrgId,
+    site_host: &str,
+    provider: &str,
+    pepper: &[u8],
+) -> Result<String, AppError> {
+    let state = cupboard_crypto::random_token();
+    let hash = cupboard_crypto::hash_token(&state, pepper);
+    let expires_at = Utc::now() + Duration::seconds(LINK_STATE_TTL_SECS);
+    sqlx::query(
+        "INSERT INTO player_link_states \
+             (state_hash, player_account_id, tenant_id, site_host, provider, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(hash)
+    .bind(player_id)
+    .bind(tenant.0)
+    .bind(site_host)
+    .bind(provider)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(state)
+}
+
+/// The binding a redeemed link-state carries into the callback.
+pub struct RedeemedLinkState {
+    pub player_account_id: Uuid,
+    pub tenant_id: Uuid,
+    pub site_host: String,
+}
+
+/// Atomically consume a link-state token (single-use, TTL-bound, provider-scoped). Also
+/// prunes expired states.
+pub async fn redeem_link_state(
+    pool: &PgPool,
+    state: &str,
+    provider: &str,
+    pepper: &[u8],
+) -> Result<RedeemedLinkState, AppError> {
+    let hash = cupboard_crypto::hash_token(state, pepper);
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        "DELETE FROM player_link_states \
+         WHERE state_hash = $1 AND provider = $2 AND expires_at > now() \
+         RETURNING player_account_id, tenant_id, site_host",
+    )
+    .bind(&hash)
+    .bind(provider)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::Unauthorized("link request is invalid, expired, or already used".into())
+    })?;
+    let _ = sqlx::query("DELETE FROM player_link_states WHERE expires_at < now()")
+        .execute(pool)
+        .await;
+    Ok(RedeemedLinkState {
+        player_account_id: row.0,
+        tenant_id: row.1,
+        site_host: row.2,
+    })
+}
+
 /// Record a Steam OpenID response nonce; returns `false` if it was already seen (replay).
 /// Also opportunistically prunes expired nonces.
 pub async fn record_nonce(pool: &PgPool, nonce: &str, pepper: &[u8]) -> Result<bool, AppError> {

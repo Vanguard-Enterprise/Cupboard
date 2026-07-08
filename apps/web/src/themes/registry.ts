@@ -7,6 +7,7 @@ import type { ResolvedSite } from "@/lib/site";
 import type { SiteConfig } from "@/themes/catalog";
 import { DEFAULT_THEME_ID } from "@/themes/catalog";
 import { ember } from "@/themes/ember";
+import { slate } from "@/themes/slate";
 
 export type { SiteConfig } from "@/themes/catalog";
 export { DEFAULT_THEME_ID } from "@/themes/catalog";
@@ -29,6 +30,7 @@ export type ThemeDefinition = {
 
 const THEMES: Record<string, ThemeDefinition> = {
   [ember.id]: ember,
+  [slate.id]: slate,
 };
 
 export function getTheme(themeId: string): ThemeDefinition {

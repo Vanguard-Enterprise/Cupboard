@@ -298,6 +298,91 @@ async fn operator_and_player_tokens_are_mutually_rejected() {
     );
 }
 
+/// PR7 player Discord link: the single-use link-state and the link-identity rules
+/// (idempotent re-link, global uniqueness per provider) at the domain layer.
+#[tokio::test]
+async fn discord_link_state_and_identity_rules() {
+    let Some(owner) = setup().await else {
+        eprintln!("SKIP discord_link_state_and_identity_rules: TEST_DATABASE_URL unset");
+        return;
+    };
+    let pepper = PEPPER.as_bytes();
+    let steam_id = format!("7656119{}", rand_suffix());
+    let player = players::resolve_or_create(&owner, "steam", &steam_id, Some("P"), None)
+        .await
+        .unwrap();
+    let tenant = OrgId(Uuid::new_v4());
+
+    // Link-state is single-use.
+    let st = players::create_link_state(&owner, player.id, tenant, SITE_HOST, "discord", pepper)
+        .await
+        .unwrap();
+    let redeemed = players::redeem_link_state(&owner, &st, "discord", pepper)
+        .await
+        .unwrap();
+    assert_eq!(redeemed.player_account_id, player.id);
+    assert_eq!(redeemed.site_host, SITE_HOST);
+    assert!(
+        players::redeem_link_state(&owner, &st, "discord", pepper)
+            .await
+            .is_err(),
+        "a link-state must not be redeemable twice"
+    );
+
+    // Linking Discord is idempotent for the same account (no duplicate identity row).
+    let discord_id = format!("d{}", rand_suffix());
+    players::link_identity(
+        &owner,
+        player.id,
+        "discord",
+        &discord_id,
+        Some("cool"),
+        None,
+    )
+    .await
+    .unwrap();
+    players::link_identity(
+        &owner,
+        player.id,
+        "discord",
+        &discord_id,
+        Some("cool2"),
+        None,
+    )
+    .await
+    .unwrap();
+    let identities = players::list_identities(&owner, player.id).await.unwrap();
+    assert!(identities
+        .iter()
+        .any(|(p, s, _)| p == "steam" && s == &steam_id));
+    assert_eq!(
+        identities
+            .iter()
+            .filter(|(p, s, _)| p == "discord" && s == &discord_id)
+            .count(),
+        1,
+        "re-linking the same Discord id must not duplicate"
+    );
+
+    // The same Discord id cannot be linked to a DIFFERENT player.
+    let other = players::resolve_or_create(
+        &owner,
+        "steam",
+        &format!("7656119{}", rand_suffix()),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let err = players::link_identity(&owner, other.id, "discord", &discord_id, None, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, cupboard_auth::error::AppError::Conflict(_)),
+        "a Discord id already linked elsewhere must conflict"
+    );
+}
+
 // A cheap unique-ish suffix without pulling `rand` into the test (Uuid is already a dep).
 fn rand_suffix() -> u64 {
     let u = Uuid::new_v4().as_u128();

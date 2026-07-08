@@ -159,7 +159,7 @@ pub async fn me(
         .decode(token)
         .map_err(|_| AppError::Unauthorized("invalid or expired player token".into()))?;
 
-    // Load the fresh profile for display.
+    // Load the fresh profile + linked identities for display.
     let profile = sqlx::query_as::<_, (Option<String>, Option<String>)>(
         "SELECT display_name, avatar_url FROM player_accounts WHERE id = $1",
     )
@@ -168,6 +168,14 @@ pub async fn me(
     .await?;
     let (display_name, avatar_url) = profile.unwrap_or((None, None));
 
+    let identities = players::list_identities(&state.owner_pool, claims.sub).await?;
+    let identities: Vec<serde_json::Value> = identities
+        .into_iter()
+        .map(|(provider, subject, name)| {
+            json!({ "provider": provider, "subject": subject, "display_name": name })
+        })
+        .collect();
+
     Ok(Json(json!({
         "player": {
             "id": claims.sub,
@@ -175,6 +183,7 @@ pub async fn me(
             "steam_id": claims.steam_id,
             "display_name": display_name,
             "avatar_url": avatar_url,
+            "identities": identities,
         }
     })))
 }

@@ -361,3 +361,27 @@ pub async fn list_admin(
     tx.commit().await?;
     Ok(rows)
 }
+
+/// A single player's entitlements for the admin player-profile card, by Steam id (app
+/// pool, RLS + explicit tenant filter). Newest first, capped.
+pub async fn list_admin_for_steam(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    steam_id: &str,
+    limit: i64,
+) -> Result<Vec<AdminEntitlementView>, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let rows = sqlx::query_as::<_, AdminEntitlementView>(
+        "SELECT steam_id, product_name, kind, status, granted_at, expires_at, source, \
+                updated_at \
+         FROM entitlements WHERE tenant_id = $1 AND steam_id = $2 \
+         ORDER BY updated_at DESC LIMIT $3",
+    )
+    .bind(tenant.0)
+    .bind(steam_id)
+    .bind(limit)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}

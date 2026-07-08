@@ -37,8 +37,9 @@ fn player_config(state: &AppState) -> Result<&PlayerAuthConfig, AppError> {
 }
 
 /// A tenant storefront host is an internet-tainted value the BFF forwards; accept only
-/// plausible DNS names so we never build an odd `return_to` or open redirect.
-fn valid_host(host: &str) -> bool {
+/// plausible DNS names so we never build an odd `return_to` or open redirect. Shared with
+/// the player Discord link flow.
+pub(crate) fn valid_host(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 253
         && host
@@ -235,8 +236,9 @@ pub async fn callback(
 
 /// Authoritatively resolve a storefront host to its owning tenant via the tenant
 /// service's internal endpoint. A host that is not a real storefront (404) is rejected,
-/// which is what makes the login-code handoff safe against attacker-supplied hosts.
-async fn resolve_tenant_for_host(
+/// which is what makes the login-code handoff safe against attacker-supplied hosts. Shared
+/// with the player Discord link flow (which requires the host to be the player's tenant).
+pub(crate) async fn resolve_tenant_for_host(
     state: &AppState,
     cfg: &PlayerAuthConfig,
     site_host: &str,

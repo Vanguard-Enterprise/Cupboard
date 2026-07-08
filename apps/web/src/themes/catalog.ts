@@ -21,6 +21,9 @@ export type SiteConfig = {
   links?: { label?: string; url?: string }[];
 };
 
-export const THEME_CHOICES = [{ id: "ember", name: "Ember" }] as const;
+export const THEME_CHOICES = [
+  { id: "ember", name: "Ember" },
+  { id: "slate", name: "Slate" },
+] as const;
 
 export const DEFAULT_THEME_ID = "ember";

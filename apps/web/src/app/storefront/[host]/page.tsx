@@ -44,7 +44,7 @@ function StoreTeaser({
   storeName?: string | null;
 }) {
   return (
-    <section className="mt-16 border-t border-white/10 pt-12">
+    <section className="mt-16 border-t border-[var(--sf-border)] pt-12">
       <div className="mb-6 flex items-baseline justify-between gap-4">
         <h2 className="text-xl font-semibold">{storeName?.trim() || "From the store"}</h2>
         <a
@@ -59,7 +59,7 @@ function StoreTeaser({
           <a
             key={p.external_id}
             href={`/store/${p.external_id}`}
-            className={`group flex flex-col overflow-hidden rounded-lg border border-white/10 transition-colors hover:border-[var(--sf-primary)] ${
+            className={`group flex flex-col overflow-hidden rounded-lg border border-[var(--sf-border)] transition-colors hover:border-[var(--sf-primary)] ${
               p.available ? "" : "opacity-60"
             }`}
           >
@@ -69,11 +69,11 @@ function StoreTeaser({
               // eslint-disable-next-line @next/next/no-img-element
               <img src={p.image_url} alt={p.name} className="aspect-video w-full object-cover" />
             ) : (
-              <div aria-hidden className="aspect-video w-full bg-white/5" />
+              <div aria-hidden className="aspect-video w-full bg-[var(--sf-card)]" />
             )}
             <div className="flex flex-1 flex-col gap-1 p-3">
               <span className="text-sm font-medium leading-snug">{p.name}</span>
-              <span className="mt-auto text-sm text-[var(--sf-fg)]/70">
+              <span className="mt-auto text-sm text-[var(--sf-muted)]">
                 {p.available ? teaserPrice(p) : "Sold out"}
               </span>
             </div>

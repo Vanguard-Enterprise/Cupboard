@@ -38,7 +38,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
 
       <a
         href="/store"
-        className="inline-flex items-center gap-1 text-sm text-[var(--sf-fg)]/70 transition-colors hover:text-[var(--sf-primary)]"
+        className="inline-flex items-center gap-1 text-sm text-[var(--sf-muted)] transition-colors hover:text-[var(--sf-primary)]"
       >
         <span aria-hidden>&larr;</span> Back to store
       </a>
@@ -52,10 +52,10 @@ export default async function ProductPage({ params, searchParams }: Props) {
             <img
               src={product.image_url}
               alt={product.name}
-              className="w-full rounded-lg border border-white/10 object-cover"
+              className="w-full rounded-lg border border-[var(--sf-border)] object-cover"
             />
           ) : (
-            <div aria-hidden className="aspect-video w-full rounded-lg border border-white/10 bg-white/5" />
+            <div aria-hidden className="aspect-video w-full rounded-lg border border-[var(--sf-border)] bg-[var(--sf-card)]" />
           )}
         </div>
 
@@ -84,7 +84,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 </p>
               )
             ) : (
-              <span className="inline-block rounded bg-white/10 px-3 py-1 text-sm font-medium text-[var(--sf-fg)]/70">
+              <span className="inline-block rounded bg-[var(--sf-card)] px-3 py-1 text-sm font-medium text-[var(--sf-muted)]">
                 Sold out
               </span>
             )}
@@ -104,7 +104,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 <form action={startCheckout.bind(null, product.external_id)}>
                   <button
                     type="submit"
-                    className="rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-black/90 transition-opacity hover:opacity-90"
+                    className="rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-[var(--sf-on-primary)] transition-opacity hover:opacity-90"
                   >
                     Buy now
                   </button>
@@ -113,7 +113,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
                 <button
                   type="button"
                   disabled
-                  className="cursor-not-allowed rounded-md bg-white/10 px-5 py-2.5 font-medium text-[var(--sf-fg)]/70 opacity-60"
+                  className="cursor-not-allowed rounded-md bg-[var(--sf-card)] px-5 py-2.5 font-medium text-[var(--sf-muted)] opacity-60"
                 >
                   Sold out
                 </button>
@@ -122,7 +122,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
               <>
                 <a
                   href="/login"
-                  className="inline-block rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-black/90 transition-opacity hover:opacity-90"
+                  className="inline-block rounded-md bg-[var(--sf-primary)] px-5 py-2.5 font-medium text-[var(--sf-on-primary)] transition-opacity hover:opacity-90"
                 >
                   Sign in to purchase
                 </a>

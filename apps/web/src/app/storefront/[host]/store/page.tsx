@@ -43,7 +43,7 @@ export default async function StorePage() {
       </header>
 
       {empty ? (
-        <p className="text-[var(--sf-fg)]/70">No products are available right now.</p>
+        <p className="text-[var(--sf-muted)]">No products are available right now.</p>
       ) : null}
 
       {sections.map((s) => (
@@ -72,7 +72,7 @@ function ProductCard({ product }: { product: CatalogProduct }) {
   return (
     <a
       href={`/store/${product.external_id}`}
-      className={`group flex flex-col overflow-hidden rounded-lg border border-white/10 transition-colors hover:border-[var(--sf-primary)] ${
+      className={`group flex flex-col overflow-hidden rounded-lg border border-[var(--sf-border)] transition-colors hover:border-[var(--sf-primary)] ${
         product.available ? "" : "opacity-60"
       }`}
     >
@@ -82,7 +82,7 @@ function ProductCard({ product }: { product: CatalogProduct }) {
         // eslint-disable-next-line @next/next/no-img-element
         <img src={product.image_url} alt={product.name} className="aspect-video w-full object-cover" />
       ) : (
-        <div aria-hidden className="aspect-video w-full bg-white/5" />
+        <div aria-hidden className="aspect-video w-full bg-[var(--sf-card)]" />
       )}
       <div className="flex flex-1 flex-col gap-2 p-4">
         <div className="flex items-start justify-between gap-2">
@@ -97,7 +97,7 @@ function ProductCard({ product }: { product: CatalogProduct }) {
           {product.available ? (
             <PriceBlock product={product} />
           ) : (
-            <span className="inline-block rounded bg-white/10 px-2 py-0.5 text-xs font-medium text-[var(--sf-fg)]/70">
+            <span className="inline-block rounded bg-[var(--sf-card)] px-2 py-0.5 text-xs font-medium text-[var(--sf-muted)]">
               Sold out
             </span>
           )}

@@ -9,6 +9,12 @@ function cssVariables(config: SiteConfig): CSSProperties {
     "--sf-primary": config.colors?.primary || "#f97316",
     "--sf-bg": config.colors?.background || "#0a0a0a",
     "--sf-fg": config.colors?.foreground || "#fafafa",
+    // Dark-palette values equal to Ember's former hardcoded classes, now exposed as the
+    // shared contract so the standalone store/account/login pages can theme against them.
+    "--sf-border": "rgba(255,255,255,0.1)",
+    "--sf-muted": "rgba(250,250,250,0.6)",
+    "--sf-card": "rgba(255,255,255,0.05)",
+    "--sf-on-primary": "rgba(0,0,0,0.9)",
   } as CSSProperties;
 }
 
@@ -17,7 +23,7 @@ function Shell({ site, config, children }: ThemeProps & { children: ReactNode })
   const links = (config.links ?? []).filter((l) => l.label && l.url);
   return (
     <div className="flex min-h-screen flex-col bg-[var(--sf-bg)] text-[var(--sf-fg)]">
-      <header className="border-b border-white/10">
+      <header className="border-b border-[var(--sf-border)]">
         <div className="mx-auto flex max-w-5xl items-center gap-4 px-6 py-4">
           {config.logo_url ? (
             // Tenant-supplied remote URL: a plain <img> (next/image would need the host
@@ -27,7 +33,7 @@ function Shell({ site, config, children }: ThemeProps & { children: ReactNode })
           ) : (
             <div
               aria-hidden
-              className="flex h-9 w-9 items-center justify-center rounded bg-[var(--sf-primary)] font-bold text-black/80"
+              className="flex h-9 w-9 items-center justify-center rounded bg-[var(--sf-primary)] font-bold text-[var(--sf-on-primary)]"
             >
               {name.slice(0, 1).toUpperCase()}
             </div>
@@ -49,7 +55,7 @@ function Shell({ site, config, children }: ThemeProps & { children: ReactNode })
         </div>
       </header>
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-10">{children}</main>
-      <footer className="border-t border-white/10 py-6 text-center text-xs text-[var(--sf-fg)]/50">
+      <footer className="border-t border-[var(--sf-border)] py-6 text-center text-xs text-[var(--sf-fg)]/50">
         {name} · powered by Cupboard
       </footer>
     </div>
@@ -65,7 +71,7 @@ function HomePage({ site, config }: ThemeProps) {
       <section className="py-12 text-center">
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">{title}</h1>
         {subtitle ? (
-          <p className="mx-auto mt-4 max-w-2xl text-lg text-[var(--sf-fg)]/70">{subtitle}</p>
+          <p className="mx-auto mt-4 max-w-2xl text-lg text-[var(--sf-muted)]">{subtitle}</p>
         ) : null}
         <div
           aria-hidden
