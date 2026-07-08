@@ -212,6 +212,61 @@ pub async fn create_checkout(
     Ok(id)
 }
 
+/// A checkout session as the two-leg (Tebex) continue path needs it.
+#[derive(Debug, sqlx::FromRow)]
+pub struct CheckoutSession {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub player_account_id: Option<Uuid>,
+    pub steam_id: Option<String>,
+    pub product_external_id: String,
+    pub quantity: i32,
+    pub provider_ref: Option<String>,
+    pub status: String,
+}
+
+/// Load a checkout session by id (app pool, tenant-scoped) for the continue leg.
+pub async fn get_checkout_session(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    id: Uuid,
+) -> Result<Option<CheckoutSession>, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let row = sqlx::query_as::<_, CheckoutSession>(
+        "SELECT id, connection_id, player_account_id, steam_id, product_external_id, \
+                quantity, provider_ref, status \
+         FROM checkout_sessions WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant.0)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(row)
+}
+
+/// Record the provider-side reference (Tebex basket ident / PayNow checkout id) once
+/// `begin_checkout` returns it.
+pub async fn set_checkout_provider_ref(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    id: Uuid,
+    provider_ref: &str,
+) -> Result<(), AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    sqlx::query(
+        "UPDATE checkout_sessions SET provider_ref = $3, updated_at = now() \
+         WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant.0)
+    .bind(id)
+    .bind(provider_ref)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 // ============================ Reads ============================
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

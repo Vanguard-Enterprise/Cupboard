@@ -10,8 +10,9 @@
 
 use crate::cache::{CacheKey, SiteCache};
 use crate::domain::store::{self, StoreConnection};
-use crate::providers::paynow::PayNowClient;
-use crate::providers::{ProviderError, ProviderKind, StoreProvider};
+use crate::providers::{
+    build_client, AnyProvider, ProviderBases, ProviderError, ProviderKind, StoreProvider,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,12 +23,13 @@ const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
 /// Entitlement reconcile cadence (the authoritative backstop for webhook gaps).
 const RECONCILE_EVERY: Duration = Duration::from_secs(15 * 60);
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     pool: sqlx::PgPool,
     cache: SiteCache,
     conn: StoreConnection,
     master_key: [u8; 32],
-    paynow_base: String,
+    bases: ProviderBases,
     webhook_base: Option<String>,
     claimer: String,
 ) {
@@ -82,17 +84,7 @@ pub async fn run(
         let _ = store::release_claim(&pool, connection_id, &claimer).await;
         return;
     };
-    let client = match provider {
-        ProviderKind::PayNow => {
-            PayNowClient::new(paynow_base, api_key, Some(conn.store_external_id.clone()))
-        }
-        ProviderKind::Tebex => {
-            // PR6; the connect endpoint refuses tebex rows until then.
-            tracing::error!(connection = %connection_id, "tebex runner not implemented yet");
-            let _ = store::release_claim(&pool, connection_id, &claimer).await;
-            return;
-        }
-    };
+    let client = build_client(provider, api_key, conn.store_external_id.clone(), &bases);
 
     // Background heartbeat; flips `lost` when a takeover is detected.
     let lost = Arc::new(AtomicBool::new(false));
@@ -195,7 +187,7 @@ pub async fn run(
 async fn register_webhook(
     pool: &sqlx::PgPool,
     conn: &StoreConnection,
-    client: &PayNowClient,
+    client: &AnyProvider,
     claimer: &str,
     key_fence: &[u8],
     webhook_base: &str,
@@ -248,7 +240,7 @@ const RECONCILE_PAGE_CAP: usize = 100;
 async fn reconcile_entitlements(
     pool: &sqlx::PgPool,
     conn: &StoreConnection,
-    client: &PayNowClient,
+    client: &AnyProvider,
     tenant_id: uuid::Uuid,
 ) {
     let mut cursor: Option<String> = None;
@@ -312,7 +304,7 @@ async fn sync_catalog(
     pool: &sqlx::PgPool,
     cache: &SiteCache,
     conn: &StoreConnection,
-    client: &PayNowClient,
+    client: &AnyProvider,
     claimer: &str,
     key_fence: &[u8],
     tenant_id: uuid::Uuid,

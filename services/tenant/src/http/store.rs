@@ -7,7 +7,8 @@ use crate::domain::store;
 use crate::error::AppError;
 use crate::http::AuthClaims;
 use crate::providers::paynow::PayNowClient;
-use crate::providers::{ProviderError, ProviderKind, StoreProvider};
+use crate::providers::tebex::TebexClient;
+use crate::providers::{ProviderError, ProviderKind, StoreInfo, StoreProvider};
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -19,20 +20,64 @@ use serde_json::json;
 #[derive(Deserialize)]
 pub struct ConnectRequest {
     pub provider: String,
+    /// The secret credential: PayNow API key, or the Tebex Game Server secret key.
     pub api_key: String,
-    /// Required when the key can reach more than one store.
+    /// PayNow: optional, required only when the key reaches more than one store. Tebex:
+    /// REQUIRED, the public/project token that identifies the store in Headless URLs.
     #[serde(default)]
     pub store_id: Option<String>,
 }
 
-/// GET /store: the connection view (never the key) or `{"connection": null}`.
+#[derive(Deserialize)]
+pub struct WebhookSecretRequest {
+    pub secret: String,
+}
+
+/// GET /store: the connection view (never the key) or `{"connection": null}`. For Tebex,
+/// fills the manual-registration `webhook_url` from `PUBLIC_WEBHOOK_BASE`.
 pub async fn get_store(
     State(state): State<AppState>,
     claims: AuthClaims,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let org = claims.require(Permission::StoreManage)?;
-    let view = store::connection_view(&state.app_pool, TenantId::from(org)).await?;
+    let view = view_with_webhook(&state, TenantId::from(org)).await?;
     Ok(Json(json!({ "connection": view })))
+}
+
+/// Fetch the connection view and, for Tebex, fill the manual-registration `webhook_url`
+/// from `PUBLIC_WEBHOOK_BASE`.
+async fn view_with_webhook(
+    state: &AppState,
+    tenant: TenantId,
+) -> Result<Option<store::ConnectionView>, AppError> {
+    let mut view = store::connection_view(&state.app_pool, tenant).await?;
+    if let Some(v) = view.as_mut() {
+        if v.provider == ProviderKind::Tebex.as_str() {
+            if let Some(base) = &state.config.public_webhook_base {
+                v.webhook_url = Some(format!(
+                    "{}/webhooks/{}/{}",
+                    base.trim_end_matches('/'),
+                    ProviderKind::Tebex.as_str(),
+                    v.connection_id
+                ));
+            }
+        }
+    }
+    Ok(view)
+}
+
+/// Map a connect-time probe failure to a caller-facing error (BM connect discipline: the
+/// operator sees whether it was a bad key, a rejection, or an unreachable provider).
+fn connect_probe_error(e: ProviderError) -> AppError {
+    match e {
+        ProviderError::Auth(e) => {
+            AppError::BadRequest(format!("the provider rejected these credentials: {e}"))
+        }
+        ProviderError::Rejected(e) => AppError::BadRequest(e),
+        ProviderError::Transient(e) => {
+            AppError::Unavailable(format!("could not reach the provider: {e}"))
+        }
+    }
 }
 
 /// POST /store/connection: probe-before-store (BM connect discipline). Only a
@@ -54,11 +99,6 @@ pub async fn connect(
         .trim()
         .parse::<ProviderKind>()
         .map_err(|_| AppError::BadRequest(format!("unknown provider \"{}\"", req.provider)))?;
-    if provider == ProviderKind::Tebex {
-        return Err(AppError::BadRequest(
-            "Tebex support is coming later in Phase 5; connect a PayNow store for now".into(),
-        ));
-    }
     let api_key = req.api_key.trim().to_string();
     if api_key.is_empty() {
         return Err(AppError::BadRequest("api_key is required".into()));
@@ -68,21 +108,28 @@ pub async fn connect(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let mut client = PayNowClient::new(state.config.paynow_api_base.clone(), &api_key, store_id);
-    let info = match client.probe().await {
-        Ok(info) => info,
-        Err(ProviderError::Auth(e)) => {
-            return Err(AppError::BadRequest(format!(
-                "the provider rejected this API key: {e}"
-            )))
+    // Probe the credential before persisting anything (BM connect discipline). Each
+    // provider validates its own way; the sealed secret is always `api_key`.
+    let info = match provider {
+        ProviderKind::PayNow => {
+            let mut client =
+                PayNowClient::new(state.config.paynow_api_base.clone(), &api_key, store_id);
+            client.probe().await.map_err(connect_probe_error)?
         }
-        Err(ProviderError::Rejected(e)) => return Err(AppError::BadRequest(e)),
-        Err(ProviderError::Transient(e)) => {
-            return Err(AppError::Unavailable(format!(
-                "could not reach the provider: {e}"
-            )))
+        ProviderKind::Tebex => {
+            let public_token = store_id.ok_or_else(|| {
+                AppError::BadRequest("Tebex needs your store's public token".into())
+            })?;
+            let mut client = TebexClient::new(
+                state.config.tebex_headless_base.clone(),
+                state.config.tebex_plugin_base.clone(),
+                &api_key,
+                &public_token,
+            );
+            client.probe().await.map_err(connect_probe_error)?
         }
     };
+    let info: StoreInfo = info;
 
     let sealed = cupboard_crypto::seal(&master_key, api_key.as_bytes())
         .map_err(|e| AppError::Internal(anyhow::Error::new(e)))?;
@@ -106,8 +153,46 @@ pub async fn connect(
         .invalidate(&[crate::cache::CacheKey::Catalog(org.0)])
         .await;
 
-    let view = store::connection_view(&state.app_pool, TenantId::from(org)).await?;
+    let view = view_with_webhook(&state, TenantId::from(org)).await?;
     Ok((StatusCode::CREATED, Json(json!({ "connection": view }))))
+}
+
+/// POST /store/webhook-secret: save the operator-provided webhook signing secret. Tebex
+/// webhooks are registered manually in the creator panel (no API), so the operator pastes
+/// the secret Tebex shows them; it is sealed like the API key and never returned.
+pub async fn set_webhook_secret(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Json(req): Json<WebhookSecretRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::StoreManage)?;
+    let Some(master_key) = state.config.tenant_master_key else {
+        return Err(AppError::Unavailable(
+            "store integration is not configured on this deployment".into(),
+        ));
+    };
+    let secret = req.secret.trim();
+    if secret.is_empty() {
+        return Err(AppError::BadRequest(
+            "the webhook secret is required".into(),
+        ));
+    }
+    let sealed = cupboard_crypto::seal(&master_key, secret.as_bytes())
+        .map_err(|e| AppError::Internal(anyhow::Error::new(e)))?;
+    if store::set_webhook_secret(
+        &state.app_pool,
+        TenantId::from(org),
+        &sealed.ciphertext,
+        &sealed.wrapped_dek,
+    )
+    .await?
+    {
+        Ok(Json(json!({ "ok": true })))
+    } else {
+        Err(AppError::BadRequest(
+            "connect a store before configuring its webhook".into(),
+        ))
+    }
 }
 
 /// DELETE /store/connection: shred the credential, keep history; the storefront's

@@ -12,6 +12,10 @@ export type StoreConnection = {
   next_catalog_sync_at: string | null;
   product_count: number;
   created_at: string;
+  // Tebex only: the endpoint the operator registers in their Tebex panel (null when the
+  // deployment has no webhook base configured), and whether they have saved its secret.
+  webhook_url?: string | null;
+  webhook_configured?: boolean;
 };
 
 export type StoreProduct = {

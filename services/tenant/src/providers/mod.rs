@@ -13,6 +13,9 @@
 pub mod paynow;
 #[cfg(feature = "stub")]
 pub mod stub;
+#[cfg(feature = "stub")]
+pub mod stub_tebex;
+pub mod tebex;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -200,8 +203,14 @@ pub struct CheckoutRequest {
     pub steam_id: String,
     pub product_external_id: String,
     pub quantity: i32,
+    /// Where the provider returns the buyer after paying (PayNow) or where the store
+    /// return page lives (Tebex sets it as the basket `complete_url`).
     pub return_url: String,
     pub cancel_url: String,
+    /// Where a provider that needs a buyer-auth roundtrip (Tebex) should send the buyer
+    /// after they authenticate, to finish the second leg. This is our own
+    /// `/store/checkout/{session}/continue` URL; ignored by single-step providers.
+    pub continue_url: String,
 }
 
 /// The step the storefront must take next after `begin_checkout`.
@@ -251,10 +260,22 @@ pub trait StoreProvider: Send + Sync {
         endpoint_url: &str,
     ) -> impl std::future::Future<Output = Result<Option<WebhookRegistration>, ProviderError>> + Send;
 
-    /// Begin a checkout: for PayNow, upsert the customer by Steam id and create a hosted
-    /// checkout session, returning its redirect URL.
+    /// Begin a checkout. Single-step providers (PayNow) return `CheckoutStep::Final` with
+    /// the hosted-checkout URL; two-step providers (Tebex) return
+    /// `CheckoutStep::NeedsProviderAuth` with a buyer-auth URL and a `provider_ref` (the
+    /// basket ident) the storefront hands back to [`continue_checkout`].
     fn begin_checkout(
         &self,
+        req: &CheckoutRequest,
+    ) -> impl std::future::Future<Output = Result<CheckoutBegin, ProviderError>> + Send;
+
+    /// Finish a two-step checkout after the buyer completed the provider auth roundtrip:
+    /// add the line(s) to `provider_ref` (the basket) and return the hosted-checkout URL.
+    /// Single-step providers return `ProviderError::Rejected` (never reached: their
+    /// `begin_checkout` returns `Final`).
+    fn continue_checkout(
+        &self,
+        provider_ref: &str,
         req: &CheckoutRequest,
     ) -> impl std::future::Future<Output = Result<CheckoutBegin, ProviderError>> + Send;
 
@@ -263,6 +284,92 @@ pub trait StoreProvider: Send + Sync {
         &self,
         cursor: Option<&str>,
     ) -> impl std::future::Future<Output = Result<ReconcilePage, ProviderError>> + Send;
+}
+
+/// Injectable provider API base URLs (real hosts in prod, the in-process stub in tests).
+#[derive(Debug, Clone)]
+pub struct ProviderBases {
+    pub paynow_api_base: String,
+    pub tebex_headless_base: String,
+    pub tebex_plugin_base: String,
+}
+
+/// A built provider client. The [`StoreProvider`] trait uses RPITIT (not dyn-compatible),
+/// so the runner and checkout paths hold one concrete type via this enum, which delegates
+/// each method to the active provider.
+pub enum AnyProvider {
+    PayNow(paynow::PayNowClient),
+    Tebex(tebex::TebexClient),
+}
+
+/// Build the provider client for a connection. `secret` is the decrypted credential
+/// (PayNow API key / Tebex Game Server secret key); `store_external_id` is the store id
+/// (PayNow store id / Tebex public token).
+pub fn build_client(
+    kind: ProviderKind,
+    secret: String,
+    store_external_id: String,
+    bases: &ProviderBases,
+) -> AnyProvider {
+    match kind {
+        ProviderKind::PayNow => AnyProvider::PayNow(paynow::PayNowClient::new(
+            bases.paynow_api_base.clone(),
+            secret,
+            Some(store_external_id),
+        )),
+        ProviderKind::Tebex => AnyProvider::Tebex(tebex::TebexClient::new(
+            bases.tebex_headless_base.clone(),
+            bases.tebex_plugin_base.clone(),
+            secret,
+            store_external_id,
+        )),
+    }
+}
+
+impl StoreProvider for AnyProvider {
+    async fn probe(&mut self) -> Result<StoreInfo, ProviderError> {
+        match self {
+            AnyProvider::PayNow(c) => c.probe().await,
+            AnyProvider::Tebex(c) => c.probe().await,
+        }
+    }
+    async fn fetch_catalog(&self) -> Result<CatalogSnapshot, ProviderError> {
+        match self {
+            AnyProvider::PayNow(c) => c.fetch_catalog().await,
+            AnyProvider::Tebex(c) => c.fetch_catalog().await,
+        }
+    }
+    async fn register_webhook(
+        &self,
+        endpoint_url: &str,
+    ) -> Result<Option<WebhookRegistration>, ProviderError> {
+        match self {
+            AnyProvider::PayNow(c) => c.register_webhook(endpoint_url).await,
+            AnyProvider::Tebex(c) => c.register_webhook(endpoint_url).await,
+        }
+    }
+    async fn begin_checkout(&self, req: &CheckoutRequest) -> Result<CheckoutBegin, ProviderError> {
+        match self {
+            AnyProvider::PayNow(c) => c.begin_checkout(req).await,
+            AnyProvider::Tebex(c) => c.begin_checkout(req).await,
+        }
+    }
+    async fn continue_checkout(
+        &self,
+        provider_ref: &str,
+        req: &CheckoutRequest,
+    ) -> Result<CheckoutBegin, ProviderError> {
+        match self {
+            AnyProvider::PayNow(c) => c.continue_checkout(provider_ref, req).await,
+            AnyProvider::Tebex(c) => c.continue_checkout(provider_ref, req).await,
+        }
+    }
+    async fn reconcile(&self, cursor: Option<&str>) -> Result<ReconcilePage, ProviderError> {
+        match self {
+            AnyProvider::PayNow(c) => c.reconcile(cursor).await,
+            AnyProvider::Tebex(c) => c.reconcile(cursor).await,
+        }
+    }
 }
 
 /// Canonical content hash for change detection (the bmapi `ban_content_hash` recipe):

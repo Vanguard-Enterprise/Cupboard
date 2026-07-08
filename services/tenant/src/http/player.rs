@@ -5,10 +5,11 @@
 
 use crate::domain::{entitlements, store};
 use crate::error::AppError;
-use crate::providers::paynow::PayNowClient;
-use crate::providers::{CheckoutRequest, ProviderError, ProviderKind, StoreProvider};
+use crate::providers::{
+    build_client, CheckoutRequest, CheckoutStep, ProviderError, ProviderKind, StoreProvider,
+};
 use crate::state::AppState;
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{FromRequestParts, Path, State};
 use axum::http::header;
 use axum::http::request::Parts;
 use axum::Json;
@@ -131,14 +132,152 @@ pub async fn checkout(
         .await?
         .filter(|c| c.status == "connected")
         .ok_or_else(|| AppError::BadRequest("this store is not accepting checkouts".into()))?;
+    let secret = decrypt_credential(&conn, &master_key)?;
+    let provider = conn
+        .provider
+        .parse::<ProviderKind>()
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("unknown provider")))?;
 
-    // Decrypt the provider API key for this checkout only.
+    // Create the session first: a two-step (Tebex) checkout needs the session id to build
+    // the continue URL it hands the provider as the post-auth returnUrl. For PayNow this is
+    // still just the breadcrumb, now with the id returned to the storefront.
+    let session_id = entitlements::create_checkout(
+        &state.app_pool,
+        tenant,
+        entitlements::NewCheckout {
+            connection_id: conn.id,
+            player_account_id: Some(claims.sub),
+            steam_id: steam_id.clone(),
+            product_external_id: req.product_external_id.clone(),
+            quantity: req.quantity,
+        },
+        None,
+    )
+    .await?;
+    let continue_url = format!(
+        "{}/store/checkout/{}/continue",
+        origin_of(&req.return_url)
+            .ok_or_else(|| AppError::BadRequest("return_url has no origin".into()))?,
+        session_id
+    );
+
+    // A per-request client (fresh rate limiter) is intentional here: checkout is
+    // user-driven and low-frequency (a couple of calls per human purchase), unlike the
+    // runner's high-frequency polling where one shared limiter per credential matters.
+    let client = build_client(
+        provider,
+        secret,
+        conn.store_external_id.clone(),
+        &state.config.provider_bases(),
+    );
+    let begin = client
+        .begin_checkout(&CheckoutRequest {
+            steam_id,
+            product_external_id: req.product_external_id,
+            quantity: req.quantity,
+            return_url: req.return_url,
+            cancel_url: req.cancel_url,
+            continue_url,
+        })
+        .await
+        .map_err(checkout_error)?;
+
+    if let Some(pref) = begin.provider_ref.as_deref() {
+        if let Err(e) =
+            entitlements::set_checkout_provider_ref(&state.app_pool, tenant, session_id, pref).await
+        {
+            tracing::warn!(error = ?e, "failed to record checkout provider_ref");
+        }
+    }
+
+    Ok(Json(json!({
+        "redirect_url": begin.redirect_url,
+        "step": step_str(begin.step),
+        "session_id": session_id,
+    })))
+}
+
+/// POST /player/checkout/{session}/continue: finish a two-step (Tebex) checkout after the
+/// buyer completed the provider auth roundtrip. Returns the hosted-checkout URL.
+pub async fn checkout_continue(
+    State(state): State<AppState>,
+    player: Player,
+    Path(session_id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let claims = &player.0;
+    let tenant = TenantId::from(claims.tenant);
+    let master_key = state
+        .config
+        .tenant_master_key
+        .ok_or_else(|| AppError::Unavailable("store integration is not configured".into()))?;
+
+    let session = entitlements::get_checkout_session(&state.app_pool, tenant, session_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such checkout".into()))?;
+    // Authorize: the session must belong to this player. The account-id binding is
+    // authoritative when set (so another account with the same Steam id cannot hijack it);
+    // fall back to the Steam id only for a session created before any account link.
+    let owns = match session.player_account_id {
+        Some(pid) => pid == claims.sub,
+        None => claims.steam_id.is_some() && session.steam_id == claims.steam_id,
+    };
+    if !owns {
+        return Err(AppError::Unauthorized("not your checkout".into()));
+    }
+    let basket = session
+        .provider_ref
+        .ok_or_else(|| AppError::BadRequest("this checkout has no pending basket".into()))?;
+
+    let conn = store::get_connection(&state.app_pool, tenant)
+        .await?
+        .filter(|c| c.status == "connected" && c.id == session.connection_id)
+        .ok_or_else(|| AppError::BadRequest("this store is not accepting checkouts".into()))?;
+    let secret = decrypt_credential(&conn, &master_key)?;
+    let provider = conn
+        .provider
+        .parse::<ProviderKind>()
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("unknown provider")))?;
+
+    let steam_id = claims
+        .steam_id
+        .clone()
+        .or_else(|| session.steam_id.clone())
+        .unwrap_or_default();
+    let client = build_client(
+        provider,
+        secret,
+        conn.store_external_id.clone(),
+        &state.config.provider_bases(),
+    );
+    let begin = client
+        .continue_checkout(
+            &basket,
+            &CheckoutRequest {
+                steam_id,
+                product_external_id: session.product_external_id,
+                quantity: session.quantity,
+                return_url: String::new(),
+                cancel_url: String::new(),
+                continue_url: String::new(),
+            },
+        )
+        .await
+        .map_err(checkout_error)?;
+
+    Ok(Json(json!({ "redirect_url": begin.redirect_url })))
+}
+
+/// Decrypt a connection's sealed credential (PayNow API key / Tebex Game Server secret).
+fn decrypt_credential(
+    conn: &store::StoreConnection,
+    master_key: &[u8; 32],
+) -> Result<String, AppError> {
     let (Some(enc), Some(dek)) = (conn.api_key_enc.clone(), conn.api_key_dek.clone()) else {
         return Err(AppError::BadRequest("this store is not connected".into()));
     };
-    let api_key = String::from_utf8(
+    String::from_utf8(
         cupboard_crypto::open(
-            &master_key,
+            master_key,
             &cupboard_crypto::Envelope {
                 wrapped_dek: dek,
                 ciphertext: enc,
@@ -146,59 +285,21 @@ pub async fn checkout(
         )
         .map_err(|e| AppError::Internal(anyhow::Error::new(e)))?,
     )
-    .map_err(|_| AppError::Internal(anyhow::anyhow!("stored credential is not UTF-8")))?;
+    .map_err(|_| AppError::Internal(anyhow::anyhow!("stored credential is not UTF-8")))
+}
 
-    let provider = conn
-        .provider
-        .parse::<ProviderKind>()
-        .map_err(|_| AppError::Internal(anyhow::anyhow!("unknown provider")))?;
-    if provider != ProviderKind::PayNow {
-        return Err(AppError::BadRequest(
-            "checkout for this provider is not available yet".into(),
-        ));
+/// The scheme+host(+port) origin of a URL (used to build the continue URL on the buyer's
+/// own storefront host); `None` for opaque origins.
+fn origin_of(url: &str) -> Option<String> {
+    let origin = reqwest::Url::parse(url).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
+}
+
+fn step_str(step: CheckoutStep) -> &'static str {
+    match step {
+        CheckoutStep::Final => "final",
+        CheckoutStep::NeedsProviderAuth => "needs_provider_auth",
     }
-
-    // A per-request client (fresh rate limiter) is intentional here: checkout is
-    // user-driven and low-frequency (a couple of calls per human purchase), unlike the
-    // runner's high-frequency catalog/reconcile polling where one shared limiter per
-    // credential matters. The provider's own limits still apply per key.
-    let client = PayNowClient::new(
-        state.config.paynow_api_base.clone(),
-        api_key,
-        Some(conn.store_external_id.clone()),
-    );
-    let begin = client
-        .begin_checkout(&CheckoutRequest {
-            steam_id: steam_id.clone(),
-            product_external_id: req.product_external_id.clone(),
-            quantity: req.quantity,
-            return_url: req.return_url,
-            cancel_url: req.cancel_url,
-        })
-        .await
-        .map_err(checkout_error)?;
-
-    // Record the started checkout (best-effort breadcrumb; failure must not block the
-    // redirect the player needs).
-    let player_uuid = claims.sub;
-    if let Err(e) = entitlements::create_checkout(
-        &state.app_pool,
-        tenant,
-        entitlements::NewCheckout {
-            connection_id: conn.id,
-            player_account_id: Some(player_uuid),
-            steam_id,
-            product_external_id: req.product_external_id,
-            quantity: req.quantity,
-        },
-        begin.provider_ref.as_deref(),
-    )
-    .await
-    {
-        tracing::warn!(error = ?e, "failed to record checkout session");
-    }
-
-    Ok(Json(json!({ "redirect_url": begin.redirect_url })))
 }
 
 fn checkout_error(e: ProviderError) -> AppError {

@@ -12,6 +12,16 @@ import { gatewayBase } from "@/lib/api";
 
 const ACCESS = "cb_player_access";
 
+// The checkout response is one of two steps. "final" carries the provider's hosted-checkout
+// URL; "needs_provider_auth" (Tebex) carries a basket-auth URL whose embedded returnUrl
+// already points back at our continue leg, so the browser is redirected to redirect_url in
+// BOTH cases and this action never has to branch on step.
+type CheckoutResponse = {
+  redirect_url?: unknown;
+  step?: "final" | "needs_provider_auth";
+  session_id?: string;
+};
+
 /** Begin a purchase: ask the gateway to open a hosted checkout session for this product and
  * send the browser to the provider. A signed-out player is sent to login; any failure sends
  * the player back to the product page with an error flag. */
@@ -44,7 +54,7 @@ export async function startCheckout(productExternalId: string): Promise<void> {
       cache: "no-store",
     }).catch(() => null);
     if (res && res.ok) {
-      const body = (await res.json().catch(() => null)) as { redirect_url?: unknown } | null;
+      const body = (await res.json().catch(() => null)) as CheckoutResponse | null;
       if (body && typeof body.redirect_url === "string") target = body.redirect_url;
     }
   }

@@ -485,6 +485,18 @@ impl StoreProvider for PayNowClient {
         })
     }
 
+    async fn continue_checkout(
+        &self,
+        _provider_ref: &str,
+        _req: &CheckoutRequest,
+    ) -> Result<CheckoutBegin, ProviderError> {
+        // PayNow checkout is single-step (begin_checkout returns Final), so this is never
+        // reached on the happy path; fail loudly if some caller invokes it anyway.
+        Err(ProviderError::Rejected(
+            "PayNow checkout completes in one step".into(),
+        ))
+    }
+
     async fn reconcile(&self, cursor: Option<&str>) -> Result<ReconcilePage, ProviderError> {
         let mut path = self.store_path("/delivery/items?limit=100")?;
         if let Some(c) = cursor {

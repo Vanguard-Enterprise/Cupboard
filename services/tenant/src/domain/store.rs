@@ -68,6 +68,18 @@ pub struct ConnectionView {
     pub next_catalog_sync_at: DateTime<Utc>,
     pub product_count: i64,
     pub created_at: DateTime<Utc>,
+    /// The webhook endpoint the operator registers with the provider (Tebex only, where
+    /// registration is manual). Filled by the HTTP layer from `PUBLIC_WEBHOOK_BASE` +
+    /// [`connection_id`](Self::connection_id); `None` when the webhook base is unset or the
+    /// provider self-registers (PayNow).
+    pub webhook_url: Option<String>,
+    /// Whether a webhook signing secret is stored (Tebex: operator pasted it; PayNow: the
+    /// runner registered it).
+    pub webhook_configured: bool,
+    /// The connection id, needed by the HTTP layer to build `webhook_url`. Not serialized
+    /// (kept out of the operator payload).
+    #[serde(skip)]
+    pub connection_id: Uuid,
 }
 
 /// What the public storefront needs to render store pages; also the Redis-cached value.
@@ -161,7 +173,33 @@ pub async fn connection_view(
         next_catalog_sync_at: conn.next_catalog_sync_at,
         product_count,
         created_at: conn.created_at,
+        webhook_url: None,
+        webhook_configured: conn.webhook_secret_enc.is_some(),
+        connection_id: conn.id,
     }))
+}
+
+/// Store the operator-provided webhook signing secret (Tebex, whose webhooks are
+/// registered manually in the provider panel). App pool + RLS; only a connected store.
+pub async fn set_webhook_secret(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    secret_enc: &[u8],
+    secret_dek: &[u8],
+) -> Result<bool, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let res = sqlx::query(
+        "UPDATE store_connections SET \
+             webhook_secret_enc = $2, webhook_secret_dek = $3, updated_at = now() \
+         WHERE tenant_id = $1 AND status = 'connected'",
+    )
+    .bind(tenant.0)
+    .bind(secret_enc)
+    .bind(secret_dek)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(res.rows_affected() == 1)
 }
 
 pub struct NewConnection {

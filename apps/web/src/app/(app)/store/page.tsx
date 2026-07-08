@@ -13,6 +13,7 @@ import {
   type StoreConnection,
 } from "./shared";
 import { SyncButton } from "./sync-button";
+import { WebhookSetup } from "./webhook-setup";
 
 type StoreResponse = { connection: StoreConnection | null };
 
@@ -104,6 +105,13 @@ export default async function StorePage() {
             <DisconnectButton />
           </div>
         </section>
+      )}
+
+      {!loadFailed && connection && connection.provider === "tebex" && (
+        <WebhookSetup
+          webhookUrl={connection.webhook_url ?? null}
+          webhookConfigured={connection.webhook_configured ?? false}
+        />
       )}
 
       {!loadFailed && connection && connection.product_count > 0 && (

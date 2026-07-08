@@ -583,26 +583,53 @@ export async function retryDomainAction(
 
 export type StoreConnectFormState = { error?: string; ok?: boolean };
 
-/** Connect the tenant's store to a payment provider (PayNow only for now). The backend
- * probes the API key before storing it; the key is write-only and never read back. */
+/** Connect the tenant's store to a payment provider (PayNow or Tebex). The backend probes
+ * the API key before storing it; the key is write-only and never read back. PayNow takes an
+ * optional store id; Tebex requires both its public/project token (store_id) and the Game
+ * Server secret key (api_key). */
 export async function connectStoreAction(
   _prev: StoreConnectFormState,
   form: FormData,
 ): Promise<StoreConnectFormState> {
   const provider = form.get("provider");
-  if (provider !== "paynow") return { error: "unsupported provider" };
+  if (provider !== "paynow" && provider !== "tebex") return { error: "unsupported provider" };
   const apiKey = form.get("api_key");
   if (typeof apiKey !== "string" || !apiKey.trim()) {
-    return { error: "API key is required" };
+    return { error: provider === "tebex" ? "Game Server secret key is required" : "API key is required" };
   }
   const body: Record<string, unknown> = { provider, api_key: apiKey };
   const storeId = trimmed(form, "store_id");
-  if (storeId) body.store_id = storeId;
+  if (provider === "tebex") {
+    if (!storeId) return { error: "Tebex public token is required" };
+    body.store_id = storeId;
+  } else if (storeId) {
+    body.store_id = storeId;
+  }
 
   const res = await apiFetch("/store/connection", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
+/** Save the operator-provided Tebex webhook secret (Tebex only). The secret is stored
+ * server-side and used to verify inbound webhook signatures; it is never read back. */
+export async function setWebhookSecretAction(
+  _prev: StoreConnectFormState,
+  form: FormData,
+): Promise<StoreConnectFormState> {
+  const secret = form.get("secret");
+  if (typeof secret !== "string" || !secret.trim()) {
+    return { error: "Webhook secret is required" };
+  }
+  const res = await apiFetch("/store/webhook-secret", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret }),
   });
   if (!res.ok) return { error: await readError(res) };
   revalidatePath("/store");

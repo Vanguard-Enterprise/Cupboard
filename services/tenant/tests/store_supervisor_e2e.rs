@@ -85,6 +85,8 @@ async fn supervisor_claims_and_runner_syncs() {
         tenant_master_key: Some(MASTER_KEY),
         consumer_name: "sup-e2e".into(),
         paynow_api_base: stub.base_url(),
+        tebex_headless_base: "http://tebex.test".into(),
+        tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: None,
         player_jwt_public_key_pem: None,
         public_webhook_base: None,

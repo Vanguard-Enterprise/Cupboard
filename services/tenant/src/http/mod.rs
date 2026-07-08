@@ -51,11 +51,19 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(store::connect).delete(store::disconnect),
         )
         .route("/store/sync", axum::routing::post(store::sync_now))
+        .route(
+            "/store/webhook-secret",
+            axum::routing::post(store::set_webhook_secret),
+        )
         .route("/store/products", get(store::list_products))
         .route("/store/entitlements", get(store::list_entitlements))
         // Player-facing storefront actions (gateway `/player/*` passthrough; the tenant
         // service verifies the PLAYER token itself with the disjoint player keypair).
         .route("/player/checkout", axum::routing::post(player::checkout))
+        .route(
+            "/player/checkout/{session}/continue",
+            axum::routing::post(player::checkout_continue),
+        )
         .route("/player/entitlements", get(player::entitlements))
         // Provider webhook receiver (NOT via the gateway; public `cupboard-hooks` host,
         // per-connection URL, raw-body HMAC).

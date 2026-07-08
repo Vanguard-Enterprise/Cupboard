@@ -49,7 +49,7 @@ pub async fn run(owner_pool: sqlx::PgPool, cache: SiteCache, config: Arc<Config>
                 cache.clone(),
                 conn,
                 master_key,
-                config.paynow_api_base.clone(),
+                config.provider_bases(),
                 config.public_webhook_base.clone(),
                 claimer.clone(),
             ));
@@ -65,18 +65,9 @@ async fn runner_entry(
     cache: SiteCache,
     conn: store::StoreConnection,
     master_key: [u8; 32],
-    paynow_base: String,
+    bases: crate::providers::ProviderBases,
     webhook_base: Option<String>,
     claimer: String,
 ) {
-    super::runner::run(
-        pool,
-        cache,
-        conn,
-        master_key,
-        paynow_base,
-        webhook_base,
-        claimer,
-    )
-    .await;
+    super::runner::run(pool, cache, conn, master_key, bases, webhook_base, claimer).await;
 }

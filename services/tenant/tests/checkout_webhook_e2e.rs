@@ -69,6 +69,8 @@ fn state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         tenant_master_key: Some(MASTER_KEY),
         consumer_name: "pr4".into(),
         paynow_api_base: paynow_base,
+        tebex_headless_base: "http://tebex.test".into(),
+        tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: None,
         player_jwt_public_key_pem: Some(PL_PUB.into()),
         public_webhook_base: Some("https://hooks.test".into()),

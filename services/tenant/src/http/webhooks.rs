@@ -6,16 +6,20 @@
 //! Flow: load the connection + its (envelope-encrypted) signing secret by id, verify the
 //! signature, then dedupe + apply the entitlement delta in one transaction. A verified
 //! event always returns 2xx (even a duplicate) so the provider stops retrying; only a
-//! bad signature or an unconfigured webhook is rejected.
+//! bad signature or an unconfigured webhook is rejected. Tebex additionally requires the
+//! `validation.webhook` handshake to echo the event id back.
 
 use crate::domain::{entitlements, store};
 use crate::error::AppError;
-use crate::providers::paynow;
 use crate::providers::ProviderKind;
+use crate::providers::{paynow, tebex};
 use crate::state::AppState;
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde_json::json;
 use uuid::Uuid;
 
 /// POST /webhooks/{provider}/{connection_id}
@@ -24,7 +28,7 @@ pub async fn receive(
     Path((provider, connection_id)): Path<(String, Uuid)>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<StatusCode, AppError> {
+) -> Result<Response, AppError> {
     let kind = provider
         .parse::<ProviderKind>()
         .map_err(|_| AppError::NotFound("unknown provider".into()))?;
@@ -47,14 +51,14 @@ pub async fn receive(
         return Err(AppError::NotFound("store is not connected".into()));
     }
 
-    // The webhook signing secret must have been registered (runner step); without it we
-    // cannot authenticate the event, so reject rather than trust it.
+    // The webhook signing secret must be present (PayNow: registered by the runner; Tebex:
+    // pasted by the operator). Without it we cannot authenticate the event, so reject.
     let (Some(enc), Some(dek)) = (
         conn.webhook_secret_enc.clone(),
         conn.webhook_secret_dek.clone(),
     ) else {
         return Err(AppError::Unavailable(
-            "webhook not yet registered for this connection".into(),
+            "webhook not yet configured for this connection".into(),
         ));
     };
     let secret = String::from_utf8(
@@ -71,7 +75,7 @@ pub async fn receive(
 
     match kind {
         ProviderKind::PayNow => receive_paynow(&state, &conn, &secret, &headers, &body).await,
-        ProviderKind::Tebex => Err(AppError::NotFound("tebex webhooks land in PR6".into())),
+        ProviderKind::Tebex => receive_tebex(&state, &conn, &secret, &headers, &body).await,
     }
 }
 
@@ -81,7 +85,7 @@ async fn receive_paynow(
     secret: &str,
     headers: &HeaderMap,
     body: &Bytes,
-) -> Result<StatusCode, AppError> {
+) -> Result<Response, AppError> {
     let sig = header(headers, "paynow-signature");
     let ts = header(headers, "paynow-timestamp");
     let (Some(sig), Some(ts)) = (sig, ts) else {
@@ -97,6 +101,47 @@ async fn receive_paynow(
             paynow::WebhookError::Malformed(m) => AppError::BadRequest(m.into()),
         })?;
 
+    ingest(state, conn, &parsed, body).await?;
+    // 2xx whether newly processed or a dedup'd replay, so the provider stops retrying.
+    Ok(StatusCode::OK.into_response())
+}
+
+async fn receive_tebex(
+    state: &AppState,
+    conn: &store::StoreConnection,
+    secret: &str,
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<Response, AppError> {
+    let sig = header(headers, "x-signature")
+        .ok_or_else(|| AppError::BadRequest("missing signature header".into()))?;
+
+    let parsed = tebex::verify_and_parse_webhook(secret, sig, body).map_err(|e| match e {
+        tebex::WebhookError::BadSignature => {
+            tracing::warn!(connection = %conn.id, "rejected tebex webhook: bad signature");
+            AppError::Unauthorized("webhook verification failed".into())
+        }
+        tebex::WebhookError::Malformed(m) => AppError::BadRequest(m.into()),
+    })?;
+
+    // The endpoint-validation handshake carries no entitlement; Tebex activates the
+    // endpoint only when we echo the id back. Verified above, so answer it.
+    if tebex::is_validation(&parsed.event_type) {
+        tracing::info!(connection = %conn.id, "tebex webhook validated");
+        return Ok(Json(json!({ "id": parsed.event_id })).into_response());
+    }
+
+    ingest(state, conn, &parsed, body).await?;
+    Ok(StatusCode::OK.into_response())
+}
+
+/// Dedupe + apply the entitlement delta for a verified event (shared by both providers).
+async fn ingest(
+    state: &AppState,
+    conn: &store::StoreConnection,
+    parsed: &crate::providers::NormalizedWebhook,
+    body: &Bytes,
+) -> Result<(), AppError> {
     let payload: serde_json::Value =
         serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
     let newly = entitlements::ingest_webhook(
@@ -118,8 +163,7 @@ async fn receive_paynow(
         entitlements = parsed.entitlements.len(),
         "webhook processed"
     );
-    // 2xx whether newly processed or a dedup'd replay, so the provider stops retrying.
-    Ok(StatusCode::OK)
+    Ok(())
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

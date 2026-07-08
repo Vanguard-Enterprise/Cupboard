@@ -38,6 +38,12 @@ pub struct Config {
     /// PayNow API base, injectable so tests run against the in-process stub.
     pub paynow_api_base: String,
 
+    /// Tebex API bases, injectable so tests run against the in-process stub. Headless
+    /// serves the catalog + checkout basket flow (public token in the path); the plugin
+    /// (Game Server) base serves credential validation + the reconcile payments walk.
+    pub tebex_headless_base: String,
+    pub tebex_plugin_base: String,
+
     /// Shared secret the auth service presents (`X-Internal-Token`) to the cross-service
     /// `/internal/*` endpoints (host -> tenant resolution on the player-login path).
     /// `None` disables those endpoints (fail closed).
@@ -121,6 +127,14 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| crate::providers::paynow::DEFAULT_BASE.into()),
+            tebex_headless_base: env::var("TEBEX_HEADLESS_BASE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| crate::providers::tebex::DEFAULT_HEADLESS_BASE.into()),
+            tebex_plugin_base: env::var("TEBEX_PLUGIN_BASE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| crate::providers::tebex::DEFAULT_PLUGIN_BASE.into()),
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
@@ -141,5 +155,14 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3000),
         })
+    }
+
+    /// Injectable provider API bases for building store clients.
+    pub fn provider_bases(&self) -> crate::providers::ProviderBases {
+        crate::providers::ProviderBases {
+            paynow_api_base: self.paynow_api_base.clone(),
+            tebex_headless_base: self.tebex_headless_base.clone(),
+            tebex_plugin_base: self.tebex_plugin_base.clone(),
+        }
     }
 }
