@@ -34,6 +34,17 @@ impl ProviderKind {
             ProviderKind::Tebex => "tebex",
         }
     }
+
+    /// Whether a COMPLETE reconcile walk may drive the absent-sweep (expire actives it did
+    /// not see). Safe only when reconcile returns the SAME `external_ref` truth as the
+    /// provider's webhooks. PayNow's delivery-items reconcile matches its webhook items;
+    /// Tebex's `/payments` is a structurally different shape (itemization + txn id formats
+    /// unverified until a live store), so a webhook-granted entitlement could be absent
+    /// from the reconcile view and wrongly expired. Tebex therefore relies on explicit
+    /// refund/chargeback/expiry events + `expires_at`, never the sweep.
+    pub fn reconcile_sweeps(self) -> bool {
+        matches!(self, ProviderKind::PayNow)
+    }
 }
 
 impl std::str::FromStr for ProviderKind {
@@ -411,10 +422,47 @@ pub fn category_content_hash(c: &ProviderCategory) -> String {
     sha256_hex(canonical.to_string().as_bytes())
 }
 
-fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex::encode(hasher.finalize())
+}
+
+// ============================ Shared adapter helpers ============================
+// Used by both provider adapters. `http_url_field` in particular is the stored-XSS guard
+// for provider-supplied image URLs, so it must live in exactly one place.
+
+/// Extract a string field, tolerating a numeric value (provider flake ids arrive as
+/// strings but a numeric id is accepted defensively).
+pub(crate) fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
+    match v.get(key) {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// A provider-supplied URL destined for a public `src`/`href`: http(s) only (the same
+/// stored-XSS posture as site-config URLs; the web render layer guards again).
+pub(crate) fn http_url_field(v: &serde_json::Value, key: &str) -> Option<String> {
+    str_field(v, key).filter(|s| {
+        let lower = s.trim().to_ascii_lowercase();
+        lower.starts_with("https://") || lower.starts_with("http://")
+    })
+}
+
+/// Minimal percent-encoding for simple query/path values already known to be simple
+/// (steam ids, cursors, basket idents); escapes anything unexpected defensively.
+pub(crate) fn urlencoding_light(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~') {
+                c.to_string()
+            } else {
+                format!("%{:02X}", c as u32)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -448,6 +496,13 @@ mod tests {
         b.raw = serde_json::json!({"noise": "different"});
         b.category_ids = vec!["a".into(), "b".into()];
         assert_eq!(product_content_hash(&a), product_content_hash(&b));
+    }
+
+    #[test]
+    fn only_paynow_reconcile_drives_the_sweep() {
+        // Tebex's reconcile shape differs from its webhooks, so it must never sweep-expire.
+        assert!(ProviderKind::PayNow.reconcile_sweeps());
+        assert!(!ProviderKind::Tebex.reconcile_sweeps());
     }
 
     #[test]

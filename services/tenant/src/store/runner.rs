@@ -283,7 +283,16 @@ async fn reconcile_entitlements(
 
     // Only sweep when we saw the WHOLE set: a provider that drops an item entirely (no
     // terminal-state row) would otherwise leave a stale 'active' entitlement.
-    if complete {
+    // ...AND only when this provider's reconcile is ref-compatible with its webhooks
+    // (PayNow). Tebex's `/payments` shape differs from its webhook shape, so a
+    // webhook-granted entitlement could be absent from the reconcile view and wrongly
+    // expired; Tebex relies on explicit terminal events instead of the sweep.
+    let sweeps = conn
+        .provider
+        .parse::<ProviderKind>()
+        .map(|k| k.reconcile_sweeps())
+        .unwrap_or(false);
+    if complete && sweeps {
         match crate::domain::entitlements::sweep_absent_actives(pool, conn.id, &seen_refs).await {
             Ok(expired) if expired > 0 => {
                 tracing::info!(connection = %conn.id, expired, "swept entitlements absent from provider");
@@ -291,7 +300,7 @@ async fn reconcile_entitlements(
             Ok(_) => {}
             Err(e) => tracing::warn!(connection = %conn.id, error = ?e, "reconcile sweep failed"),
         }
-    } else {
+    } else if !complete {
         tracing::warn!(connection = %conn.id, "reconcile walk hit the page cap; skipping absent-sweep");
     }
 

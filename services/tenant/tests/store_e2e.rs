@@ -541,3 +541,29 @@ async fn internal_resolve_site_maps_host_and_guards_token() {
         StatusCode::NOT_FOUND
     );
 }
+
+/// Saving a manual webhook secret must never touch a PayNow connection (PayNow's secret is
+/// runner-managed; overwriting it would silently break PayNow webhook verification).
+#[tokio::test]
+async fn webhook_secret_is_tebex_only() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP webhook_secret_is_tebex_only: TEST_DATABASE_URL unset");
+        return;
+    };
+    let tenant = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO store_connections (tenant_id, provider, store_external_id) \
+         VALUES ($1, 'paynow', 's1')",
+    )
+    .bind(tenant)
+    .execute(&owner)
+    .await
+    .unwrap();
+    let applied = store::set_webhook_secret(&app, TenantId(tenant), b"enc", b"dek")
+        .await
+        .unwrap();
+    assert!(
+        !applied,
+        "set_webhook_secret must not match a PayNow connection"
+    );
+}

@@ -138,28 +138,34 @@ pub async fn checkout(
         .parse::<ProviderKind>()
         .map_err(|_| AppError::Internal(anyhow::anyhow!("unknown provider")))?;
 
-    // Create the session first: a two-step (Tebex) checkout needs the session id to build
-    // the continue URL it hands the provider as the post-auth returnUrl. For PayNow this is
-    // still just the breadcrumb, now with the id returned to the storefront.
-    let session_id = entitlements::create_checkout(
-        &state.app_pool,
-        tenant,
-        entitlements::NewCheckout {
-            connection_id: conn.id,
-            player_account_id: Some(claims.sub),
-            steam_id: steam_id.clone(),
-            product_external_id: req.product_external_id.clone(),
-            quantity: req.quantity,
-        },
-        None,
-    )
-    .await?;
-    let continue_url = format!(
-        "{}/store/checkout/{}/continue",
-        origin_of(&req.return_url)
-            .ok_or_else(|| AppError::BadRequest("return_url has no origin".into()))?,
-        session_id
-    );
+    // A two-step (Tebex) checkout needs the session id up front: the continue URL it hands
+    // the provider as the post-auth returnUrl embeds it, and the continue leg later reads
+    // the basket ref off the session. So for a two-step provider the session (and its
+    // provider_ref) are load-bearing and created BEFORE begin; for a single-step provider
+    // (PayNow) the session is only a breadcrumb, recorded best-effort AFTER begin so a
+    // transient DB error never blocks the buyer's redirect to pay.
+    let two_step = matches!(provider, ProviderKind::Tebex);
+    let new_checkout = || entitlements::NewCheckout {
+        connection_id: conn.id,
+        player_account_id: Some(claims.sub),
+        steam_id: steam_id.clone(),
+        product_external_id: req.product_external_id.clone(),
+        quantity: req.quantity,
+    };
+
+    let (pre_session, continue_url) = if two_step {
+        let id =
+            entitlements::create_checkout(&state.app_pool, tenant, new_checkout(), None).await?;
+        let url = format!(
+            "{}/store/checkout/{}/continue",
+            origin_of(&req.return_url)
+                .ok_or_else(|| AppError::BadRequest("return_url has no origin".into()))?,
+            id
+        );
+        (Some(id), url)
+    } else {
+        (None, String::new())
+    };
 
     // A per-request client (fresh rate limiter) is intentional here: checkout is
     // user-driven and low-frequency (a couple of calls per human purchase), unlike the
@@ -172,8 +178,8 @@ pub async fn checkout(
     );
     let begin = client
         .begin_checkout(&CheckoutRequest {
-            steam_id,
-            product_external_id: req.product_external_id,
+            steam_id: steam_id.clone(),
+            product_external_id: req.product_external_id.clone(),
             quantity: req.quantity,
             return_url: req.return_url,
             cancel_url: req.cancel_url,
@@ -182,13 +188,34 @@ pub async fn checkout(
         .await
         .map_err(checkout_error)?;
 
-    if let Some(pref) = begin.provider_ref.as_deref() {
-        if let Err(e) =
-            entitlements::set_checkout_provider_ref(&state.app_pool, tenant, session_id, pref).await
-        {
-            tracing::warn!(error = ?e, "failed to record checkout provider_ref");
+    let session_id = match pre_session {
+        // Two-step: recording the basket ref is load-bearing (the continue leg requires
+        // it), so a failure here aborts rather than silently stranding the checkout.
+        Some(id) => {
+            if let Some(pref) = begin.provider_ref.as_deref() {
+                entitlements::set_checkout_provider_ref(&state.app_pool, tenant, id, pref).await?;
+            }
+            id
         }
-    }
+        // Single-step: best-effort breadcrumb after begin; never block the redirect.
+        None => {
+            match entitlements::create_checkout(
+                &state.app_pool,
+                tenant,
+                new_checkout(),
+                begin.provider_ref.as_deref(),
+            )
+            .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to record checkout session");
+                    // The buyer still needs the redirect; a nil id signals "not recorded".
+                    Uuid::nil()
+                }
+            }
+        }
+    };
 
     Ok(Json(json!({
         "redirect_url": begin.redirect_url,
@@ -228,6 +255,25 @@ pub async fn checkout_continue(
         .provider_ref
         .ok_or_else(|| AppError::BadRequest("this checkout has no pending basket".into()))?;
 
+    // One-shot latch: adding a package to a Tebex basket is NOT idempotent (adds
+    // accumulate), and Tebex sends the buyer here via a browser redirect that can be
+    // refreshed/retried. Atomically move the session 'created' -> 'completed' and only
+    // proceed on the winning transition, so a second call cannot add the package (and
+    // double-charge) again.
+    if !entitlements::advance_checkout_status(
+        &state.app_pool,
+        tenant,
+        session_id,
+        "created",
+        "completed",
+    )
+    .await?
+    {
+        return Err(AppError::BadRequest(
+            "this checkout was already finalized; start a new one from the store".into(),
+        ));
+    }
+
     let conn = store::get_connection(&state.app_pool, tenant)
         .await?
         .filter(|c| c.status == "connected" && c.id == session.connection_id)
@@ -249,7 +295,7 @@ pub async fn checkout_continue(
         conn.store_external_id.clone(),
         &state.config.provider_bases(),
     );
-    let begin = client
+    let begin = match client
         .continue_checkout(
             &basket,
             &CheckoutRequest {
@@ -262,7 +308,22 @@ pub async fn checkout_continue(
             },
         )
         .await
-        .map_err(checkout_error)?;
+    {
+        Ok(begin) => begin,
+        Err(e) => {
+            // The package was not added (provider error before/at the add): release the
+            // latch so the buyer can retry rather than being stuck on a "finalized" row.
+            let _ = entitlements::advance_checkout_status(
+                &state.app_pool,
+                tenant,
+                session_id,
+                "completed",
+                "created",
+            )
+            .await;
+            return Err(checkout_error(e));
+        }
+    };
 
     Ok(Json(json!({ "redirect_url": begin.redirect_url })))
 }
@@ -272,20 +333,10 @@ fn decrypt_credential(
     conn: &store::StoreConnection,
     master_key: &[u8; 32],
 ) -> Result<String, AppError> {
-    let (Some(enc), Some(dek)) = (conn.api_key_enc.clone(), conn.api_key_dek.clone()) else {
+    let (Some(enc), Some(dek)) = (conn.api_key_enc.as_deref(), conn.api_key_dek.as_deref()) else {
         return Err(AppError::BadRequest("this store is not connected".into()));
     };
-    String::from_utf8(
-        cupboard_crypto::open(
-            master_key,
-            &cupboard_crypto::Envelope {
-                wrapped_dek: dek,
-                ciphertext: enc,
-            },
-        )
-        .map_err(|e| AppError::Internal(anyhow::Error::new(e)))?,
-    )
-    .map_err(|_| AppError::Internal(anyhow::anyhow!("stored credential is not UTF-8")))
+    store::unseal_utf8(master_key, enc, dek)
 }
 
 /// The scheme+host(+port) origin of a URL (used to build the continue URL on the buyer's

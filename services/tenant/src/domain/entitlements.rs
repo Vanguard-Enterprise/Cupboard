@@ -42,7 +42,7 @@ pub async fn apply_record_in_tx(
              kind = EXCLUDED.kind, \
              status = EXCLUDED.status, \
              granted_at = COALESCE(EXCLUDED.granted_at, entitlements.granted_at), \
-             expires_at = EXCLUDED.expires_at, \
+             expires_at = COALESCE(EXCLUDED.expires_at, entitlements.expires_at), \
              revoked_at = EXCLUDED.revoked_at, \
              source = EXCLUDED.source, \
              content_hash = EXCLUDED.content_hash, \
@@ -265,6 +265,32 @@ pub async fn set_checkout_provider_ref(
     .await?;
     tx.commit().await?;
     Ok(())
+}
+
+/// Compare-and-set a checkout session's status (`expected` -> `new`). Returns whether the
+/// row was still in `expected` and the update applied. Used as the one-shot latch that
+/// stops a refreshed/retried Tebex continue leg from adding the package to the basket
+/// twice (a double charge).
+pub async fn advance_checkout_status(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    id: Uuid,
+    expected: &str,
+    new: &str,
+) -> Result<bool, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let res = sqlx::query(
+        "UPDATE checkout_sessions SET status = $4, updated_at = now() \
+         WHERE tenant_id = $1 AND id = $2 AND status = $3",
+    )
+    .bind(tenant.0)
+    .bind(id)
+    .bind(expected)
+    .bind(new)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(res.rows_affected() == 1)
 }
 
 // ============================ Reads ============================

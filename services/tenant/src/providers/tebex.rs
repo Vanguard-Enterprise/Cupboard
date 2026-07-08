@@ -17,9 +17,10 @@
 //! returns the hosted-checkout URL.
 
 use super::{
-    CatalogSnapshot, CheckoutBegin, CheckoutRequest, CheckoutStep, EntitlementRecord,
-    EntitlementStatus, NormalizedWebhook, ProductKind, ProviderCategory, ProviderError,
-    ProviderProduct, ReconcilePage, StoreInfo, StoreProvider, WebhookRegistration,
+    http_url_field, sha256_hex, str_field, urlencoding_light, CatalogSnapshot, CheckoutBegin,
+    CheckoutRequest, CheckoutStep, EntitlementRecord, EntitlementStatus, NormalizedWebhook,
+    ProductKind, ProviderCategory, ProviderError, ProviderProduct, ReconcilePage, StoreInfo,
+    StoreProvider, WebhookRegistration,
 };
 use cupboard_bmapi::RateLimiter;
 use std::time::Duration;
@@ -334,23 +335,6 @@ impl StoreProvider for TebexClient {
 
 // ============================ JSON helpers (defensive) ============================
 
-fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
-    match v.get(key) {
-        Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
-/// Provider-supplied URLs that public pages render into `src`: http(s) only (stored-XSS
-/// posture, same as the site-config + PayNow adapters).
-fn http_url_field(v: &serde_json::Value, key: &str) -> Option<String> {
-    str_field(v, key).filter(|s| {
-        let lower = s.trim().to_ascii_lowercase();
-        lower.starts_with("https://") || lower.starts_with("http://")
-    })
-}
-
 /// Unwrap a `{data: X}` envelope (Tebex wraps most objects) or fall back to the value
 /// itself when it is already the object.
 fn unwrap_data(v: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -588,14 +572,40 @@ pub fn is_validation(event_type: &str) -> bool {
 }
 
 fn parse_webhook_entitlements(doc: &serde_json::Value, event_type: &str) -> Vec<EntitlementRecord> {
-    let status = match event_type {
-        t if t.starts_with("payment.completed") || t.starts_with("recurring-payment") => {
+    // Terminal states are matched BEFORE the broad `recurring-payment` family so a
+    // chargeback/dispute/cancel/expire on a recurring payment is never recorded as Active.
+    // Money is involved: an event we cannot confidently classify grants nothing (returns
+    // empty), leaving the row to the reconcile backstop.
+    let t = event_type;
+    let status = if t.contains("chargeback") || t.contains("dispute") {
+        EntitlementStatus::Chargeback
+    } else if t.contains("refund") {
+        EntitlementStatus::Refunded
+    } else if t == "payment.declined" {
+        EntitlementStatus::Expired
+    } else if t.starts_with("recurring-payment") {
+        // Only a start/renew grants access; an end/cancel/expire/pause revokes it; anything
+        // else (e.g. a bare status-changed) is left to reconcile.
+        if t.contains("end")
+            || t.contains("cancel")
+            || t.contains("expire")
+            || t.contains("paus")
+            || t.contains("stop")
+        {
+            EntitlementStatus::Expired
+        } else if t.contains("start")
+            || t.contains("renew")
+            || t.contains("creat")
+            || t.contains("active")
+        {
             EntitlementStatus::Active
+        } else {
+            return Vec::new();
         }
-        "payment.refunded" => EntitlementStatus::Refunded,
-        t if t.contains("chargeback") || t.contains("dispute") => EntitlementStatus::Chargeback,
-        "payment.declined" => EntitlementStatus::Expired,
-        _ => return Vec::new(),
+    } else if t == "payment.completed" {
+        EntitlementStatus::Active
+    } else {
+        return Vec::new();
     };
     let subject = doc.get("subject").unwrap_or(doc);
     let txn = str_field(subject, "transaction_id")
@@ -649,31 +659,11 @@ pub enum WebhookError {
     Malformed(&'static str),
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(data);
-    hex::encode(h.finalize())
-}
-
 fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
     use hmac::{Hmac, Mac};
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key).expect("hmac accepts any key length");
     mac.update(data);
     hex::encode(mac.finalize().into_bytes())
-}
-
-/// Minimal percent-encoding for path/query values (basket idents, return URLs).
-fn urlencoding_light(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~') {
-                c.to_string()
-            } else {
-                format!("%{:02X}", c as u32)
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -772,5 +762,55 @@ mod tests {
             verify_and_parse_webhook(secret, "deadbeef", body.as_bytes()),
             Err(WebhookError::BadSignature)
         ));
+    }
+
+    #[test]
+    fn webhook_status_classification_is_terminal_first() {
+        let subject = serde_json::json!({
+            "transaction_id": "t1",
+            "player": {"uuid": "76561198000000000"},
+            "products": [{"id": 1, "name": "VIP"}]
+        });
+        let status_of = |ty: &str| {
+            let doc = json!({ "id": "e", "type": ty, "subject": subject });
+            parse_webhook_entitlements(&doc, ty)
+                .first()
+                .map(|e| e.status)
+        };
+        assert_eq!(
+            status_of("payment.completed"),
+            Some(EntitlementStatus::Active)
+        );
+        assert_eq!(
+            status_of("recurring-payment.started"),
+            Some(EntitlementStatus::Active)
+        );
+        assert_eq!(
+            status_of("recurring-payment.renewed"),
+            Some(EntitlementStatus::Active)
+        );
+        // Terminal recurring events must NOT be caught by the broad recurring prefix.
+        assert_eq!(
+            status_of("recurring-payment.ended"),
+            Some(EntitlementStatus::Expired)
+        );
+        assert_eq!(
+            status_of("recurring-payment.cancelled"),
+            Some(EntitlementStatus::Expired)
+        );
+        assert_eq!(
+            status_of("payment.chargeback"),
+            Some(EntitlementStatus::Chargeback)
+        );
+        assert_eq!(
+            status_of("payment.dispute.opened"),
+            Some(EntitlementStatus::Chargeback)
+        );
+        assert_eq!(
+            status_of("payment.refunded"),
+            Some(EntitlementStatus::Refunded)
+        );
+        // An unclassifiable recurring change grants nothing (left to reconcile).
+        assert_eq!(status_of("recurring-payment.status-changed"), None);
     }
 }

@@ -190,7 +190,7 @@ pub async fn set_webhook_secret(
         Ok(Json(json!({ "ok": true })))
     } else {
         Err(AppError::BadRequest(
-            "connect a store before configuring its webhook".into(),
+            "a manual webhook secret applies only to a connected Tebex store".into(),
         ))
     }
 }

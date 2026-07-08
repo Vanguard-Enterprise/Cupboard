@@ -51,6 +51,19 @@ async fn supervisor_claims_and_runner_syncs() {
     let stub = PayNowStub::spawn(STUB_API_KEY).await;
     let tenant = Uuid::new_v4();
 
+    // This test drives the GLOBAL supervisor (it claims ANY connected row), so leftover
+    // connected rows from other tests/runs in the shared DB can crowd this test's store out
+    // of the LIMIT-batched claim. Neutralize them up front (they belong to already-finished
+    // tests) so the supervisor reliably reaches the store seeded below.
+    sqlx::query(
+        "UPDATE store_connections SET status = 'disconnected' \
+         WHERE tenant_id <> $1 AND status = 'connected'",
+    )
+    .bind(tenant)
+    .execute(&owner)
+    .await
+    .expect("clear leftover connected rows");
+
     // Seed a connected store the way the connect handler does (probe + sealed key), on
     // the owner pool for brevity (this test exercises the runner, not the HTTP layer).
     let mut probe_client = PayNowClient::new(stub.base_url(), STUB_API_KEY, None::<String>);

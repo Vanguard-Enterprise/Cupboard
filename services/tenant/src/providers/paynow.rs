@@ -15,9 +15,10 @@
 //! exact shells are unverified until a real store exists (PR2 live-verify item).
 
 use super::{
-    CatalogSnapshot, CheckoutBegin, CheckoutRequest, CheckoutStep, EntitlementRecord,
-    EntitlementStatus, NormalizedWebhook, ProductKind, ProviderCategory, ProviderError,
-    ProviderProduct, ReconcilePage, StoreInfo, StoreProvider, WebhookRegistration,
+    http_url_field, str_field, urlencoding_light, CatalogSnapshot, CheckoutBegin, CheckoutRequest,
+    CheckoutStep, EntitlementRecord, EntitlementStatus, NormalizedWebhook, ProductKind,
+    ProviderCategory, ProviderError, ProviderProduct, ReconcilePage, StoreInfo, StoreProvider,
+    WebhookRegistration,
 };
 use base64::Engine as _;
 use cupboard_bmapi::RateLimiter;
@@ -264,26 +265,8 @@ fn require_array(
     })
 }
 
-fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
-    match v.get(key) {
-        // Flake ids must be strings, but tolerate a numeric id defensively.
-        Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(serde_json::Value::Number(n)) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
 fn i64_field(v: &serde_json::Value, key: &str) -> Option<i64> {
     v.get(key).and_then(|x| x.as_i64())
-}
-
-/// Provider-supplied URLs that public pages render into src attributes: http(s) only
-/// (same stored-XSS posture as site-config URLs; the web render layer guards again).
-fn http_url_field(v: &serde_json::Value, key: &str) -> Option<String> {
-    str_field(v, key).filter(|s| {
-        let lower = s.trim().to_ascii_lowercase();
-        lower.starts_with("https://") || lower.starts_with("http://")
-    })
 }
 
 fn map_product(v: &serde_json::Value) -> Option<ProviderProduct> {
@@ -648,20 +631,6 @@ fn hmac_sha256_b64(key: &[u8], data: &[u8]) -> String {
 /// the byte content, not length; both are attacker-influenced but not secret-length).
 fn constant_time_str_eq(a: &str, b: &str) -> bool {
     cupboard_crypto::constant_time_eq(a.as_bytes(), b.as_bytes())
-}
-
-/// Minimal percent-encoding for query values already known to be simple (steam ids,
-/// cursors); escapes anything unexpected defensively.
-fn urlencoding_light(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~') {
-                c.to_string()
-            } else {
-                format!("%{:02X}", c as u32)
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -15,6 +15,26 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+/// Unseal an envelope-encrypted secret to a UTF-8 string. Shared by the checkout path and
+/// the webhook receiver so the decrypt-and-decode of a stored credential lives in one
+/// place. (The runner keeps its own copy: it must mark the connection errored on failure.)
+pub fn unseal_utf8(
+    master_key: &[u8; 32],
+    ciphertext: &[u8],
+    wrapped_dek: &[u8],
+) -> Result<String, AppError> {
+    let bytes = cupboard_crypto::open(
+        master_key,
+        &cupboard_crypto::Envelope {
+            wrapped_dek: wrapped_dek.to_vec(),
+            ciphertext: ciphertext.to_vec(),
+        },
+    )
+    .map_err(|e| AppError::Internal(anyhow::Error::new(e)))?;
+    String::from_utf8(bytes)
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("stored secret is not UTF-8")))
+}
+
 /// Stale-claim takeover threshold (matches the BM runner).
 pub const CLAIM_STALE_SECS: u64 = 120;
 /// Catalog refresh cadence after a successful sync.
@@ -179,8 +199,10 @@ pub async fn connection_view(
     }))
 }
 
-/// Store the operator-provided webhook signing secret (Tebex, whose webhooks are
-/// registered manually in the provider panel). App pool + RLS; only a connected store.
+/// Store the operator-provided webhook signing secret. Restricted to Tebex, whose webhooks
+/// are registered manually in the provider panel; PayNow registers its own secret via the
+/// runner, so overwriting it here would silently break PayNow webhook verification. App
+/// pool + RLS; only a connected store.
 pub async fn set_webhook_secret(
     app_pool: &PgPool,
     tenant: TenantId,
@@ -191,7 +213,7 @@ pub async fn set_webhook_secret(
     let res = sqlx::query(
         "UPDATE store_connections SET \
              webhook_secret_enc = $2, webhook_secret_dek = $3, updated_at = now() \
-         WHERE tenant_id = $1 AND status = 'connected'",
+         WHERE tenant_id = $1 AND status = 'connected' AND provider = 'tebex'",
     )
     .bind(tenant.0)
     .bind(secret_enc)

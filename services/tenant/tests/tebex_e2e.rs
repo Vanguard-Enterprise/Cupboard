@@ -264,6 +264,28 @@ async fn tebex_connect_catalog_checkout_continue_webhook_reconcile() {
     assert_eq!(added.len(), 1, "one package added to the basket");
     assert_eq!(added[0]["package_id"], 100);
 
+    // Idempotency: a refreshed/retried continue must NOT add the package again (no double
+    // charge) - the one-shot latch rejects the second call.
+    let (status, _) = send(
+        &st,
+        "POST",
+        &format!("/player/checkout/{session_id}/continue"),
+        Some(&pl),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a second continue must be rejected"
+    );
+    assert_eq!(
+        stub.packages_for(&basket_ref).len(),
+        1,
+        "the package must not be added twice"
+    );
+
     // A different player cannot drive someone else's checkout continue.
     let (status, _) = send(
         &st,
@@ -339,6 +361,39 @@ async fn tebex_connect_catalog_checkout_continue_webhook_reconcile() {
     let ents = body["entitlements"].as_array().unwrap();
     assert_eq!(ents.len(), 1, "the payment webhook granted one entitlement");
     assert_eq!(ents[0]["product_name"], "VIP");
+
+    // A later reconcile (which carries no expiry for Tebex) must NOT clobber the
+    // webhook-provided expiry with NULL, or a lapsed subscription would look perpetual.
+    let reconcile_rec = cupboard_tenant::providers::EntitlementRecord {
+        external_ref: "tbx-777:100".into(),
+        steam_id: Some(STEAM_ID.into()),
+        product_external_id: Some("100".into()),
+        product_name: Some("VIP".into()),
+        kind: cupboard_tenant::providers::ProductKind::Single,
+        status: cupboard_tenant::providers::EntitlementStatus::Active,
+        granted_at: None,
+        expires_at: None,
+    };
+    cupboard_tenant::domain::entitlements::apply_reconcile_page(
+        &owner,
+        tenant,
+        conn_id,
+        "tebex",
+        &[reconcile_rec],
+    )
+    .await
+    .unwrap();
+    let kept_expiry: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT expires_at FROM entitlements WHERE connection_id = $1 AND external_ref = 'tbx-777:100'",
+    )
+    .bind(conn_id)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert!(
+        kept_expiry.is_some(),
+        "reconcile must not null the webhook-provided expiry"
+    );
 
     // A bad signature is rejected (not ingested).
     let (status, _) = send(

@@ -61,17 +61,7 @@ pub async fn receive(
             "webhook not yet configured for this connection".into(),
         ));
     };
-    let secret = String::from_utf8(
-        cupboard_crypto::open(
-            &master_key,
-            &cupboard_crypto::Envelope {
-                wrapped_dek: dek,
-                ciphertext: enc,
-            },
-        )
-        .map_err(|e| AppError::Internal(anyhow::Error::new(e)))?,
-    )
-    .map_err(|_| AppError::Internal(anyhow::anyhow!("webhook secret is not UTF-8")))?;
+    let secret = store::unseal_utf8(&master_key, &enc, &dek)?;
 
     match kind {
         ProviderKind::PayNow => receive_paynow(&state, &conn, &secret, &headers, &body).await,
