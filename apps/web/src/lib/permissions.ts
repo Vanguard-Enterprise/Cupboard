@@ -12,6 +12,8 @@ export const Permission = {
   PlayersViewPii: "players.view_pii",
   ServersView: "servers.view",
   ServersManage: "servers.manage",
+  StoreManage: "store.manage",
+  SitesEdit: "sites.edit",
   BillingManage: "billing.manage",
   IntegrationsManage: "integrations.manage",
 } as const;

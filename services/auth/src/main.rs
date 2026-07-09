@@ -5,20 +5,15 @@
 //! `cupboard_app` for RLS-scoped request work), ensures and migrates the service-owned
 //! `auth` schema, seeds the permission catalog from code, then serves the HTTP API.
 
-mod config;
-mod domain;
-mod error;
-mod http;
-mod state;
-
 use anyhow::Context as _;
 use axum_extra::extract::cookie::Key;
 use base64::Engine as _;
-use config::Config;
+use cupboard_auth::config::Config;
+use cupboard_auth::http;
+use cupboard_auth::state::AppState;
 use cupboard_auth_core::Keys;
 use cupboard_domain::Permission;
 use sqlx::PgPool;
-use state::AppState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -57,6 +52,18 @@ async fn main() -> anyhow::Result<()> {
 
     let keys = Keys::from_ed_pem(&config.jwt_private_key_pem, &config.jwt_public_key_pem)
         .context("load Ed25519 JWT keys")?;
+    let player_keys = match &config.player {
+        Some(p) => {
+            let pk = cupboard_auth_core::PlayerKeys::from_ed_pem(
+                &p.jwt_private_key_pem,
+                &p.jwt_public_key_pem,
+            )
+            .context("load Ed25519 PLAYER JWT keys")?;
+            tracing::info!("player auth enabled (/auth/player/*)");
+            Some(Arc::new(pk))
+        }
+        None => None,
+    };
     let cookie_key = build_cookie_key(&config)?;
     let http_client = reqwest::Client::builder()
         .build()
@@ -66,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         owner_pool,
         app_pool,
         keys: Arc::new(keys),
+        player_keys,
         config: Arc::new(config.clone()),
         http: http_client,
         cookie_key,

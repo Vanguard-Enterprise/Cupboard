@@ -29,6 +29,9 @@ pub struct Config {
     pub collector_service_url: String,
     /// Base URL of the internal metrics service, for reverse-proxying `/perf/*`.
     pub metrics_service_url: String,
+    /// Base URL of the internal tenant service, for reverse-proxying `/sites/*` +
+    /// `/store/*` (operator, JWT-gated) and `/public/*` (storefront SSR reads, no JWT).
+    pub tenant_service_url: String,
 }
 
 impl Config {
@@ -56,6 +59,8 @@ impl Config {
                 .unwrap_or_else(|_| "http://127.0.0.1:8084".into()),
             metrics_service_url: env::var("METRICS_SERVICE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8085".into()),
+            tenant_service_url: env::var("TENANT_SERVICE_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:8086".into()),
         })
     }
 }

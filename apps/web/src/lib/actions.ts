@@ -5,6 +5,7 @@
 // render it via useActionState.
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { DEFAULT_THEME_ID } from "@/themes/catalog";
 import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
 
 export type FormState = { error?: string };
@@ -415,6 +416,247 @@ export async function updateBmImportScopeAction(
   });
   if (!res.ok) return { error: await readError(res) };
   revalidatePath("/integrations/battlemetrics");
+  return { ok: true };
+}
+
+export type SiteFormState = { error?: string; ok?: boolean };
+
+function trimmed(form: FormData, name: string): string {
+  const v = form.get(name);
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** URL fields must be absolute http(s) URLs; anything else (javascript:, data:,
+ * scheme-relative) is refused before it reaches the API, which enforces the same rule. */
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+/** Build the site config JSON from the editor's form fields. Empty strings are
+ * omitted rather than sent; links missing a label or url are dropped. The config is
+ * always sent in full since the API replaces it wholesale. Returns an error string
+ * instead when a field is invalid. */
+function buildSiteConfig(
+  form: FormData,
+): { config: Record<string, unknown> } | { error: string } {
+  const config: Record<string, unknown> = {};
+
+  const name = trimmed(form, "name");
+  if (name) config.name = name;
+  const logoUrl = trimmed(form, "logo_url");
+  if (logoUrl) {
+    if (!isHttpUrl(logoUrl)) {
+      return { error: "Logo URL must start with http:// or https://" };
+    }
+    config.logo_url = logoUrl;
+  }
+
+  const colors: Record<string, string> = {};
+  const primary = trimmed(form, "color_primary");
+  if (primary) colors.primary = primary;
+  const background = trimmed(form, "color_background");
+  if (background) colors.background = background;
+  const foreground = trimmed(form, "color_foreground");
+  if (foreground) colors.foreground = foreground;
+  if (Object.keys(colors).length > 0) config.colors = colors;
+
+  const hero: Record<string, string> = {};
+  const heroTitle = trimmed(form, "hero_title");
+  if (heroTitle) hero.title = heroTitle;
+  const heroSubtitle = trimmed(form, "hero_subtitle");
+  if (heroSubtitle) hero.subtitle = heroSubtitle;
+  if (Object.keys(hero).length > 0) config.hero = hero;
+
+  const about = trimmed(form, "about");
+  if (about) config.about = about;
+
+  const labels = form.getAll("link_label");
+  const urls = form.getAll("link_url");
+  const links = labels
+    .map((label, i) => ({ label: String(label).trim(), url: String(urls[i] ?? "").trim() }))
+    .filter((l) => l.label && l.url);
+  for (const link of links) {
+    if (!isHttpUrl(link.url)) {
+      return { error: `Link "${link.label}": URL must start with http:// or https://` };
+    }
+  }
+  if (links.length > 0) config.links = links;
+
+  return { config };
+}
+
+/** Create the tenant's white-label site (one per org). */
+export async function createSiteAction(
+  _prev: SiteFormState,
+  form: FormData,
+): Promise<SiteFormState> {
+  const slug = trimmed(form, "slug");
+  if (!slug) return { error: "slug is required" };
+  const themeId = trimmed(form, "theme_id") || DEFAULT_THEME_ID;
+  const built = buildSiteConfig(form);
+  if ("error" in built) return { error: built.error };
+
+  const res = await apiFetch("/sites", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug, theme_id: themeId, config: built.config }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+/** Update the tenant's site: slug, theme, publish state, and the full config. */
+export async function updateSiteAction(
+  _prev: SiteFormState,
+  form: FormData,
+): Promise<SiteFormState> {
+  const slug = trimmed(form, "slug");
+  if (!slug) return { error: "slug is required" };
+  const themeId = trimmed(form, "theme_id") || DEFAULT_THEME_ID;
+  const built = buildSiteConfig(form);
+  if ("error" in built) return { error: built.error };
+  const body = {
+    slug,
+    theme_id: themeId,
+    config: built.config,
+    published: form.get("published") === "on",
+  };
+
+  const res = await apiFetch("/sites", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+export type DomainFormState = { error?: string; ok?: boolean };
+
+/** Connect a custom domain to the tenant's site. The API validates the domain, enforces
+ * the per-tenant cap, and rejects a domain already connected elsewhere (409); those
+ * messages surface inline via readError. */
+export async function addDomainAction(
+  _prev: DomainFormState,
+  form: FormData,
+): Promise<DomainFormState> {
+  const domain = trimmed(form, "domain");
+  if (!domain) return { error: "domain is required" };
+
+  const res = await apiFetch("/sites/domains", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ domain }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+/** Disconnect a custom domain from the tenant's site. */
+export async function removeDomainAction(
+  _prev: DomainFormState,
+  form: FormData,
+): Promise<DomainFormState> {
+  const id = form.get("domain_id");
+  if (typeof id !== "string" || !id) return { error: "missing domain" };
+  const res = await apiFetch(`/sites/domains/${id}`, { method: "DELETE" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+/** Retry DNS/certificate issuance for a domain stuck in a failed status. */
+export async function retryDomainAction(
+  _prev: DomainFormState,
+  form: FormData,
+): Promise<DomainFormState> {
+  const id = form.get("domain_id");
+  if (typeof id !== "string" || !id) return { error: "missing domain" };
+  const res = await apiFetch(`/sites/domains/${id}/retry`, { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/site");
+  return { ok: true };
+}
+
+export type StoreConnectFormState = { error?: string; ok?: boolean };
+
+/** Connect the tenant's store to a payment provider (PayNow or Tebex). The backend probes
+ * the API key before storing it; the key is write-only and never read back. PayNow takes an
+ * optional store id; Tebex requires both its public/project token (store_id) and the Game
+ * Server secret key (api_key). */
+export async function connectStoreAction(
+  _prev: StoreConnectFormState,
+  form: FormData,
+): Promise<StoreConnectFormState> {
+  const provider = form.get("provider");
+  if (provider !== "paynow" && provider !== "tebex") return { error: "unsupported provider" };
+  const apiKey = form.get("api_key");
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
+    return { error: provider === "tebex" ? "Game Server secret key is required" : "API key is required" };
+  }
+  const body: Record<string, unknown> = { provider, api_key: apiKey };
+  const storeId = trimmed(form, "store_id");
+  if (provider === "tebex") {
+    if (!storeId) return { error: "Tebex public token is required" };
+    body.store_id = storeId;
+  } else if (storeId) {
+    body.store_id = storeId;
+  }
+
+  const res = await apiFetch("/store/connection", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
+/** Save the operator-provided Tebex webhook secret (Tebex only). The secret is stored
+ * server-side and used to verify inbound webhook signatures; it is never read back. */
+export async function setWebhookSecretAction(
+  _prev: StoreConnectFormState,
+  form: FormData,
+): Promise<StoreConnectFormState> {
+  const secret = form.get("secret");
+  if (typeof secret !== "string" || !secret.trim()) {
+    return { error: "Webhook secret is required" };
+  }
+  const res = await apiFetch("/store/webhook-secret", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secret }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
+export type StoreFormState = { error?: string; ok?: boolean };
+
+/** Disconnect the tenant's store connection. */
+export async function disconnectStoreAction(
+  _prev: StoreFormState,
+  _form: FormData,
+): Promise<StoreFormState> {
+  const res = await apiFetch("/store/connection", { method: "DELETE" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
+  return { ok: true };
+}
+
+/** Trigger an immediate catalog sync for the tenant's store connection. */
+export async function syncStoreAction(
+  _prev: StoreFormState,
+  _form: FormData,
+): Promise<StoreFormState> {
+  const res = await apiFetch("/store/sync", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/store");
   return { ok: true };
 }
 

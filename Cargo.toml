@@ -15,6 +15,7 @@ members = [
     "services/collector",
     "services/identity",
     "services/metrics",
+    "services/tenant",
 ]
 
 [workspace.package]
@@ -44,8 +45,11 @@ serde_json = "1"
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
-# Event bus — Redis Streams (Collector → Identity/Metrics consumer groups).
-redis = { version = "0.27", default-features = false, features = ["tokio-comp", "streams"] }
+# Event bus — Redis Streams (Collector → Identity/Metrics consumer groups). The
+# connection-manager feature adds the auto-reconnecting handle the tenant service's
+# public-path site-resolve cache uses (a plain multiplexed connection stays down after
+# a Redis restart; the cache must self-heal).
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "streams", "connection-manager"] }
 
 # Observability
 tracing = "0.1"
@@ -96,6 +100,12 @@ cupboard-auth-core = { path = "crates/auth-core" }
 cupboard-gameconn = { path = "crates/gameconn" }
 cupboard-bus = { path = "crates/bus" }
 cupboard-bmapi = { path = "crates/bmapi" }
+
+# Full debuginfo balloons this workspace's debug target/ to ~19 GB, which has filled the
+# dev machine's disk repeatedly. Line tables keep file:line in backtraces (all we use;
+# no interactive debugger workflow here) at a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3

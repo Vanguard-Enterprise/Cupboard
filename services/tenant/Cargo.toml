@@ -1,0 +1,57 @@
+[package]
+name = "cupboard-tenant"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cupboard-tenant"
+path = "src/main.rs"
+
+[features]
+# In-process PayNow stub server for this crate's integration tests (self dev-dependency
+# turns it on for `cargo test -p cupboard-tenant`, the bmapi pattern).
+stub = []
+
+[dependencies]
+cupboard-domain.workspace = true
+cupboard-telemetry.workspace = true
+cupboard-db.workspace = true
+cupboard-crypto.workspace = true
+cupboard-auth-core.workspace = true
+# For its provider-generic sliding-window RateLimiter only (PayNow publishes no rate
+# limits; Tebex allows 500/5min per key). If a second non-BM consumer ever needs it,
+# promote the limiter to its own crate.
+cupboard-bmapi.workspace = true
+
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+redis.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+base64.workspace = true
+hex.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+cupboard-db.workspace = true
+cupboard-domain.workspace = true
+cupboard-auth-core.workspace = true
+cupboard-tenant = { path = ".", features = ["stub"] }
+chrono.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+uuid.workspace = true
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"

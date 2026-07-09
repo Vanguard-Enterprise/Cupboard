@@ -1,0 +1,520 @@
+//! Player accounts (storefront customers): resolve-or-create by external identity,
+//! tenant-scoped player sessions (keyed-hash refresh tokens), the one-time-code login
+//! handoff, and the Steam OpenID nonce replay guard. Global tables (owner pool); a
+//! player is one person platform-wide, distinct from operator `users`.
+
+use crate::error::AppError;
+use chrono::{Duration, Utc};
+use cupboard_domain::OrgId;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+/// One-time login code TTL: long enough for the browser redirect + BFF exchange, short
+/// enough that a leaked redirect URL is near-useless.
+const LOGIN_CODE_TTL_SECS: i64 = 60;
+/// How long a Steam response nonce is remembered (Steam assertions are short-lived; this
+/// only needs to outlast their freshness window).
+const NONCE_RETENTION_SECS: i64 = 3600;
+
+#[derive(Debug, Clone)]
+pub struct PlayerAccount {
+    pub id: Uuid,
+}
+
+/// Resolve the player for an external identity: return the linked account (refreshing its
+/// display/avatar), else create a new account and link the identity. Steam or Discord.
+pub async fn resolve_or_create(
+    pool: &PgPool,
+    provider: &str,
+    subject: &str,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+) -> Result<PlayerAccount, AppError> {
+    let mut tx = pool.begin().await?;
+
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT player_account_id FROM player_identities WHERE provider = $1 AND subject = $2",
+    )
+    .bind(provider)
+    .bind(subject)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let account_id = match existing {
+        Some(id) => id,
+        None => {
+            // Race-safe first link: create an account, then claim the identity with an
+            // ON CONFLICT guard. `player_identities.UNIQUE(provider, subject)` is the
+            // single source of truth: if a concurrent first-login won the race, our
+            // insert affects zero rows and we drop the orphan account, then read the
+            // winner's id.
+            let new_account: Uuid = sqlx::query_scalar(
+                "INSERT INTO player_accounts (display_name, avatar_url) VALUES ($1, $2) \
+                 RETURNING id",
+            )
+            .bind(display_name)
+            .bind(avatar_url)
+            .fetch_one(&mut *tx)
+            .await?;
+            let claimed = sqlx::query(
+                "INSERT INTO player_identities \
+                     (player_account_id, provider, subject, display_name, avatar_url) \
+                 VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (provider, subject) DO NOTHING",
+            )
+            .bind(new_account)
+            .bind(provider)
+            .bind(subject)
+            .bind(display_name)
+            .bind(avatar_url)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            if claimed == 0 {
+                sqlx::query("DELETE FROM player_accounts WHERE id = $1")
+                    .bind(new_account)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT player_account_id FROM player_identities \
+                     WHERE provider = $1 AND subject = $2",
+                )
+                .bind(provider)
+                .bind(subject)
+                .fetch_one(&mut *tx)
+                .await?
+            } else {
+                new_account
+            }
+        }
+    };
+
+    // Refresh the cached profile + last-login on the resolved account (and its identity).
+    sqlx::query(
+        "UPDATE player_identities SET display_name = COALESCE($3, display_name), \
+             avatar_url = COALESCE($4, avatar_url) \
+         WHERE provider = $1 AND subject = $2",
+    )
+    .bind(provider)
+    .bind(subject)
+    .bind(display_name)
+    .bind(avatar_url)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE player_accounts SET last_login_at = now(), \
+             display_name = COALESCE($2, display_name), \
+             avatar_url = COALESCE($3, avatar_url) \
+         WHERE id = $1",
+    )
+    .bind(account_id)
+    .bind(display_name)
+    .bind(avatar_url)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(PlayerAccount { id: account_id })
+}
+
+/// Link-state TTL: long enough for the browser -> Discord -> callback roundtrip.
+const LINK_STATE_TTL_SECS: i64 = 600;
+
+/// Link an external identity to an EXISTING player account (the account-page "link"
+/// action). Idempotent when re-linking the same identity to the same account; errors if
+/// the identity already belongs to a DIFFERENT account (identities are globally unique per
+/// provider, so one Discord account maps to one player).
+pub async fn link_identity(
+    pool: &PgPool,
+    player_id: Uuid,
+    provider: &str,
+    subject: &str,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    // One identity per (account, provider): a re-link REPLACES any prior identity of this
+    // provider on the account (so the account never accumulates stale rows).
+    sqlx::query(
+        "DELETE FROM player_identities \
+         WHERE player_account_id = $1 AND provider = $2 AND subject <> $3",
+    )
+    .bind(player_id)
+    .bind(provider)
+    .bind(subject)
+    .execute(&mut *tx)
+    .await?;
+    // Claim the identity atomically against the global UNIQUE(provider, subject). The
+    // guarded upsert updates/inserts only when the (conflicting) row belongs to THIS
+    // account; if it belongs to a different player it is a no-op (RETURNING yields no row),
+    // which we surface as a Conflict without ever hitting a raw 23505 (race-safe, unlike a
+    // check-then-insert where a FOR UPDATE on a not-yet-existing row locks nothing).
+    let claimed: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO player_identities \
+             (player_account_id, provider, subject, display_name, avatar_url) \
+         VALUES ($1, $2, $3, $4, $5) \
+         ON CONFLICT (provider, subject) DO UPDATE SET \
+             display_name = COALESCE(EXCLUDED.display_name, player_identities.display_name), \
+             avatar_url = COALESCE(EXCLUDED.avatar_url, player_identities.avatar_url) \
+         WHERE player_identities.player_account_id = $1 \
+         RETURNING player_account_id",
+    )
+    .bind(player_id)
+    .bind(provider)
+    .bind(subject)
+    .bind(display_name)
+    .bind(avatar_url)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if claimed.is_none() {
+        tx.rollback().await?;
+        return Err(AppError::Conflict(
+            "that account is already linked to a different player".into(),
+        ));
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A player's linked identities (provider, subject, display name) for the account page.
+pub async fn list_identities(
+    pool: &PgPool,
+    player_id: Uuid,
+) -> Result<Vec<(String, String, Option<String>)>, AppError> {
+    Ok(sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT provider, subject, display_name FROM player_identities \
+         WHERE player_account_id = $1 ORDER BY linked_at",
+    )
+    .bind(player_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Mint a single-use link-state token binding a player + storefront for an OAuth link
+/// callback. Returns the raw state (goes only in the OAuth `state` param); only its keyed
+/// hash is stored.
+pub async fn create_link_state(
+    pool: &PgPool,
+    player_id: Uuid,
+    tenant: OrgId,
+    site_host: &str,
+    provider: &str,
+    pepper: &[u8],
+) -> Result<String, AppError> {
+    let state = cupboard_crypto::random_token();
+    let hash = cupboard_crypto::hash_token(&state, pepper);
+    let expires_at = Utc::now() + Duration::seconds(LINK_STATE_TTL_SECS);
+    sqlx::query(
+        "INSERT INTO player_link_states \
+             (state_hash, player_account_id, tenant_id, site_host, provider, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(hash)
+    .bind(player_id)
+    .bind(tenant.0)
+    .bind(site_host)
+    .bind(provider)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(state)
+}
+
+/// The binding a redeemed link-state carries into the callback.
+pub struct RedeemedLinkState {
+    pub player_account_id: Uuid,
+    pub tenant_id: Uuid,
+    pub site_host: String,
+}
+
+/// Atomically consume a link-state token (single-use, TTL-bound, provider-scoped). Also
+/// prunes expired states.
+pub async fn redeem_link_state(
+    pool: &PgPool,
+    state: &str,
+    provider: &str,
+    pepper: &[u8],
+) -> Result<RedeemedLinkState, AppError> {
+    let hash = cupboard_crypto::hash_token(state, pepper);
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String)>(
+        "DELETE FROM player_link_states \
+         WHERE state_hash = $1 AND provider = $2 AND expires_at > now() \
+         RETURNING player_account_id, tenant_id, site_host",
+    )
+    .bind(&hash)
+    .bind(provider)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::Unauthorized("link request is invalid, expired, or already used".into())
+    })?;
+    let _ = sqlx::query("DELETE FROM player_link_states WHERE expires_at < now()")
+        .execute(pool)
+        .await;
+    Ok(RedeemedLinkState {
+        player_account_id: row.0,
+        tenant_id: row.1,
+        site_host: row.2,
+    })
+}
+
+/// One-time LINK CODE TTL: long enough for the OAuth callback -> storefront -> BFF
+/// complete hop, short enough that a leaked redirect URL is near-useless.
+const LINK_CODE_TTL_SECS: i64 = 60;
+
+/// Mint a one-time link code carrying a VERIFIED external identity + the initiating player,
+/// for the account-page complete step. Returns the raw code (goes only in the redirect
+/// URL); only its keyed hash is stored. This is the CSRF fix: the code binds the identity
+/// to the player who initiated the flow, and the link is only performed once the same
+/// authenticated player redeems it (so a relayed callback cannot link anyone to anyone).
+#[allow(clippy::too_many_arguments)]
+pub async fn issue_link_code(
+    pool: &PgPool,
+    player_id: Uuid,
+    tenant_id: Uuid,
+    site_host: &str,
+    provider: &str,
+    subject: &str,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+    pepper: &[u8],
+) -> Result<String, AppError> {
+    let code = cupboard_crypto::random_token();
+    let hash = cupboard_crypto::hash_token(&code, pepper);
+    let expires_at = Utc::now() + Duration::seconds(LINK_CODE_TTL_SECS);
+    sqlx::query(
+        "INSERT INTO player_link_codes \
+             (code_hash, player_account_id, provider, subject, display_name, avatar_url, \
+              tenant_id, site_host, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(hash)
+    .bind(player_id)
+    .bind(provider)
+    .bind(subject)
+    .bind(display_name)
+    .bind(avatar_url)
+    .bind(tenant_id)
+    .bind(site_host)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(code)
+}
+
+/// The verified identity + binding a redeemed link code carries into the complete step.
+pub struct RedeemedLinkCode {
+    pub player_account_id: Uuid,
+    pub tenant_id: Uuid,
+    pub provider: String,
+    pub subject: String,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+/// Atomically consume a link code (single-use, TTL-bound). Also prunes expired codes.
+pub async fn redeem_link_code(
+    pool: &PgPool,
+    code: &str,
+    pepper: &[u8],
+) -> Result<RedeemedLinkCode, AppError> {
+    let hash = cupboard_crypto::hash_token(code, pepper);
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, String, Option<String>, Option<String>)>(
+        "DELETE FROM player_link_codes WHERE code_hash = $1 AND expires_at > now() \
+         RETURNING player_account_id, tenant_id, provider, subject, display_name, avatar_url",
+    )
+    .bind(&hash)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::Unauthorized("link code is invalid, expired, or already used".into())
+    })?;
+    let _ = sqlx::query("DELETE FROM player_link_codes WHERE expires_at < now()")
+        .execute(pool)
+        .await;
+    Ok(RedeemedLinkCode {
+        player_account_id: row.0,
+        tenant_id: row.1,
+        provider: row.2,
+        subject: row.3,
+        display_name: row.4,
+        avatar_url: row.5,
+    })
+}
+
+/// Record a Steam OpenID response nonce; returns `false` if it was already seen (replay).
+/// Also opportunistically prunes expired nonces.
+pub async fn record_nonce(pool: &PgPool, nonce: &str, pepper: &[u8]) -> Result<bool, AppError> {
+    let hash = cupboard_crypto::hmac_sha256(nonce.as_bytes(), pepper).to_vec();
+    let inserted =
+        sqlx::query("INSERT INTO openid_replay (nonce_hash) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind(&hash)
+            .execute(pool)
+            .await?
+            .rows_affected();
+    // Best-effort prune (cheap; index on seen_at).
+    let _ =
+        sqlx::query("DELETE FROM openid_replay WHERE seen_at < now() - make_interval(secs => $1)")
+            .bind(NONCE_RETENTION_SECS as f64)
+            .execute(pool)
+            .await;
+    Ok(inserted == 1)
+}
+
+/// Mint a one-time login code for the handoff to a tenant site. Returns the raw code
+/// (goes only in the redirect URL); only its SHA-256 keyed hash is stored.
+pub async fn issue_login_code(
+    pool: &PgPool,
+    player_id: Uuid,
+    tenant: OrgId,
+    site_host: &str,
+    steam_id: Option<&str>,
+    pepper: &[u8],
+) -> Result<String, AppError> {
+    let code = cupboard_crypto::random_token();
+    let hash = cupboard_crypto::hash_token(&code, pepper);
+    let expires_at = Utc::now() + Duration::seconds(LOGIN_CODE_TTL_SECS);
+    sqlx::query(
+        "INSERT INTO player_login_codes \
+             (code_hash, player_account_id, tenant_id, site_host, steam_id, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(hash)
+    .bind(player_id)
+    .bind(tenant.0)
+    .bind(site_host)
+    .bind(steam_id)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    Ok(code)
+}
+
+/// The claims a redeemed login code carries into the minted session.
+pub struct RedeemedCode {
+    pub player_account_id: Uuid,
+    pub tenant_id: Uuid,
+    pub site_host: String,
+    pub steam_id: Option<String>,
+}
+
+/// Atomically consume a login code, verifying the site host it was issued for. Single-use
+/// (DELETE ... RETURNING) and TTL-bounded; also prunes expired codes.
+pub async fn redeem_login_code(
+    pool: &PgPool,
+    code: &str,
+    site_host: &str,
+    pepper: &[u8],
+) -> Result<RedeemedCode, AppError> {
+    let hash = cupboard_crypto::hash_token(code, pepper);
+    let row = sqlx::query_as::<_, (Uuid, Uuid, String, Option<String>)>(
+        "DELETE FROM player_login_codes \
+         WHERE code_hash = $1 AND site_host = $2 AND expires_at > now() \
+         RETURNING player_account_id, tenant_id, site_host, steam_id",
+    )
+    .bind(&hash)
+    .bind(site_host)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| {
+        AppError::Unauthorized("login code is invalid, expired, or already used".into())
+    })?;
+
+    let _ = sqlx::query("DELETE FROM player_login_codes WHERE expires_at < now()")
+        .execute(pool)
+        .await;
+
+    Ok(RedeemedCode {
+        player_account_id: row.0,
+        tenant_id: row.1,
+        site_host: row.2,
+        steam_id: row.3,
+    })
+}
+
+/// Create a tenant-scoped player session; returns the raw refresh token (shown once).
+#[allow(clippy::too_many_arguments)]
+pub async fn create_session(
+    pool: &PgPool,
+    player_id: Uuid,
+    tenant_id: Uuid,
+    site_host: &str,
+    user_agent: Option<&str>,
+    ip: Option<&str>,
+    ttl_secs: i64,
+    pepper: &[u8],
+) -> Result<(Uuid, String), AppError> {
+    let refresh_token = cupboard_crypto::random_token();
+    let hash = cupboard_crypto::hash_token(&refresh_token, pepper);
+    let expires_at = Utc::now() + Duration::seconds(ttl_secs);
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO player_sessions \
+             (player_account_id, tenant_id, site_host, refresh_token_hash, user_agent, ip, \
+              expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+    )
+    .bind(player_id)
+    .bind(tenant_id)
+    .bind(site_host)
+    .bind(hash)
+    .bind(user_agent)
+    .bind(ip)
+    .bind(expires_at)
+    .fetch_one(pool)
+    .await?;
+    Ok((id, refresh_token))
+}
+
+/// A valid player session resolved from a refresh token.
+pub struct PlayerSession {
+    pub id: Uuid,
+    pub player_account_id: Uuid,
+    pub tenant_id: Uuid,
+    pub steam_id: Option<String>,
+}
+
+/// Look up a live (unexpired, unrevoked) player session by refresh token, joined to the
+/// account and its Steam identity (for re-minting an access token).
+pub async fn find_session_by_token(
+    pool: &PgPool,
+    refresh_token: &str,
+    pepper: &[u8],
+) -> Result<Option<PlayerSession>, AppError> {
+    let hash = cupboard_crypto::hash_token(refresh_token, pepper);
+    // Touch last_used_at and return the live session joined to its (earliest-linked)
+    // Steam identity. Deterministic ORDER BY so a multi-identity account is stable.
+    let row = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Option<String>)>(
+        "UPDATE player_sessions s SET last_used_at = now() \
+         WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
+         RETURNING s.id, s.player_account_id, s.tenant_id, \
+                (SELECT subject FROM player_identities \
+                   WHERE player_account_id = s.player_account_id AND provider = 'steam' \
+                   ORDER BY linked_at ASC LIMIT 1)",
+    )
+    .bind(&hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| PlayerSession {
+        id: r.0,
+        player_account_id: r.1,
+        tenant_id: r.2,
+        steam_id: r.3,
+    }))
+}
+
+/// Revoke a player session by its refresh token (logout). Idempotent.
+pub async fn revoke_session(
+    pool: &PgPool,
+    refresh_token: &str,
+    pepper: &[u8],
+) -> Result<(), AppError> {
+    let hash = cupboard_crypto::hash_token(refresh_token, pepper);
+    sqlx::query(
+        "UPDATE player_sessions SET revoked_at = now() \
+         WHERE refresh_token_hash = $1 AND revoked_at IS NULL",
+    )
+    .bind(&hash)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

@@ -2,6 +2,8 @@ import Link from "next/link";
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
 import { BanForm } from "../../bans/ban-form";
+import { EntitlementsTable } from "../../store/entitlements-table";
+import type { Entitlement } from "../../store/shared";
 
 type Profile = {
   player: {
@@ -80,6 +82,15 @@ export default async function PlayerProfilePage({
   const steamId = profile.identifiers.find((i) => i.type === "steam")?.value ?? null;
   const canBan = can(session.permissions, Permission.BansCreate);
 
+  // Entitlements are only fetched (and only shown) for operators with store.manage, and only
+  // when the player has a Steam identity to key the purchase history on.
+  const canStore = can(session.permissions, Permission.StoreManage);
+  let entitlements: Entitlement[] = [];
+  if (steamId && canStore) {
+    const entRes = await apiFetch(`/store/entitlements?steam_id=${encodeURIComponent(steamId)}`);
+    entitlements = entRes.ok ? (await entRes.json()).entitlements : [];
+  }
+
   return (
     <div className="flex flex-col gap-8">
       <div>
@@ -116,6 +127,8 @@ export default async function PlayerProfilePage({
           <BanForm subjectValue={steamId} playerId={profile.player.id} label="Ban player" />
         </section>
       )}
+
+      {steamId && canStore && <EntitlementsTable entitlements={entitlements} />}
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-300">Identifiers</h2>

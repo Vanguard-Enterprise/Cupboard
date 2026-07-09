@@ -92,6 +92,7 @@
 - **Sites:** white-label public site, **curated themes + config**, Next.js **SSR tenant-by-hostname**; custom-domain onboarding (point DNS at us) + **cert-manager HTTP-01 over Traefik** per domain.
 - **Player accounts** (Steam + Discord) on tenant sites; on-site store pages + **checkout handoff to provider**; entitlement/profile/stats views.
 - **DoD:** tenant connects a custom domain (auto-TLS), picks a theme, store renders from PayNow/Tebex, a player logs in via Steam and reaches checkout.
+- **Status (2026-07-08):** code-complete on branch `phase5` (8 PRs, each high-effort-reviewed + fixed). Live DoD pending operator prerequisites (router `:80` forward, a test custom domain, PayNow/Tebex test stores, OpenBao secrets). Go-live runbook + verified degradation matrix: `docs/phase5-closeout.md`.
 
 ## Phase 6 — Support + billing + public API  · size **L**
 
