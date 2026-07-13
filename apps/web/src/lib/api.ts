@@ -73,7 +73,16 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   });
   if (!refreshed.ok) return res;
   const tokens = (await refreshed.json()) as Tokens;
-  await setSession(tokens, org ?? null);
+  // Best-effort persist: Next.js forbids cookie writes during a Server Component render
+  // (only Server Actions / Route Handlers may write). apiFetch is called from both, so when
+  // a render triggers the refresh we still use the fresh token for THIS request (below) and
+  // let the next action/handler persist it, rather than crashing the page. Mirrors
+  // setPlayerAccess() in lib/player.ts.
+  try {
+    await setSession(tokens, org ?? null);
+  } catch {
+    // Rendering context; the refreshed token is still used for the current request.
+  }
   return fetch(gatewayBase() + path, withAuth(init, tokens.access_token));
 }
 
