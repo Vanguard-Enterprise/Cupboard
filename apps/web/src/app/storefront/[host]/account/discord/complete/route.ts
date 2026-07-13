@@ -8,12 +8,19 @@ import { gatewayBase } from "@/lib/api";
 
 const ACCESS = "cb_player_access";
 
+// A relative-Location 303. Building an absolute URL from request.url would use the pod's
+// internal address (0.0.0.0:3000) since cupboard-web is behind Traefik/the gateway; a
+// relative Location resolves against the public storefront URL the browser is on.
+function see(path: string): NextResponse {
+  return new NextResponse(null, { status: 303, headers: { location: path } });
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get("code");
   const token = request.cookies.get(ACCESS)?.value;
-  const fail = NextResponse.redirect(new URL("/account?discord=error", request.url), 303);
+  const fail = see("/account?discord=error");
 
-  if (!token) return NextResponse.redirect(new URL("/login", request.url), 303);
+  if (!token) return see("/login");
   if (!code) return fail;
 
   const res = await fetch(gatewayBase() + "/auth/player/discord/complete", {
@@ -29,5 +36,5 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const body = (await res.json().catch(() => null)) as { outcome?: unknown } | null;
   const outcome = body && typeof body.outcome === "string" ? body.outcome : "error";
-  return NextResponse.redirect(new URL(`/account?discord=${outcome}`, request.url), 303);
+  return see(`/account?discord=${outcome}`);
 }

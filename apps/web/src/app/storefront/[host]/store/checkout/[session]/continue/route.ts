@@ -9,15 +9,22 @@ import { gatewayBase } from "@/lib/api";
 
 const ACCESS = "cb_player_access";
 
+// A relative-Location 303. An absolute URL from request.url would use the pod's internal
+// address (0.0.0.0:3000) behind Traefik/the gateway; a relative Location resolves against
+// the public storefront URL the browser is on. (The provider redirect below stays absolute.)
+function see(path: string): NextResponse {
+  return new NextResponse(null, { status: 303, headers: { location: path } });
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ host: string; session: string }> },
 ): Promise<NextResponse> {
   const token = request.cookies.get(ACCESS)?.value;
-  if (!token) return NextResponse.redirect(new URL("/login", request.url), 303);
+  if (!token) return see("/login");
 
   const { session } = await params;
-  const fail = NextResponse.redirect(new URL("/store?error=1", request.url), 303);
+  const fail = see("/store?error=1");
 
   const res = await fetch(`${gatewayBase()}/player/checkout/${session}/continue`, {
     method: "POST",

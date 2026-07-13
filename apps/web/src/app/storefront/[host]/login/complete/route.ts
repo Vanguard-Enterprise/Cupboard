@@ -6,10 +6,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { gatewayBase } from "@/lib/api";
 import { setPlayerSession, type PlayerTokens } from "@/lib/player";
 
+// A relative-Location 303. Building an absolute URL from request.url would use the pod's
+// internal address (0.0.0.0:3000) because cupboard-web sits behind Traefik/the gateway; a
+// relative Location is resolved by the browser against the public storefront URL it is on.
+function see(path: string): NextResponse {
+  return new NextResponse(null, { status: 303, headers: { location: path } });
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const code = request.nextUrl.searchParams.get("code");
   const siteHost = request.headers.get("x-cb-site-host");
-  const fail = NextResponse.redirect(new URL("/login?error=1", request.url), 303);
+  const fail = see("/login?error=1");
 
   if (!code || !siteHost) return fail;
 
@@ -28,5 +35,5 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     access_token: body.access_token,
     refresh_token: body.refresh_token,
   });
-  return NextResponse.redirect(new URL("/account", request.url), 303);
+  return see("/account");
 }
