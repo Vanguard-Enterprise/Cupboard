@@ -70,7 +70,13 @@ async fn main() -> anyhow::Result<()> {
         pool,
         environment: config.environment.clone(),
         keys,
-        http: reqwest::Client::builder().build()?,
+        // No redirect following: as a reverse proxy we must pass upstream 3xx responses
+        // through to the client unchanged. Otherwise an auth OAuth-start endpoint that
+        // returns 303 -> discord.com would be chased here and the provider's page returned
+        // in place of the redirect, breaking the browser OAuth flow.
+        http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?,
         auth_service_url: config.auth_service_url.clone(),
         fleet_service_url: config.fleet_service_url.clone(),
         identity_service_url: config.identity_service_url.clone(),
