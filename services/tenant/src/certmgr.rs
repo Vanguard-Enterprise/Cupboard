@@ -61,6 +61,11 @@ pub struct KubeProvisioner {
     issuer: String,
     web_service: String,
     web_port: u16,
+    /// Ingress class stamped on the per-domain IngressRoute. The external Traefik's
+    /// kubernetescrd provider filters on this (`--providers.kubernetescrd.ingressClass`);
+    /// without a matching `kubernetes.io/ingress.class` annotation the route is silently
+    /// ignored, so the custom domain serves the default cert + 404 instead of its own.
+    ingress_class: String,
 }
 
 impl KubeProvisioner {
@@ -71,6 +76,7 @@ impl KubeProvisioner {
         issuer: String,
         web_service: String,
         web_port: u16,
+        ingress_class: String,
     ) -> Option<Self> {
         // Confirm we are in-cluster (token present); the token itself is read fresh per
         // request below, not cached, since it is a short-lived BoundServiceAccountToken.
@@ -88,6 +94,7 @@ impl KubeProvisioner {
             issuer,
             web_service,
             web_port,
+            ingress_class,
         })
     }
 
@@ -190,7 +197,11 @@ impl CertProvisioner for KubeProvisioner {
         let route = json!({
             "apiVersion": ROUTE_GV,
             "kind": "IngressRoute",
-            "metadata": { "name": spec.route_name, "namespace": self.namespace },
+            "metadata": {
+                "name": spec.route_name,
+                "namespace": self.namespace,
+                "annotations": { "kubernetes.io/ingress.class": self.ingress_class },
+            },
             "spec": {
                 "entryPoints": ["websecure"],
                 "routes": [{

@@ -109,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
         config.cert_issuer.clone(),
         config.web_service_name.clone(),
         config.web_service_port,
+        config.ingress_class.clone(),
     ) {
         Some(provisioner) => {
             tracing::info!(

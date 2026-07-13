@@ -70,6 +70,9 @@ pub struct Config {
     pub cert_issuer: String,
     pub web_service_name: String,
     pub web_service_port: u16,
+    /// Ingress class annotation for the per-domain IngressRoute. Must match the external
+    /// Traefik's kubernetescrd `ingressClass`, else the route is ignored (default cert + 404).
+    pub ingress_class: String,
 }
 
 impl Config {
@@ -154,6 +157,8 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3000),
+            ingress_class: env::var("TRAEFIK_INGRESS_CLASS")
+                .unwrap_or_else(|_| "traefik-external".into()),
         })
     }
 
