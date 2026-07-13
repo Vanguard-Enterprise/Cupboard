@@ -79,6 +79,7 @@ fn state(owner: PgPool, app: PgPool, tebex_base: String) -> AppState {
         cert_issuer: "letsencrypt-http01".into(),
         web_service_name: "cupboard-web".into(),
         web_service_port: 3000,
+        ingress_class: "traefik-external".into(),
     };
     AppState {
         owner_pool: owner,
