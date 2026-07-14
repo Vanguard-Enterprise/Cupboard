@@ -8,11 +8,11 @@
 //! org yet) and mints a short-lived operator JWT. The raw token is write-only: it is
 //! returned exactly once at creation and never logged or stored.
 
-use crate::domain::rbac;
+use crate::domain::{plans, rbac};
 use crate::error::AppError;
 use chrono::{DateTime, Utc};
 use cupboard_auth_core::{Claims, Keys};
-use cupboard_domain::{OrgId, TenantId, UserId};
+use cupboard_domain::{OrgId, Plan, TenantId, UserId};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -50,7 +50,9 @@ pub struct NewApiKey {
 
 /// Create a key. `scopes` must already be validated/capped by the caller (the HTTP
 /// layer owns the no-escalation check against the creator's resolved permissions).
+/// `plan` drives the per-plan live-key cap (decision N / Resolved with Frank #1).
 /// RLS-scoped to `tenant`.
+#[allow(clippy::too_many_arguments)]
 pub async fn create_key(
     app_pool: &PgPool,
     tenant: TenantId,
@@ -58,6 +60,7 @@ pub async fn create_key(
     scopes: &[String],
     created_by: Uuid,
     expires_at: Option<DateTime<Utc>>,
+    plan: Plan,
     pepper: &[u8],
 ) -> Result<NewApiKey, AppError> {
     let token = format!("{TOKEN_PREFIX}{}", cupboard_crypto::random_token());
@@ -66,6 +69,32 @@ pub async fn create_key(
     let id = Uuid::now_v7();
 
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    // Serialize concurrent creates for this tenant so the count-then-insert cap cannot
+    // be raced (the tenant-service domain cap precedent). Seed 1, not 0: the shared
+    // database means seed-0 would share a lock keyspace with that domain cap and
+    // needlessly serialize unrelated operations on the same tenant.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 1))")
+        .bind(tenant.0)
+        .execute(&mut *tx)
+        .await?;
+    // Live = neither revoked nor expired; revoking a key frees its cap slot. The
+    // explicit organization_id predicate is defense in depth (the domain-cap
+    // precedent): RLS already scopes this on the app pool, but on an owner-role
+    // fallback (unset DATABASE_URL_APP in dev/tests) a bare count would be global.
+    let live: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM api_keys \
+         WHERE organization_id = $1 \
+           AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
+    )
+    .bind(tenant.0)
+    .fetch_one(&mut *tx)
+    .await?;
+    let cap = plan.limits().max_api_keys;
+    if live >= i64::from(cap) {
+        return Err(AppError::Conflict(format!(
+            "the {plan} plan allows {cap} active API key(s); revoke one or upgrade your plan"
+        )));
+    }
     let sql = format!(
         "INSERT INTO api_keys \
          (id, organization_id, name, token_prefix, key_hash, scopes, created_by, expires_at) \
@@ -180,8 +209,9 @@ pub async fn exchange(
     }
 
     // Built directly rather than via sessions::mint_access_token: `sub` is the key id,
-    // not a user id, and `sid` correlates back to the key. `plan` stays None in PR1
-    // (absent = free); PR2 reads the org_plans mirror here.
+    // not a user id, and `sid` correlates back to the key. `plan` comes from the
+    // org_plans mirror (None = free, same rule as every operator mint).
+    let plan = plans::plan_claim(owner_pool, row.organization_id).await?;
     let mut claims = Claims::new(
         UserId(row.id),
         row.id,
@@ -189,6 +219,7 @@ pub async fn exchange(
         effective,
         EXCHANGE_TOKEN_TTL_SECS,
     );
+    claims.plan = plan;
     claims.kind = Some("api_key".into());
     Ok(keys.encode(&claims)?)
 }

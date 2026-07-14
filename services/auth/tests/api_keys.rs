@@ -1,8 +1,10 @@
-//! Integration tests for Phase 6 PR1 API keys: the no-escalation scope cap at
-//! creation, the exchange's revocation/expiry and membership-lifecycle refusals, the
-//! demotion-shrinks-the-intersection rule, and RLS isolation of the management surface.
-//! Driven through the real router (tower `oneshot`), with orgs/roles seeded on the
-//! owner pool exactly as org creation would materialize them.
+//! Integration tests for Phase 6 API keys and the org plan mirror: the no-escalation
+//! scope cap at creation, the exchange's revocation/expiry and membership-lifecycle
+//! refusals, the demotion-shrinks-the-intersection rule, RLS isolation of the
+//! management surface, the PUT /internal/orgs/{id}/plan write path (guard, validation,
+//! upsert), the plan claim at the operator and exchange mint sites, and the per-plan
+//! live-key cap. Driven through the real router (tower `oneshot`), with orgs/roles
+//! seeded on the owner pool exactly as org creation would materialize them.
 //!
 //! Requires `TEST_DATABASE_URL` (+ `TEST_DATABASE_URL_APP` for the RLS test to bite);
 //! skips (passes) when unset.
@@ -29,6 +31,7 @@ const OP_PUB: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA18nW4fku7YaJR/
 
 const PEPPER: &str = "test-pepper-api-keys";
 const INTERNAL_TOKEN: &str = "test-internal-token";
+const PLAN_WRITE_TOKEN: &str = "test-plan-write-token";
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 static MIGRATED: OnceCell<()> = OnceCell::const_new();
@@ -85,6 +88,7 @@ fn test_state(owner: PgPool, app: PgPool) -> AppState {
         refresh_token_ttl_secs: 3600,
         token_pepper: PEPPER.into(),
         internal_api_token: Some(INTERNAL_TOKEN.into()),
+        plan_write_token: Some(PLAN_WRITE_TOKEN.into()),
         public_base_url: "http://localhost:3000".into(),
         discord: None,
         cookie_signing_key: None,
@@ -558,4 +562,263 @@ async fn rls_isolates_api_keys_between_orgs() {
         .expect("count");
     tx.commit().await.expect("commit");
     assert_eq!(visible, 0, "RLS must hide org B's key from org A's scope");
+}
+
+// ============================ Org plan mirror (PR2) ============================
+
+/// Push a plan through the internal write route; returns the response status.
+async fn push_plan(
+    state: &AppState,
+    org: Uuid,
+    plan: &str,
+    status: &str,
+    token: Option<&str>,
+) -> StatusCode {
+    let (s, _) = send(
+        state,
+        "PUT",
+        &format!("/internal/orgs/{org}/plan"),
+        None,
+        token,
+        Some(serde_json::json!({ "plan": plan, "status": status })),
+    )
+    .await;
+    s
+}
+
+#[tokio::test]
+async fn plan_write_is_guarded_validated_and_upserts() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP plan_write_is_guarded_validated_and_upserts: TEST_DATABASE_URL unset");
+        return;
+    };
+    let state = test_state(owner.clone(), app);
+    let org = Uuid::new_v4();
+
+    // Guard: missing and wrong tokens refuse; the shared INTERNAL_API_TOKEN is NOT the
+    // plan-write token (decision K keeps them distinct) and must also refuse.
+    assert_eq!(
+        push_plan(&state, org, "team", "active", None).await,
+        StatusCode::UNAUTHORIZED,
+        "missing plan-write token must 401"
+    );
+    assert_eq!(
+        push_plan(&state, org, "team", "active", Some("wrong-token")).await,
+        StatusCode::UNAUTHORIZED,
+        "wrong plan-write token must 401"
+    );
+    assert_eq!(
+        push_plan(&state, org, "team", "active", Some(INTERNAL_TOKEN)).await,
+        StatusCode::UNAUTHORIZED,
+        "the shared internal token must not authorize plan writes"
+    );
+
+    // Validation: unknown plan strings are rejected.
+    assert_eq!(
+        push_plan(&state, org, "platinum", "active", Some(PLAN_WRITE_TOKEN)).await,
+        StatusCode::BAD_REQUEST,
+        "unknown plan must 400"
+    );
+
+    // Upsert: write team, then enterprise; the single row reflects the latest push.
+    assert_eq!(
+        push_plan(&state, org, "team", "active", Some(PLAN_WRITE_TOKEN)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        push_plan(
+            &state,
+            org,
+            "enterprise",
+            "trialing",
+            Some(PLAN_WRITE_TOKEN)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let (plan, status): (String, String) =
+        sqlx::query_as("SELECT plan, status FROM org_plans WHERE organization_id = $1")
+            .bind(org)
+            .fetch_one(&owner)
+            .await
+            .expect("read mirror row");
+    assert_eq!((plan.as_str(), status.as_str()), ("enterprise", "trialing"));
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM org_plans WHERE organization_id = $1")
+        .bind(org)
+        .fetch_one(&owner)
+        .await
+        .expect("count mirror rows");
+    assert_eq!(rows, 1, "pushes must upsert one row, not accumulate");
+}
+
+#[tokio::test]
+async fn plan_claim_is_minted_from_the_mirror_at_every_mint_site() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!(
+            "SKIP plan_claim_is_minted_from_the_mirror_at_every_mint_site: TEST_DATABASE_URL unset"
+        );
+        return;
+    };
+    let state = test_state(owner.clone(), app);
+    let perms = [Permission::ApiManage, Permission::BansView];
+    let op = seed_operator(&owner, &perms).await;
+    let verifier = Keys::verifier_from_ed_pem(OP_PUB).unwrap();
+
+    // A real refresh session drives the POST /auth/token mint site.
+    let session = cupboard_auth::domain::sessions::create_session(
+        &owner,
+        op.user_id,
+        None,
+        None,
+        3600,
+        PEPPER.as_bytes(),
+    )
+    .await
+    .expect("create session");
+    let mint = |refresh: String| {
+        let state = state.clone();
+        async move {
+            let (status, body) = send(
+                &state,
+                "POST",
+                "/auth/token",
+                None,
+                None,
+                Some(serde_json::json!({ "refresh_token": refresh, "org_id": op.org_id })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "token mint failed: {body}");
+            body["access_token"].as_str().unwrap().to_string()
+        }
+    };
+
+    // No mirror row: the claim is absent (= free).
+    let claims = verifier
+        .decode(&mint(session.refresh_token.clone()).await)
+        .unwrap();
+    assert!(
+        claims.plan.is_none(),
+        "no mirror row must mint no plan claim"
+    );
+
+    // After a push, the operator mint site carries the plan.
+    assert_eq!(
+        push_plan(&state, op.org_id, "team", "active", Some(PLAN_WRITE_TOKEN)).await,
+        StatusCode::NO_CONTENT
+    );
+    let claims = verifier
+        .decode(&mint(session.refresh_token.clone()).await)
+        .unwrap();
+    assert_eq!(claims.plan.as_deref(), Some("team"));
+
+    // The exchange mint site reads the same mirror.
+    let bearer = operator_token(&op, &perms);
+    let (_key_id, raw) = create_key(&state, &bearer, &["bans.view"]).await;
+    assert_eq!(
+        push_plan(
+            &state,
+            op.org_id,
+            "enterprise",
+            "active",
+            Some(PLAN_WRITE_TOKEN)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let (status, body) = exchange(&state, &raw).await;
+    assert_eq!(status, StatusCode::OK, "exchange failed: {body}");
+    let claims = verifier.decode(body["token"].as_str().unwrap()).unwrap();
+    assert_eq!(claims.plan.as_deref(), Some("enterprise"));
+
+    // An explicit free push mints ABSENT, not Some("free"): absent-means-free is the
+    // claim's documented semantics, so free-tier tokens stay minimal and identical to
+    // pre-claim tokens.
+    assert_eq!(
+        push_plan(
+            &state,
+            op.org_id,
+            "free",
+            "canceled",
+            Some(PLAN_WRITE_TOKEN)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let claims = verifier
+        .decode(&mint(session.refresh_token.clone()).await)
+        .unwrap();
+    assert!(claims.plan.is_none(), "free must mint an absent claim");
+}
+
+#[tokio::test]
+async fn plan_caps_live_api_keys_per_org() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP plan_caps_live_api_keys_per_org: TEST_DATABASE_URL unset");
+        return;
+    };
+    let state = test_state(owner.clone(), app);
+    let perms = [Permission::ApiManage, Permission::BansView];
+    let op = seed_operator(&owner, &perms).await;
+    let bearer = operator_token(&op, &perms);
+
+    // Free tier (no mirror row): cap is 1. The second create must 409 and name the
+    // plan and cap for the UI.
+    let (first_key, _) = create_key(&state, &bearer, &["bans.view"]).await;
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/auth/api-keys",
+        Some(&bearer),
+        None,
+        Some(serde_json::json!({ "name": "one too many", "scopes": ["bans.view"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "over-cap create must 409");
+    let message = body["message"].as_str().unwrap();
+    assert!(
+        message.contains("free") && message.contains('1'),
+        "cap error must name the plan and cap, got: {message}"
+    );
+
+    // Revoked keys free their slot.
+    let (status, _) = send(
+        &state,
+        "POST",
+        &format!("/auth/api-keys/{first_key}/revoke"),
+        Some(&bearer),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (second_key, _) = create_key(&state, &bearer, &["bans.view"]).await;
+
+    // Upgrading to team (cap 5) opens more slots: four more creates succeed (five
+    // live), the sixth refuses.
+    assert_eq!(
+        push_plan(&state, op.org_id, "team", "active", Some(PLAN_WRITE_TOKEN)).await,
+        StatusCode::NO_CONTENT
+    );
+    for _ in 0..4 {
+        create_key(&state, &bearer, &["bans.view"]).await;
+    }
+    let (status, body) = send(
+        &state,
+        "POST",
+        "/auth/api-keys",
+        Some(&bearer),
+        None,
+        Some(serde_json::json!({ "name": "sixth", "scopes": ["bans.view"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "team cap is 5: {body}");
+    assert!(body["message"].as_str().unwrap().contains("team"));
+
+    // Expired keys do not count against the cap either.
+    sqlx::query("UPDATE api_keys SET expires_at = now() - interval '1 hour' WHERE id = $1")
+        .bind(second_key)
+        .execute(&owner)
+        .await
+        .expect("expire a key");
+    create_key(&state, &bearer, &["bans.view"]).await;
 }

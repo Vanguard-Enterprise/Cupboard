@@ -80,6 +80,14 @@ fn state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         web_service_name: "cupboard-web".into(),
         web_service_port: 3000,
         ingress_class: "traefik-external".into(),
+        stripe_secret_key: None,
+        stripe_webhook_secret: None,
+        stripe_price_team: None,
+        stripe_price_enterprise: None,
+        stripe_price_custom_design: None,
+        stripe_api_base: "http://stripe.test".into(),
+        auth_internal_url: "http://auth.test".into(),
+        plan_write_token: None,
     };
     AppState {
         owner_pool: owner,
@@ -89,6 +97,7 @@ fn state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         cache: SiteCache::disabled(),
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
+        http: reqwest::Client::new(),
         config: Arc::new(config),
     }
 }

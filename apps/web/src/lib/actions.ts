@@ -703,6 +703,52 @@ export async function revokeApiKeyAction(form: FormData): Promise<void> {
   }
 }
 
+export type BillingActionState = { error?: string };
+
+/** Absolute (app)/billing return URL for the Stripe hosted-redirect handoffs, built from
+ * the request's Host header (only admin hosts reach these actions; the middleware routes
+ * every other host to the storefront). Stripe requires https. */
+async function billingReturnUrl(): Promise<string> {
+  const hdrs = await import("next/headers").then((m) => m.headers());
+  return `https://${hdrs.get("host")}/billing`;
+}
+
+/** Hand the operator off to Stripe Checkout (subscription mode) for a paid plan. The
+ * plan comes from the submit button. The tenant rejects checkout when a live
+ * subscription already exists; plan changes go through the portal instead. */
+export async function startPlanCheckoutAction(
+  _prev: BillingActionState,
+  form: FormData,
+): Promise<BillingActionState> {
+  const plan = form.get("plan");
+  if (plan !== "team" && plan !== "enterprise") return { error: "unsupported plan" };
+  const res = await apiFetch("/billing/checkout", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ plan, return_url: await billingReturnUrl() }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.redirect_url !== "string") return { error: "checkout returned no redirect" };
+  redirect(body.redirect_url);
+}
+
+/** Hand the operator off to the Stripe Customer Portal (manage/cancel/payment method). */
+export async function openBillingPortalAction(
+  _prev: BillingActionState,
+  _form: FormData,
+): Promise<BillingActionState> {
+  const res = await apiFetch("/billing/portal", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ return_url: await billingReturnUrl() }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.redirect_url !== "string") return { error: "portal returned no redirect" };
+  redirect(body.redirect_url);
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

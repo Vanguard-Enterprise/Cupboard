@@ -88,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
         cache,
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
+        http: reqwest::Client::new(),
         config: Arc::new(config.clone()),
     };
 
@@ -97,6 +98,16 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(cupboard_tenant::store::supervisor::run(
             state.owner_pool.clone(),
             state.cache.clone(),
+            Arc::new(config.clone()),
+        ));
+    }
+
+    // Billing reconcile loop: one plain 15-minute loop, only when Stripe is configured
+    // (Phase 6 decision H; the domains_loop seam, no supervisor machinery).
+    if config.stripe_secret_key.is_some() {
+        tokio::spawn(cupboard_tenant::billing_loop::run(
+            state.owner_pool.clone(),
+            state.http.clone(),
             Arc::new(config.clone()),
         ));
     }

@@ -225,6 +225,21 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // Platform billing (tenant service). Tenant enforces `billing.manage`.
+        .route(
+            "/billing",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/billing/{*path}",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // White-label site management (tenant service). Tenant enforces `sites.edit`.
         .route(
             "/sites",

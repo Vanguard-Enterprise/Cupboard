@@ -9,9 +9,6 @@ use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Max custom domains per tenant (LE issuance is rate-limited; keep the surface small).
-pub const MAX_DOMAINS_PER_TENANT: i64 = 5;
-
 const DOMAIN_COLS: &str = "id, tenant_id, site_id, domain, status, cert_secret_name, \
      ingressroute_name, last_checked_at, last_error, attempt_count, next_check_at, \
      created_at, updated_at";
@@ -124,17 +121,21 @@ fn map_unique(e: sqlx::Error) -> AppError {
 
 // ============================ Operator CRUD (app pool) ============================
 
-/// Add a custom domain to the tenant's site. Enforces the per-tenant cap and requires a
-/// site to exist.
+/// Add a custom domain to the tenant's site. Enforces the caller-supplied per-tenant cap
+/// (the caller's plan limit, `Plan::limits().max_custom_domains`, Phase 6 decision H
+/// replacing the flat 5) and requires a site to exist. The cap counts NEW adds only:
+/// the revive-disabled path below stays uncounted, so domains existing at a downgrade
+/// are grandfathered, never disabled.
 pub async fn add_domain(
     app_pool: &PgPool,
     tenant: TenantId,
     domain: &str,
+    max_domains: u32,
 ) -> Result<SiteDomain, AppError> {
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
     // Serialize concurrent adds for this tenant so the count-then-insert cap cannot be
-    // raced past MAX_DOMAINS_PER_TENANT (the check is a non-locking read under READ
-    // COMMITTED; the xact lock releases on commit/rollback).
+    // raced past max_domains (the check is a non-locking read under READ COMMITTED;
+    // the xact lock releases on commit/rollback).
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
         .bind(tenant.0)
         .execute(&mut *tx)
@@ -184,10 +185,11 @@ pub async fn add_domain(
     .bind(tenant.0)
     .fetch_one(&mut *tx)
     .await?;
-    if count >= MAX_DOMAINS_PER_TENANT {
+    if count >= i64::from(max_domains) {
         tx.rollback().await?;
         return Err(AppError::BadRequest(format!(
-            "you can connect at most {MAX_DOMAINS_PER_TENANT} custom domains"
+            "your plan allows at most {max_domains} custom domain{}",
+            if max_domains == 1 { "" } else { "s" }
         )));
     }
     let row = sqlx::query_as::<_, SiteDomain>(&format!(

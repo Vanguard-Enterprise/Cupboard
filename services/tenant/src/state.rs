@@ -25,5 +25,8 @@ pub struct AppState {
     /// one per query class so a flood on one endpoint cannot starve the other.
     pub site_miss_budget: Arc<MissBudget>,
     pub catalog_miss_budget: Arc<MissBudget>,
+    /// Shared outbound HTTP client: Stripe calls + the plan-mirror push to auth
+    /// (tenant's first outbound internal client; reqwest clients are cheap Arcs).
+    pub http: reqwest::Client,
     pub config: Arc<Config>,
 }

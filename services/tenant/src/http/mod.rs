@@ -1,5 +1,6 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
+mod billing;
 mod domains;
 mod internal;
 mod player;
@@ -57,6 +58,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/store/products", get(store::list_products))
         .route("/store/entitlements", get(store::list_entitlements))
+        // Operator platform billing (gateway `/billing/*` route; `billing.manage`).
+        .route("/billing/subscription", get(billing::get_subscription))
+        .route("/billing/checkout", axum::routing::post(billing::checkout))
+        .route("/billing/portal", axum::routing::post(billing::portal))
         // Player-facing storefront actions (gateway `/player/*` passthrough; the tenant
         // service verifies the PLAYER token itself with the disjoint player keypair).
         .route("/player/checkout", axum::routing::post(player::checkout))
@@ -70,6 +75,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/webhooks/{provider}/{connection_id}",
             axum::routing::post(webhooks::receive),
+        )
+        // Stripe platform-billing webhook (single merchant, fixed URL on the same
+        // public hooks host; raw-body HMAC, Phase 6 decision H).
+        .route(
+            "/webhooks/stripe",
+            axum::routing::post(webhooks::receive_stripe),
         )
         // Public, unauthenticated reads for the storefront SSR path (via the gateway's
         // `/public/*` route; cluster-internal callers only, never internet-exposed).

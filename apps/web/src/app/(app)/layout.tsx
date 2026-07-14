@@ -88,6 +88,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               API keys
             </Link>
           )}
+          {can(perms, Permission.BillingManage) && (
+            <Link href="/billing" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Billing
+            </Link>
+          )}
         </nav>
         <form action={logoutAction} className="mt-auto">
           <button className="text-sm text-neutral-400 hover:text-neutral-100">Sign out</button>

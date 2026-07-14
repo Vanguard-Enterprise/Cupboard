@@ -9,7 +9,7 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use cupboard_domain::{Permission, TenantId};
+use cupboard_domain::{Permission, Plan, TenantId};
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
@@ -34,6 +34,8 @@ pub async fn list(
 }
 
 /// POST /sites/domains: connect a custom domain (starts the DNS-verify -> issue flow).
+/// The per-tenant cap comes from the caller's plan claim (Phase 6 decision H); an
+/// absent/unknown plan gates as free.
 pub async fn add(
     State(state): State<AppState>,
     claims: AuthClaims,
@@ -41,7 +43,10 @@ pub async fn add(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let org = claims.require(Permission::SitesEdit)?;
     let domain = domains::validate_domain(&req.domain, &state.config.sites_suffix)?;
-    let row = domains::add_domain(&state.app_pool, TenantId::from(org), &domain).await?;
+    let cap = Plan::from_claim(claims.0.plan.as_deref())
+        .limits()
+        .max_custom_domains;
+    let row = domains::add_domain(&state.app_pool, TenantId::from(org), &domain, cap).await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({ "domain": domains::DomainView::from(row) })),

@@ -73,6 +73,26 @@ pub struct Config {
     /// Ingress class annotation for the per-domain IngressRoute. Must match the external
     /// Traefik's kubernetescrd `ingressClass`, else the route is ignored (default cert + 404).
     pub ingress_class: String,
+
+    /// Stripe platform billing (Phase 6 decision H; single merchant, OpenBao
+    /// `cupboard/staging/stripe`, NOT envelope-encrypted). `None` disables billing:
+    /// no reconcile loop, checkout/portal endpoints 503. Write-only: never logged,
+    /// never returned by any API.
+    pub stripe_secret_key: Option<String>,
+    /// Webhook endpoint signing secret. `None` => `/webhooks/stripe` returns 503.
+    pub stripe_webhook_secret: Option<String>,
+    /// Stripe price ids mapping paid plans/services to the code-defined catalog
+    /// (decision I). Custom Design is read now, consumed by PR2 slice 2.
+    pub stripe_price_team: Option<String>,
+    pub stripe_price_enterprise: Option<String>,
+    pub stripe_price_custom_design: Option<String>,
+    /// Stripe API base, injectable so tests run against the in-process stub.
+    pub stripe_api_base: String,
+    /// Auth service base URL for the plan-mirror push (decision K).
+    pub auth_internal_url: String,
+    /// The DISTINCT token guarding auth's `PUT /internal/orgs/{id}/plan` (decision K;
+    /// never the shared INTERNAL_API_TOKEN). `None` => mirror pushes are skipped (logged).
+    pub plan_write_token: Option<String>,
 }
 
 impl Config {
@@ -159,6 +179,36 @@ impl Config {
                 .unwrap_or(3000),
             ingress_class: env::var("TRAEFIK_INGRESS_CLASS")
                 .unwrap_or_else(|_| "traefik-external".into()),
+            stripe_secret_key: match env::var("STRIPE_SECRET_KEY") {
+                Ok(k) if !k.is_empty() => Some(k),
+                _ => {
+                    tracing::warn!(
+                        "STRIPE_SECRET_KEY unset; platform billing disabled \
+                         (no reconcile loop, billing endpoints return 503)"
+                    );
+                    None
+                }
+            },
+            stripe_webhook_secret: env::var("STRIPE_WEBHOOK_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            stripe_price_team: env::var("STRIPE_PRICE_TEAM").ok().filter(|s| !s.is_empty()),
+            stripe_price_enterprise: env::var("STRIPE_PRICE_ENTERPRISE")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            stripe_price_custom_design: env::var("STRIPE_PRICE_CUSTOM_DESIGN")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            stripe_api_base: env::var("STRIPE_API_BASE")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| crate::stripe::DEFAULT_API_BASE.into()),
+            auth_internal_url: env::var("AUTH_INTERNAL_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "http://127.0.0.1:8081".into()),
+            plan_write_token: env::var("PLAN_WRITE_TOKEN").ok().filter(|s| !s.is_empty()),
         })
     }
 

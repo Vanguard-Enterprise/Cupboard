@@ -109,6 +109,14 @@ async fn supervisor_claims_and_runner_syncs() {
         web_service_name: "cupboard-web".into(),
         web_service_port: 3000,
         ingress_class: "traefik-external".into(),
+        stripe_secret_key: None,
+        stripe_webhook_secret: None,
+        stripe_price_team: None,
+        stripe_price_enterprise: None,
+        stripe_price_custom_design: None,
+        stripe_api_base: "http://stripe.test".into(),
+        auth_internal_url: "http://auth.test".into(),
+        plan_write_token: None,
     };
     let supervisor = tokio::spawn(cupboard_tenant::store::supervisor::run(
         owner.clone(),

@@ -5,7 +5,7 @@
 //! The raw token appears in exactly one place: the create response. It is never
 //! logged, never listed, and only its keyed hash is stored.
 
-use crate::domain::{api_keys, audit, rbac};
+use crate::domain::{api_keys, audit, plans, rbac};
 use crate::error::AppError;
 use crate::http::AuthClaims;
 use crate::state::AppState;
@@ -109,6 +109,9 @@ pub async fn create(
         )));
     }
 
+    // The per-plan live-key cap (decision N) is enforced inside create_key, in the
+    // same transaction as the insert.
+    let plan = plans::gating_plan(&state.owner_pool, org.0).await?;
     let new = api_keys::create_key(
         &state.app_pool,
         org.into(),
@@ -116,6 +119,7 @@ pub async fn create(
         &scopes,
         claims.0.sub.0,
         req.expires_at,
+        plan,
         state.pepper(),
     )
     .await?;

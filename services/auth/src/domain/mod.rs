@@ -6,6 +6,7 @@ pub mod invites;
 pub mod members;
 pub mod orgs;
 pub mod password;
+pub mod plans;
 pub mod players;
 pub mod rbac;
 pub mod sessions;

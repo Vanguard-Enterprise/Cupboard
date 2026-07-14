@@ -37,10 +37,16 @@ pub struct Config {
     pub token_pepper: String,
     /// Shared secret REQUIRED from callers of auth's own `/internal/*` server routes
     /// (the API-key exchange; `x-internal-token` header). `None` disables those routes
-    /// (fail closed, 401). Distinct from the outbound copy nested in
+    /// (fail closed). Distinct from the outbound copy nested in
     /// [`PlayerAuthConfig::internal_api_token`], which auth presents to the tenant
     /// service; both read the same `INTERNAL_API_TOKEN` env var.
     pub internal_api_token: Option<String>,
+    /// DISTINCT secret required from the plan-mirror writer (the tenant service) on
+    /// `PUT /internal/orgs/{id}/plan`. Deliberately NOT the widely-shared
+    /// `INTERNAL_API_TOKEN` (decision K): a plan write is a privilege-escalation
+    /// primitive, so only tenant and auth hold this one. `None` disables the route
+    /// (fail closed).
+    pub plan_write_token: Option<String>,
     /// Base URL of the public dashboard, for building invite/OAuth links.
     pub public_base_url: String,
 
@@ -145,6 +151,7 @@ impl Config {
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            plan_write_token: env::var("PLAN_WRITE_TOKEN").ok().filter(|s| !s.is_empty()),
             public_base_url: env::var("PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000".into()),
 
