@@ -148,6 +148,85 @@ impl StripeClient {
         self.post_form("/v1/checkout/sessions", &pairs).await
     }
 
+    /// Create a Checkout Session in PAYMENT mode (one-off services, slice 2, decision
+    /// J: a separate call from the subscription flow). `client_reference_id` and
+    /// session `metadata` (org_id + service_key) both carry the attribution so the
+    /// webhook and the reconcile backstop can each land the `billing_purchases` row.
+    ///
+    /// Card only, deliberately: async payment methods (ACH/SEPA) settle days later,
+    /// outliving the backstop's 24h created-window and every synchronous assumption in
+    /// this flow. The `async_payment_succeeded` webhook is still handled
+    /// (belt-and-braces), but async methods stay off until deliberately supported.
+    pub async fn create_payment_checkout(
+        &self,
+        price_id: &str,
+        org_id: Uuid,
+        service_key: &str,
+        success_url: &str,
+        cancel_url: &str,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let org = org_id.to_string();
+        let pairs: Vec<(&str, &str)> = vec![
+            ("mode", "payment"),
+            ("payment_method_types[0]", "card"),
+            ("line_items[0][price]", price_id),
+            ("line_items[0][quantity]", "1"),
+            ("success_url", success_url),
+            ("cancel_url", cancel_url),
+            ("client_reference_id", &org),
+            ("metadata[org_id]", &org),
+            ("metadata[service_key]", service_key),
+        ];
+        self.post_form("/v1/checkout/sessions", &pairs).await
+    }
+
+    /// Retrieve a Price object (the catalog-vs-Stripe sanity check before a service
+    /// checkout: advertised-vs-charged divergence is worse than a failed checkout).
+    pub async fn retrieve_price(&self, id: &str) -> Result<serde_json::Value, ProviderError> {
+        self.send(
+            self.http
+                .get(format!("{}/v1/prices/{id}", self.base))
+                .timeout(MGMT_TIMEOUT),
+        )
+        .await
+    }
+
+    /// One page of Checkout Sessions created at/after `created_gte` (unix seconds).
+    /// The purchases reconcile backstop walks the last 24h; money must not depend on
+    /// webhook delivery (decision H).
+    pub async fn list_checkout_sessions(
+        &self,
+        created_gte: i64,
+        starting_after: Option<&str>,
+    ) -> Result<SubscriptionPage, ProviderError> {
+        let created = created_gte.to_string();
+        let mut query: Vec<(&str, &str)> =
+            vec![("created[gte]", &created), ("limit", LIST_PAGE_LIMIT)];
+        if let Some(cursor) = starting_after {
+            query.push(("starting_after", cursor));
+        }
+        let body = self
+            .send(
+                self.http
+                    .get(format!("{}/v1/checkout/sessions", self.base))
+                    .timeout(LIST_TIMEOUT)
+                    .query(&query),
+            )
+            .await?;
+        let data = body
+            .get("data")
+            .and_then(|d| d.as_array())
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::Transient("checkout session list has no data array".into())
+            })?;
+        let has_more = body
+            .get("has_more")
+            .and_then(|h| h.as_bool())
+            .unwrap_or(false);
+        Ok(SubscriptionPage { data, has_more })
+    }
+
     /// Expire an in-flight Checkout Session. Sessions live 24h; the checkout handler
     /// expires the org's previous pending session before minting a new one so two
     /// concurrent/abandoned sessions can never BOTH complete (a double charge).
@@ -348,6 +427,53 @@ pub fn subscription_facts(v: &serde_json::Value) -> Option<SubscriptionFacts> {
         current_period_end,
         org_hint,
         created: v.get("created").and_then(|c| c.as_i64()),
+    })
+}
+
+/// The facts a `billing_purchases` row needs out of a PAYMENT-mode Checkout Session
+/// object, shared by the completion webhook and the reconcile backstop. `None` when the
+/// object is not a paid payment-mode session attributable to an org+service (metadata
+/// stamped at creation; `client_reference_id` as the org fallback).
+#[derive(Debug)]
+pub struct PaymentSessionFacts {
+    pub session_id: String,
+    pub org: Uuid,
+    pub service_key: String,
+    pub payment_intent: Option<String>,
+    pub amount_total: Option<i64>,
+    pub currency: Option<String>,
+}
+
+pub fn payment_session_facts(v: &serde_json::Value) -> Option<PaymentSessionFacts> {
+    if v.get("mode").and_then(|m| m.as_str()) != Some("payment") {
+        return None;
+    }
+    // Money truth: only a PAID session lands in the ledger (an open/expired session or
+    // an async payment still processing must not).
+    if v.get("payment_status").and_then(|p| p.as_str()) != Some("paid") {
+        return None;
+    }
+    let session_id = str_or_id(v.get("id")?)?;
+    let metadata = v.get("metadata");
+    let org = metadata
+        .and_then(|m| m.get("org_id"))
+        .and_then(|o| o.as_str())
+        .or_else(|| v.get("client_reference_id").and_then(|c| c.as_str()))
+        .and_then(|s| s.parse::<Uuid>().ok())?;
+    let service_key = metadata
+        .and_then(|m| m.get("service_key"))
+        .and_then(|s| s.as_str())?
+        .to_string();
+    Some(PaymentSessionFacts {
+        session_id,
+        org,
+        service_key,
+        payment_intent: v.get("payment_intent").and_then(str_or_id),
+        amount_total: v.get("amount_total").and_then(|a| a.as_i64()),
+        currency: v
+            .get("currency")
+            .and_then(|c| c.as_str())
+            .map(str::to_string),
     })
 }
 

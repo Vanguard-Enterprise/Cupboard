@@ -1,6 +1,6 @@
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
-import { ManageBillingButton, UpgradeButtons } from "./billing-actions";
+import { ManageBillingButton, PurchaseButton, UpgradeButtons } from "./billing-actions";
 import { FlagBanner } from "./flag-banner";
 
 type Subscription = {
@@ -14,6 +14,43 @@ async function fetchSubscription(): Promise<Subscription | null> {
   const res = await apiFetch("/billing/subscription");
   if (!res.ok) return null;
   return res.json();
+}
+
+type ServiceItem = {
+  key: string;
+  name: string;
+  description: string;
+  price_amount: number;
+  currency: string;
+};
+
+type Purchase = {
+  id: string;
+  service_key: string;
+  status: "paid" | "refunded";
+  // Nullable on the wire: some Stripe object variants carry no amount/currency.
+  amount: number | null;
+  currency: string | null;
+  purchased_at: string;
+};
+
+type Services = { services: ServiceItem[]; purchases: Purchase[] };
+
+async function fetchServices(): Promise<Services | null> {
+  const res = await apiFetch("/billing/services");
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/** Amounts arrive in cents; whole-dollar prices drop the trailing .00. Purchases may
+ * carry no amount/currency (Stripe object variants), rendered as a quiet placeholder. */
+function formatAmount(amount: number | null, currency: string | null): string {
+  if (amount === null || currency === null) return "-";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    minimumFractionDigits: amount % 100 === 0 ? 0 : 2,
+  }).format(amount / 100);
 }
 
 const PLAN_META: Record<string, { name: string; price: string }> = {
@@ -41,7 +78,7 @@ export default async function BillingPage({
     return <p className="text-sm text-neutral-400">You don&apos;t have access to billing.</p>;
   }
   const { flag } = await searchParams;
-  const sub = await fetchSubscription();
+  const [sub, services] = await Promise.all([fetchSubscription(), fetchServices()]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -64,7 +101,25 @@ export default async function BillingPage({
         )}
       </section>
 
-      {/* The Services section (one-off purchases) lands here in PR2 slice 2. */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-neutral-300">Services</h2>
+        {!services ? (
+          <p className="text-sm text-neutral-500">Could not load services right now.</p>
+        ) : (
+          <>
+            {services.services.length === 0 ? (
+              <p className="text-sm text-neutral-500">No services available.</p>
+            ) : (
+              <div className="flex flex-wrap gap-4">
+                {services.services.map((svc) => (
+                  <ServiceCard key={svc.key} service={svc} />
+                ))}
+              </div>
+            )}
+            <PurchaseHistory purchases={services.purchases} services={services.services} />
+          </>
+        )}
+      </section>
     </div>
   );
 }
@@ -111,6 +166,77 @@ function PlanCard({ sub }: { sub: Subscription }) {
       )}
 
       {hasLiveSubscription ? <ManageBillingButton /> : <UpgradeButtons />}
+    </div>
+  );
+}
+
+function ServiceCard({ service }: { service: ServiceItem }) {
+  return (
+    <div className="flex w-full max-w-xl flex-col gap-3 rounded border border-neutral-800 px-4 py-3">
+      <div className="flex items-baseline gap-3">
+        <div className="text-lg font-semibold">{service.name}</div>
+        <div className="ml-auto text-sm text-neutral-400">
+          {formatAmount(service.price_amount, service.currency)} one-time
+        </div>
+      </div>
+      <p className="text-sm text-neutral-400">{service.description}</p>
+      <p className="text-sm text-neutral-500">
+        Purchase is self-serve; after payment our team handles fulfillment manually and will
+        reach out to you.
+      </p>
+      <PurchaseButton service={service.key} />
+    </div>
+  );
+}
+
+const PURCHASE_STATUS_STYLES: Record<Purchase["status"], string> = {
+  paid: "bg-green-900 text-green-300",
+  refunded: "bg-neutral-800 text-neutral-400",
+};
+
+function PurchaseHistory({
+  purchases,
+  services,
+}: {
+  purchases: Purchase[];
+  services: ServiceItem[];
+}) {
+  if (purchases.length === 0) {
+    return <p className="text-sm text-neutral-500">No purchases yet.</p>;
+  }
+  const names = new Map(services.map((s) => [s.key, s.name]));
+  return (
+    <div className="overflow-hidden rounded border border-neutral-800">
+      <table className="w-full text-left text-sm">
+        <thead className="bg-neutral-900 text-neutral-400">
+          <tr>
+            <th className="px-3 py-2">Service</th>
+            <th className="px-3 py-2">Amount</th>
+            <th className="px-3 py-2">Status</th>
+            <th className="px-3 py-2">Purchased</th>
+          </tr>
+        </thead>
+        <tbody>
+          {purchases.map((p) => (
+            <tr key={p.id} className="border-t border-neutral-800">
+              <td className="px-3 py-2">{names.get(p.service_key) ?? p.service_key}</td>
+              <td className="px-3 py-2 text-neutral-400">
+                {formatAmount(p.amount, p.currency)}
+              </td>
+              <td className="px-3 py-2">
+                <span
+                  className={`rounded px-2 py-0.5 text-xs ${PURCHASE_STATUS_STYLES[p.status] ?? "bg-neutral-800 text-neutral-400"}`}
+                >
+                  {p.status}
+                </span>
+              </td>
+              <td className="px-3 py-2 text-neutral-400">
+                {new Date(p.purchased_at).toLocaleString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

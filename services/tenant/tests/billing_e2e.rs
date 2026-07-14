@@ -36,6 +36,7 @@ const WEBHOOK_SECRET: &str = "whsec_pr2_slice1";
 const PLAN_WRITE_TOKEN: &str = "pwt_pr2_distinct";
 const PRICE_TEAM: &str = "price_team_test";
 const PRICE_ENTERPRISE: &str = "price_ent_test";
+const PRICE_CUSTOM: &str = "price_custom_test";
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 static MIGRATED: OnceCell<()> = OnceCell::const_new();
@@ -81,9 +82,15 @@ struct StripeStubState {
     next_session: u64,
     /// `GET /v1/subscriptions/{id}` fixtures.
     subscriptions: HashMap<String, Value>,
+    /// `GET /v1/prices/{id}` fixtures. Missing ids default to a price matching the
+    /// custom_design catalog entry so tests not about the sanity check just proceed.
+    prices: HashMap<String, Value>,
     /// FIFO of canned `GET /v1/subscriptions` responses; exhausted => 500 (so a test
     /// controls exactly how far a reconcile walk gets).
     list_responses: VecDeque<(u16, Value)>,
+    /// FIFO of canned `GET /v1/checkout/sessions` LIST responses (the purchases
+    /// backstop); exhausted => 500.
+    session_list_responses: VecDeque<(u16, Value)>,
 }
 
 struct StripeStub {
@@ -116,7 +123,17 @@ impl StripeStub {
                             "url": format!("https://checkout.stripe.com/c/pay/{id}")
                         }))
                     },
-                ),
+                )
+                .get(|State(s): State<Arc<Mutex<StripeStubState>>>| async move {
+                    let popped = s.lock().unwrap().session_list_responses.pop_front();
+                    match popped {
+                        Some((code, body)) => (StatusCode::from_u16(code).unwrap(), Json(body)),
+                        None => (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({"error": {"message": "stub: no canned session list"}})),
+                        ),
+                    }
+                }),
             )
             .route(
                 "/v1/checkout/sessions/{id}/expire",
@@ -176,6 +193,18 @@ impl StripeStub {
                     },
                 ),
             )
+            .route(
+                "/v1/prices/{id}",
+                get(
+                    |State(s): State<Arc<Mutex<StripeStubState>>>, Path(id): Path<String>| async move {
+                        let price = s.lock().unwrap().prices.get(&id).cloned();
+                        Json(price.unwrap_or_else(|| {
+                            json!({"id": id, "unit_amount": 25000, "currency": "usd",
+                                   "type": "one_time"})
+                        }))
+                    },
+                ),
+            )
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -197,11 +226,27 @@ impl StripeStub {
             .insert(id.to_string(), sub);
     }
 
+    fn set_price(&self, id: &str, price: Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .prices
+            .insert(id.to_string(), price);
+    }
+
     fn push_list_response(&self, code: u16, body: Value) {
         self.state
             .lock()
             .unwrap()
             .list_responses
+            .push_back((code, body));
+    }
+
+    fn push_session_list_response(&self, code: u16, body: Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .session_list_responses
             .push_back((code, body));
     }
 
@@ -331,7 +376,7 @@ fn state(owner: PgPool, app: PgPool, stripe_base: &str, auth_base: &str) -> AppS
         stripe_webhook_secret: Some(WEBHOOK_SECRET.into()),
         stripe_price_team: Some(PRICE_TEAM.into()),
         stripe_price_enterprise: Some(PRICE_ENTERPRISE.into()),
-        stripe_price_custom_design: None,
+        stripe_price_custom_design: Some(PRICE_CUSTOM.into()),
         stripe_api_base: stripe_base.to_string(),
         auth_internal_url: auth_base.to_string(),
         plan_write_token: Some(PLAN_WRITE_TOKEN.into()),
@@ -345,6 +390,7 @@ fn state(owner: PgPool, app: PgPool, stripe_base: &str, auth_base: &str) -> AppS
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
         http: reqwest::Client::new(),
+        verified_prices: Arc::new(Default::default()),
         config: Arc::new(config),
     }
 }
@@ -1362,4 +1408,472 @@ async fn checkout_conflicts_when_previous_session_already_completed() {
         stripe.checkout_forms().is_empty(),
         "no new session may be created after a completed-session conflict"
     );
+}
+
+/// A paid payment-mode Checkout Session object as Stripe reports it.
+fn payment_session(session_id: &str, org: Uuid, service_key: &str, pi: &str) -> Value {
+    json!({
+        "id": session_id,
+        "object": "checkout.session",
+        "mode": "payment",
+        "payment_status": "paid",
+        "status": "complete",
+        "client_reference_id": org.to_string(),
+        "metadata": {"org_id": org.to_string(), "service_key": service_key},
+        "payment_intent": pi,
+        "amount_total": 25000,
+        "currency": "usd"
+    })
+}
+
+async fn purchase_rows(owner: &PgPool, tenant: Uuid) -> Vec<(String, String, Option<i64>)> {
+    sqlx::query_as(
+        "SELECT service_key, status, amount FROM billing_purchases \
+         WHERE tenant_id = $1 ORDER BY purchased_at",
+    )
+    .bind(tenant)
+    .fetch_all(owner)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn service_checkout_and_purchase_lifecycle() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP service_checkout_and_purchase_lifecycle: TEST_DATABASE_URL unset");
+        return;
+    };
+    let stripe = StripeStub::spawn().await;
+    let auth = AuthStub::spawn().await;
+    let st = state(owner.clone(), app, &stripe.base_url, &auth.base_url);
+    let tenant = Uuid::new_v4();
+    let token = bearer(tenant, None);
+
+    // Catalog read: code-defined services, no purchases yet.
+    let (status, body) = send(&st, "GET", "/billing/services", Some(&token), &[], None).await;
+    assert_eq!(status, StatusCode::OK, "services read: {body}");
+    let services = body["services"].as_array().unwrap();
+    assert_eq!(services.len(), 1);
+    assert_eq!(services[0]["key"], "custom_design");
+    assert_eq!(services[0]["name"], "Custom Design");
+    assert_eq!(services[0]["price_amount"], 25000);
+    assert_eq!(services[0]["currency"], "usd");
+    assert!(body["purchases"].as_array().unwrap().is_empty());
+
+    // Unknown service keys are rejected up front.
+    let (status, _) = send(
+        &st,
+        "POST",
+        "/billing/services/checkout",
+        Some(&token),
+        &[],
+        Some(
+            json!({"service": "gold_plating", "return_url": "https://app.test/billing"})
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Payment-mode handoff with the right form fields and flags.
+    let (status, body) = send(
+        &st,
+        "POST",
+        "/billing/services/checkout",
+        Some(&token),
+        &[],
+        Some(
+            json!({"service": "custom_design", "return_url": "https://app.test/billing"})
+                .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "service checkout: {body}");
+    assert!(body["redirect_url"]
+        .as_str()
+        .unwrap()
+        .contains("checkout.stripe.com"));
+    let forms = stripe.checkout_forms();
+    assert_eq!(forms.len(), 1);
+    let form = &forms[0];
+    assert_eq!(form.get("mode").map(String::as_str), Some("payment"));
+    assert_eq!(
+        form.get("payment_method_types[0]").map(String::as_str),
+        Some("card"),
+        "payment checkout must be card-only until async methods are deliberately supported"
+    );
+    assert_eq!(
+        form.get("line_items[0][price]").map(String::as_str),
+        Some(PRICE_CUSTOM)
+    );
+    assert_eq!(form.get("client_reference_id"), Some(&tenant.to_string()));
+    assert_eq!(form.get("metadata[org_id]"), Some(&tenant.to_string()));
+    assert_eq!(
+        form.get("metadata[service_key]").map(String::as_str),
+        Some("custom_design")
+    );
+    assert_eq!(
+        form.get("success_url").map(String::as_str),
+        Some("https://app.test/billing?flag=service_success")
+    );
+    assert_eq!(
+        form.get("cancel_url").map(String::as_str),
+        Some("https://app.test/billing?flag=service_cancel")
+    );
+
+    // Completion webhook lands the ledger row exactly once.
+    let session = payment_session("cs_test_1", tenant, "custom_design", "pi_life_1");
+    let event = json!({
+        "id": evt_id(),
+        "type": "checkout.session.completed",
+        "data": {"object": session}
+    })
+    .to_string();
+    let sig = stripe_sig(&event, 0);
+    assert_eq!(deliver_webhook(&st, &event, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, tenant).await,
+        vec![("custom_design".into(), "paid".into(), Some(25000))]
+    );
+
+    // Replay (same event id) and a DIFFERENT event for the same session are both no-ops.
+    assert_eq!(deliver_webhook(&st, &event, &sig).await, StatusCode::OK);
+    let dup_session = payment_session("cs_test_1", tenant, "custom_design", "pi_life_1");
+    let dup_event = json!({
+        "id": evt_id(),
+        "type": "checkout.session.completed",
+        "data": {"object": dup_session}
+    })
+    .to_string();
+    let dup_sig = stripe_sig(&dup_event, 0);
+    assert_eq!(
+        deliver_webhook(&st, &dup_event, &dup_sig).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        purchase_rows(&owner, tenant).await.len(),
+        1,
+        "the session-id unique key must keep the ledger at one row"
+    );
+
+    // The history now shows the purchase.
+    let (_s, body) = send(&st, "GET", "/billing/services", Some(&token), &[], None).await;
+    let purchases = body["purchases"].as_array().unwrap();
+    assert_eq!(purchases.len(), 1);
+    assert_eq!(purchases[0]["service_key"], "custom_design");
+    assert_eq!(purchases[0]["status"], "paid");
+    assert_eq!(purchases[0]["amount"], 25000);
+    assert_eq!(purchases[0]["currency"], "usd");
+
+    // An UNMATCHED refund is dedupe-recorded and changes nothing.
+    let stray = json!({
+        "id": evt_id(),
+        "type": "charge.refunded",
+        "data": {"object": {"id": "ch_stray", "payment_intent": "pi_nothing", "refunded": true}}
+    })
+    .to_string();
+    let sig = stripe_sig(&stray, 0);
+    assert_eq!(deliver_webhook(&st, &stray, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, tenant).await,
+        vec![("custom_design".into(), "paid".into(), Some(25000))]
+    );
+
+    // The real refund flips the row (webhook-only per decision H).
+    let refund = json!({
+        "id": evt_id(),
+        "type": "charge.refunded",
+        "data": {"object": {"id": "ch_life_1", "payment_intent": "pi_life_1",
+                            "refunded": true, "amount_refunded": 25000}}
+    })
+    .to_string();
+    let sig = stripe_sig(&refund, 0);
+    assert_eq!(deliver_webhook(&st, &refund, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, tenant).await,
+        vec![("custom_design".into(), "refunded".into(), Some(25000))]
+    );
+
+    // Audit trail: handoff + purchase + refund.
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND action IN \
+             ('billing.service_checkout_created', 'billing.service_purchased', \
+              'billing.purchase_refunded')",
+    )
+    .bind(tenant)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(audits, 3);
+}
+
+#[tokio::test]
+async fn purchases_backstop_lands_sessions_the_webhook_missed() {
+    let _subs_guard = SUBS_LOCK.lock().await;
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP purchases_backstop...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let stripe = StripeStub::spawn().await;
+    let auth = AuthStub::spawn().await;
+    let st = state(owner.clone(), app, &stripe.base_url, &auth.base_url);
+    let client = StripeClient::new(st.http.clone(), &stripe.base_url, STRIPE_SECRET);
+    clear_subscriptions(&owner).await;
+
+    let org = Uuid::new_v4();
+    let missed = format!("cs_missed_{}", Uuid::new_v4().simple());
+    // The listing carries a paid payment session the webhook never delivered, plus two
+    // rows the backstop must skip: an unpaid (abandoned/processing) session and a
+    // subscription-mode session.
+    let mut unpaid = payment_session("cs_unpaid_x", org, "custom_design", "pi_unpaid");
+    unpaid["payment_status"] = json!("unpaid");
+    let session_page = json!({
+        "data": [
+            payment_session(&missed, org, "custom_design", "pi_missed_1"),
+            unpaid,
+            {"id": "cs_sub_x", "object": "checkout.session", "mode": "subscription",
+             "payment_status": "paid", "client_reference_id": org.to_string()}
+        ],
+        "has_more": false
+    });
+
+    // Tick 1: empty (complete) subscription walk + the session listing above.
+    stripe.push_list_response(200, json!({"data": [], "has_more": false}));
+    stripe.push_session_list_response(200, session_page.clone());
+    cupboard_tenant::billing_loop::reconcile_once(&owner, &client, &st.http, &st.config).await;
+    assert_eq!(
+        purchase_rows(&owner, org).await,
+        vec![("custom_design".into(), "paid".into(), Some(25000))],
+        "the backstop lands exactly the paid payment-mode session"
+    );
+
+    // Tick 2 re-sees the same listing: idempotent, still one row.
+    stripe.push_list_response(200, json!({"data": [], "has_more": false}));
+    stripe.push_session_list_response(200, session_page);
+    cupboard_tenant::billing_loop::reconcile_once(&owner, &client, &st.http, &st.config).await;
+    assert_eq!(purchase_rows(&owner, org).await.len(), 1);
+}
+
+#[tokio::test]
+async fn async_payment_succeeded_lands_purchase_once() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP async_payment_succeeded...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let stripe = StripeStub::spawn().await;
+    let auth = AuthStub::spawn().await;
+    let st = state(owner.clone(), app, &stripe.base_url, &auth.base_url);
+    let org = Uuid::new_v4();
+    let session_id = format!("cs_async_{}", Uuid::new_v4().simple());
+
+    // An async payment method settles days later: the paid signal is
+    // checkout.session.async_payment_succeeded, not completed (whose payment_status was
+    // still unpaid), and the settlement can outlive the backstop's 24h window.
+    let session = payment_session(&session_id, org, "custom_design", "pi_async_1");
+    let event = json!({
+        "id": evt_id(),
+        "type": "checkout.session.async_payment_succeeded",
+        "data": {"object": session}
+    })
+    .to_string();
+    let sig = stripe_sig(&event, 0);
+    assert_eq!(deliver_webhook(&st, &event, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, org).await,
+        vec![("custom_design".into(), "paid".into(), Some(25000))]
+    );
+
+    // Replay + a duplicate `completed` for the same session: still exactly one row.
+    assert_eq!(deliver_webhook(&st, &event, &sig).await, StatusCode::OK);
+    let dup = json!({
+        "id": evt_id(),
+        "type": "checkout.session.completed",
+        "data": {"object": payment_session(&session_id, org, "custom_design", "pi_async_1")}
+    })
+    .to_string();
+    let dup_sig = stripe_sig(&dup, 0);
+    assert_eq!(deliver_webhook(&st, &dup, &dup_sig).await, StatusCode::OK);
+    assert_eq!(purchase_rows(&owner, org).await.len(), 1);
+}
+
+#[tokio::test]
+async fn refund_recorded_before_purchase_lands_row_as_refunded() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP refund_recorded_before_purchase...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let stripe = StripeStub::spawn().await;
+    let auth = AuthStub::spawn().await;
+    let st = state(owner.clone(), app, &stripe.base_url, &auth.base_url);
+    let org = Uuid::new_v4();
+    let pi = format!("pi_race_{}", Uuid::new_v4().simple());
+    let session_id = format!("cs_race_{}", Uuid::new_v4().simple());
+
+    // The FULL refund arrives first (receiver was down when the purchase completed;
+    // staff refunded fast): unmatched, so it is dedupe-recorded only.
+    let refund = json!({
+        "id": evt_id(),
+        "type": "charge.refunded",
+        "data": {"object": {"id": "ch_race", "payment_intent": pi,
+                            "refunded": true, "amount_refunded": 25000}}
+    })
+    .to_string();
+    let sig = stripe_sig(&refund, 0);
+    assert_eq!(deliver_webhook(&st, &refund, &sig).await, StatusCode::OK);
+    assert!(purchase_rows(&owner, org).await.is_empty());
+
+    // The purchase row lands later (late webhook or the backstop; same shared insert):
+    // it must be born REFUNDED, or a permanently paid row would drive manual
+    // fulfillment of refunded money.
+    let completed = json!({
+        "id": evt_id(),
+        "type": "checkout.session.completed",
+        "data": {"object": payment_session(&session_id, org, "custom_design", &pi)}
+    })
+    .to_string();
+    let sig = stripe_sig(&completed, 0);
+    assert_eq!(deliver_webhook(&st, &completed, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, org).await,
+        vec![("custom_design".into(), "refunded".into(), Some(25000))],
+        "a pre-recorded full refund must land the late purchase row as refunded"
+    );
+}
+
+#[tokio::test]
+async fn partial_refund_keeps_paid_and_audits_the_amount() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP partial_refund...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let stripe = StripeStub::spawn().await;
+    let auth = AuthStub::spawn().await;
+    let st = state(owner.clone(), app, &stripe.base_url, &auth.base_url);
+    let org = Uuid::new_v4();
+    let pi = format!("pi_part_{}", Uuid::new_v4().simple());
+    let session_id = format!("cs_part_{}", Uuid::new_v4().simple());
+
+    // A paid purchase on record.
+    let completed = json!({
+        "id": evt_id(),
+        "type": "checkout.session.completed",
+        "data": {"object": payment_session(&session_id, org, "custom_design", &pi)}
+    })
+    .to_string();
+    let sig = stripe_sig(&completed, 0);
+    assert_eq!(deliver_webhook(&st, &completed, &sig).await, StatusCode::OK);
+
+    // A PARTIAL refund (refunded == false) must not halt fulfillment: status stays
+    // paid, the amount lands in the audit trail.
+    let partial = json!({
+        "id": evt_id(),
+        "type": "charge.refunded",
+        "data": {"object": {"id": "ch_part", "payment_intent": pi,
+                            "refunded": false, "amount_refunded": 5000}}
+    })
+    .to_string();
+    let sig = stripe_sig(&partial, 0);
+    assert_eq!(deliver_webhook(&st, &partial, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, org).await,
+        vec![("custom_design".into(), "paid".into(), Some(25000))],
+        "a partial refund must keep the purchase paid"
+    );
+    let audited_amount: Option<i64> = sqlx::query_scalar(
+        "SELECT (metadata->>'amount_refunded')::bigint FROM audit_log \
+         WHERE tenant_id = $1 AND action = 'billing.purchase_refund_partial'",
+    )
+    .bind(org)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(audited_amount, Some(5000));
+
+    // The subsequent FULL refund flips the row.
+    let full = json!({
+        "id": evt_id(),
+        "type": "charge.refunded",
+        "data": {"object": {"id": "ch_part_full", "payment_intent": pi,
+                            "refunded": true, "amount_refunded": 25000}}
+    })
+    .to_string();
+    let sig = stripe_sig(&full, 0);
+    assert_eq!(deliver_webhook(&st, &full, &sig).await, StatusCode::OK);
+    assert_eq!(
+        purchase_rows(&owner, org).await,
+        vec![("custom_design".into(), "refunded".into(), Some(25000))]
+    );
+}
+
+#[tokio::test]
+async fn service_price_mismatch_refuses_checkout_and_match_is_cached() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP service_price_mismatch...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let stripe = StripeStub::spawn().await;
+    let auth = AuthStub::spawn().await;
+    let st = state(owner.clone(), app, &stripe.base_url, &auth.base_url);
+    let tenant = Uuid::new_v4();
+    let token = bearer(tenant, None);
+    let body =
+        json!({"service": "custom_design", "return_url": "https://app.test/billing"}).to_string();
+
+    // The configured price charges something other than the catalog advertises:
+    // refuse the checkout (503) and create no session.
+    stripe.set_price(
+        PRICE_CUSTOM,
+        json!({"id": PRICE_CUSTOM, "unit_amount": 9900, "currency": "usd", "type": "one_time"}),
+    );
+    let (status, resp) = send(
+        &st,
+        "POST",
+        "/billing/services/checkout",
+        Some(&token),
+        &[],
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "resp: {resp}");
+    assert!(
+        stripe.checkout_forms().is_empty(),
+        "no session may be created on a price mismatch"
+    );
+
+    // Fixed price: the checkout proceeds and the verification is cached...
+    stripe.set_price(
+        PRICE_CUSTOM,
+        json!({"id": PRICE_CUSTOM, "unit_amount": 25000, "currency": "usd", "type": "one_time"}),
+    );
+    let (status, _) = send(
+        &st,
+        "POST",
+        "/billing/services/checkout",
+        Some(&token),
+        &[],
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // ...so a later divergence in the stub is not re-fetched this process.
+    stripe.set_price(
+        PRICE_CUSTOM,
+        json!({"id": PRICE_CUSTOM, "unit_amount": 1, "currency": "usd", "type": "one_time"}),
+    );
+    let (status, _) = send(
+        &st,
+        "POST",
+        "/billing/services/checkout",
+        Some(&token),
+        &[],
+        Some(body),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a verified price is cached per process"
+    );
+    assert_eq!(stripe.checkout_forms().len(), 2);
 }

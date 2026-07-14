@@ -9,9 +9,10 @@
 //! re-pushes the plan mirror for EVERY known org, downgrades to free included, healing
 //! any lost webhook or mirror write.
 //!
-//! Slice-2 seam: the same tick will also backstop one-off purchases (list Checkout
-//! Sessions completed in the last 24h with mode=payment and upsert any
-//! `billing_purchases` row a lost webhook missed); see `reconcile_once`.
+//! The same tick also backstops one-off purchases (slice 2, decision H: money must not
+//! depend on webhook delivery): it lists Checkout Sessions created in the last 24h,
+//! keeps the paid payment-mode ones, and idempotently inserts any `billing_purchases`
+//! row a lost webhook missed. Refunds are deliberately webhook-only (decision H).
 
 use crate::config::Config;
 use crate::domain::billing;
@@ -237,8 +238,9 @@ pub async fn reconcile_once(
         Err(e) => tracing::warn!(error = ?e, "could not list subscriptions for mirror re-push"),
     }
 
-    // Slice-2 seam: purchases backstop goes here (walk recent mode=payment Checkout
-    // Sessions and upsert billing_purchases rows lost webhooks missed).
+    // Purchases backstop (decision H): failures here log and never affect the
+    // subscriptions phase above, which has already run to completion.
+    reconcile_purchases(owner_pool, client).await;
 
     tracing::info!(
         upserts,
@@ -246,6 +248,87 @@ pub async fn reconcile_once(
         seen = seen_ids.len(),
         "billing reconcile tick done"
     );
+}
+
+/// How far back the purchases backstop looks. Sessions live at most 24h, so a session
+/// created earlier than this cannot still complete; each is re-seen by several ticks.
+const PURCHASES_LOOKBACK: chrono::Duration = chrono::Duration::hours(24);
+
+/// Walk Checkout Sessions created in the lookback window and idempotently insert any
+/// paid payment-mode purchase the webhook missed (the UNIQUE session id converges both
+/// writers on one row). Completeness does not matter here the way it does for the
+/// subscription sweep: this only ADDS missed rows, so a partial walk is just a smaller
+/// backstop this tick.
+async fn reconcile_purchases(owner_pool: &PgPool, client: &StripeClient) {
+    let created_gte = (chrono::Utc::now() - PURCHASES_LOOKBACK).timestamp();
+    let mut cursor: Option<String> = None;
+    let mut inserted = 0u64;
+    for _ in 0..PAGE_CAP {
+        let page = match client
+            .list_checkout_sessions(created_gte, cursor.as_deref())
+            .await
+        {
+            Ok(page) => page,
+            Err(e) => {
+                tracing::warn!(error = %e, "checkout-session list failed; purchases backstop cut short");
+                return;
+            }
+        };
+        let last_id = page
+            .data
+            .last()
+            .and_then(|s| s.get("id"))
+            .and_then(|i| i.as_str())
+            .map(str::to_string);
+        for session in &page.data {
+            // Not payment mode, not paid, or unattributable: not backstop material.
+            let Some(facts) = stripe::payment_session_facts(session) else {
+                continue;
+            };
+            let purchase = billing::NewPurchase {
+                service_key: facts.service_key,
+                stripe_checkout_session_id: facts.session_id,
+                stripe_payment_intent_id: facts.payment_intent,
+                amount: facts.amount_total,
+                currency: facts.currency,
+            };
+            let landed: Result<bool, crate::error::AppError> = async {
+                let mut tx = owner_pool.begin().await?;
+                let new =
+                    billing::insert_purchase_in_tx(&mut tx, facts.org, &purchase, "reconcile")
+                        .await?;
+                tx.commit().await?;
+                Ok(new)
+            }
+            .await;
+            match landed {
+                Ok(true) => {
+                    inserted += 1;
+                    tracing::warn!(
+                        org = %facts.org,
+                        session = %purchase.stripe_checkout_session_id,
+                        "purchases backstop landed a paid session the webhook missed"
+                    );
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(error = ?e, "purchase backstop insert failed"),
+            }
+        }
+        if page.has_more {
+            match last_id {
+                Some(id) => cursor = Some(id),
+                None => {
+                    tracing::warn!("checkout-session page has_more but no cursor; stopping");
+                    break;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    if inserted > 0 {
+        tracing::info!(inserted, "purchases backstop inserted missed rows");
+    }
 }
 
 /// Upsert one org's winning subscription into the local mirror. An unmappable price id

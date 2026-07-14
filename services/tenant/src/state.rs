@@ -28,5 +28,10 @@ pub struct AppState {
     /// Shared outbound HTTP client: Stripe calls + the plan-mirror push to auth
     /// (tenant's first outbound internal client; reqwest clients are cheap Arcs).
     pub http: reqwest::Client,
+    /// Stripe price ids whose live Price object was verified against the code-defined
+    /// service catalog (amount/currency/one_time) this process. Checked once per price
+    /// per process before a service checkout: an advertised-vs-charged divergence is
+    /// worse than a failed checkout.
+    pub verified_prices: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     pub config: Arc<Config>,
 }

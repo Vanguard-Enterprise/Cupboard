@@ -469,6 +469,214 @@ pub async fn clear_pending_checkout_in_tx(
     Ok(())
 }
 
+// ============================ One-off service purchases ============================
+
+/// A paid one-off purchase to record (Resolved with Frank #2). Webhook and the 24h
+/// reconcile backstop both build this from the same Checkout Session facts.
+#[derive(Debug)]
+pub struct NewPurchase {
+    pub service_key: String,
+    pub stripe_checkout_session_id: String,
+    pub stripe_payment_intent_id: Option<String>,
+    pub amount: Option<i64>,
+    pub currency: Option<String>,
+}
+
+/// Insert a purchase row idempotently (the UNIQUE `stripe_checkout_session_id`), with
+/// an audit row when (and only when) it is new. Returns whether it was inserted.
+///
+/// Refund-race guard: a `charge.refunded` can beat the purchase row into existence
+/// (receiver down during a deploy, staff refund fast, backstop inserting later).
+/// `charge.refunded` events are dedupe-recorded even when unmatched, so this checks the
+/// event journal for an already-recorded FULL refund of this session's payment intent
+/// and lands the row as `refunded` when found; a permanently `paid` row would drive
+/// manual fulfillment of refunded money. Partial refunds (`refunded != true`) do NOT
+/// count: the customer mostly paid, fulfillment proceeds.
+pub async fn insert_purchase_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    purchase: &NewPurchase,
+    source: &str,
+) -> Result<bool, sqlx::Error> {
+    let refund_pre_recorded = match &purchase.stripe_payment_intent_id {
+        Some(pi) => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (\
+                 SELECT 1 FROM billing_webhook_events \
+                 WHERE event_type = 'charge.refunded' \
+                   AND payload->'data'->'object'->>'payment_intent' = $1 \
+                   AND payload->'data'->'object'->>'refunded' = 'true')",
+            )
+            .bind(pi)
+            .fetch_one(&mut **tx)
+            .await?
+        }
+        None => false,
+    };
+    let status = if refund_pre_recorded {
+        tracing::warn!(
+            tenant = %tenant_id,
+            session = %purchase.stripe_checkout_session_id,
+            "a full refund was recorded before the purchase row landed; inserting as refunded"
+        );
+        "refunded"
+    } else {
+        "paid"
+    };
+    let inserted: Option<Uuid> = sqlx::query_scalar(
+        "INSERT INTO billing_purchases \
+             (tenant_id, service_key, stripe_checkout_session_id, \
+              stripe_payment_intent_id, amount, currency, status) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+         ON CONFLICT (stripe_checkout_session_id) DO NOTHING \
+         RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(&purchase.service_key)
+    .bind(&purchase.stripe_checkout_session_id)
+    .bind(&purchase.stripe_payment_intent_id)
+    .bind(purchase.amount)
+    .bind(&purchase.currency)
+    .bind(status)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(id) = inserted else {
+        return Ok(false);
+    };
+    crate::domain::audit::record_in_tx(
+        tx,
+        tenant_id,
+        None,
+        "billing.service_purchased",
+        Some("billing_purchase"),
+        Some(id),
+        Some(serde_json::json!({
+            "service_key": purchase.service_key,
+            "stripe_checkout_session_id": purchase.stripe_checkout_session_id,
+            "amount": purchase.amount,
+            "currency": purchase.currency,
+            "status": status,
+            "refund_pre_recorded": refund_pre_recorded,
+            "source": source,
+        })),
+    )
+    .await?;
+    Ok(true)
+}
+
+/// Which org (and purchase row) a Stripe payment intent belongs to (the
+/// `charge.refunded` webhook carries only the charge/payment-intent, not our ids).
+pub async fn find_purchase_by_payment_intent(
+    owner_pool: &PgPool,
+    payment_intent_id: &str,
+) -> Result<Option<(Uuid, Uuid)>, AppError> {
+    Ok(sqlx::query_as(
+        "SELECT tenant_id, id FROM billing_purchases WHERE stripe_payment_intent_id = $1",
+    )
+    .bind(payment_intent_id)
+    .fetch_optional(owner_pool)
+    .await?)
+}
+
+/// Flip a purchase to refunded (webhook-only per decision H: refunds are initiated by
+/// Cupboard staff in the Stripe dashboard, so the event always fires where we see it;
+/// no reconcile sweep). Audits when the status actually flipped.
+pub async fn refund_purchase_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    payment_intent_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let refunded: Option<Uuid> = sqlx::query_scalar(
+        "UPDATE billing_purchases SET status = 'refunded' \
+         WHERE tenant_id = $1 AND stripe_payment_intent_id = $2 AND status = 'paid' \
+         RETURNING id",
+    )
+    .bind(tenant_id)
+    .bind(payment_intent_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(id) = refunded else {
+        return Ok(false);
+    };
+    crate::domain::audit::record_in_tx(
+        tx,
+        tenant_id,
+        None,
+        "billing.purchase_refunded",
+        Some("billing_purchase"),
+        Some(id),
+        Some(serde_json::json!({
+            "stripe_payment_intent_id": payment_intent_id,
+            "source": "webhook:charge.refunded",
+        })),
+    )
+    .await?;
+    Ok(true)
+}
+
+/// Record a PARTIAL refund against a purchase: the row STAYS paid (the customer mostly
+/// paid; fulfillment proceeds), the refunded amount lands in the audit trail.
+pub async fn record_partial_refund_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    payment_intent_id: &str,
+    amount_refunded: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    let purchase_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM billing_purchases \
+         WHERE tenant_id = $1 AND stripe_payment_intent_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(payment_intent_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    crate::domain::audit::record_in_tx(
+        tx,
+        tenant_id,
+        None,
+        "billing.purchase_refund_partial",
+        Some("billing_purchase"),
+        purchase_id,
+        Some(serde_json::json!({
+            "stripe_payment_intent_id": payment_intent_id,
+            "amount_refunded": amount_refunded,
+            "status_kept": "paid",
+            "source": "webhook:charge.refunded",
+        })),
+    )
+    .await?;
+    Ok(())
+}
+
+/// One row of the org's purchase history (the operator services page).
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct PurchaseView {
+    pub id: Uuid,
+    pub service_key: String,
+    pub status: String,
+    pub amount: Option<i64>,
+    pub currency: Option<String>,
+    pub purchased_at: DateTime<Utc>,
+}
+
+/// The org's purchase history, newest first (app pool, RLS).
+pub async fn list_purchases(
+    app_pool: &PgPool,
+    tenant: TenantId,
+) -> Result<Vec<PurchaseView>, AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let rows = sqlx::query_as::<_, PurchaseView>(
+        "SELECT id, service_key, status, amount, currency, purchased_at \
+         FROM billing_purchases WHERE tenant_id = $1 \
+         ORDER BY purchased_at DESC, id DESC",
+    )
+    .bind(tenant.0)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
 // ============================ Webhook dedupe ============================
 
 /// Record a Stripe event inside the ingest transaction. Returns `true` when the event is

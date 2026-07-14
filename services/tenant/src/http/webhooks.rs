@@ -187,6 +187,23 @@ enum StripeAction {
     /// `invoice.payment_failed`: flip the org's row to past_due ahead of the matching
     /// subscription.updated (grace resolution decides gating).
     PastDue { org: Uuid },
+    /// `checkout.session.completed` (mode=payment): land the one-off purchase in the
+    /// ledger (idempotent on the session id; slice 2).
+    RecordPurchase {
+        org: Uuid,
+        purchase: billing::NewPurchase,
+    },
+    /// `charge.refunded` with `refunded == true`: flip the matched purchase to refunded
+    /// (webhook-only per decision H; refunds are staff-initiated in the Stripe
+    /// dashboard).
+    RefundPurchase { org: Uuid, payment_intent: String },
+    /// `charge.refunded` for a PARTIAL amount: the purchase stays paid (fulfillment
+    /// proceeds); the amount is audited.
+    PartialRefund {
+        org: Uuid,
+        payment_intent: String,
+        amount_refunded: Option<i64>,
+    },
     /// Everything else (and anything unattributable): dedupe-record + 2xx.
     RecordOnly { org: Option<Uuid> },
 }
@@ -196,7 +213,10 @@ impl StripeAction {
         match self {
             StripeAction::UpsertFromCheckout { org, .. }
             | StripeAction::Upsert { org, .. }
-            | StripeAction::PastDue { org } => Some(*org),
+            | StripeAction::PastDue { org }
+            | StripeAction::RecordPurchase { org, .. }
+            | StripeAction::RefundPurchase { org, .. }
+            | StripeAction::PartialRefund { org, .. } => Some(*org),
             StripeAction::RecordOnly { org } => *org,
         }
     }
@@ -275,10 +295,42 @@ async fn classify_stripe_event(
     object: &serde_json::Value,
 ) -> Result<StripeAction, AppError> {
     match event_type {
-        "checkout.session.completed" => {
-            // Slice-2 seam: mode=payment sessions (one-off services) will land a
-            // billing_purchases row here; until then they are dedupe-recorded only.
-            if object.get("mode").and_then(|m| m.as_str()) != Some("subscription") {
+        // `async_payment_succeeded` is the paid signal for async payment methods, whose
+        // `completed` event fires while payment_status is still unpaid AND whose
+        // settlement (days) can outlive the backstop's 24h created-window: without this
+        // arm an async purchase would collect money with no ledger row ever. Checkout
+        // creation is card-only today, so this is belt-and-braces; the session-id
+        // unique key makes any double delivery a no-op.
+        "checkout.session.completed" | "checkout.session.async_payment_succeeded" => {
+            // Payment mode = a one-off service purchase (slice 2): the ledger insert is
+            // idempotent on the session id. Sessions that are not paid or carry no
+            // org/service attribution are dedupe-recorded only.
+            if object.get("mode").and_then(|m| m.as_str()) == Some("payment") {
+                return Ok(match stripe::payment_session_facts(object) {
+                    Some(facts) => StripeAction::RecordPurchase {
+                        org: facts.org,
+                        purchase: billing::NewPurchase {
+                            service_key: facts.service_key,
+                            stripe_checkout_session_id: facts.session_id,
+                            stripe_payment_intent_id: facts.payment_intent,
+                            amount: facts.amount_total,
+                            currency: facts.currency,
+                        },
+                    },
+                    None => {
+                        tracing::warn!(
+                            event_type,
+                            "payment-mode session without paid status or org/service \
+                             metadata; recording only"
+                        );
+                        StripeAction::RecordOnly { org: None }
+                    }
+                });
+            }
+            // The subscription flow below belongs to `completed` only.
+            if event_type != "checkout.session.completed"
+                || object.get("mode").and_then(|m| m.as_str()) != Some("subscription")
+            {
                 return Ok(StripeAction::RecordOnly { org: None });
             }
             let org = object
@@ -358,6 +410,51 @@ async fn classify_stripe_event(
                 None => Ok(StripeAction::RecordOnly { org: None }),
             }
         }
+        "charge.refunded" => {
+            // The charge carries the payment intent; the ledger row maps it back to the
+            // org and purchase. An unmatched intent (a refund on something that never
+            // landed a purchase row) is recorded + warned, still 2xx; the purchase
+            // insert's pre-recorded-refund check (billing::insert_purchase_in_tx) picks
+            // it up if the row lands later.
+            let payment_intent = object.get("payment_intent").and_then(stripe_ref_id);
+            // `charge.refunded` fires for ANY refund amount; only `refunded == true`
+            // (fully refunded) may flip the row, or a mostly-paid customer would lose
+            // fulfillment over a partial goodwill refund.
+            let fully_refunded = object
+                .get("refunded")
+                .and_then(|r| r.as_bool())
+                .unwrap_or(false);
+            let amount_refunded = object.get("amount_refunded").and_then(|a| a.as_i64());
+            let matched = match &payment_intent {
+                Some(pi) => billing::find_purchase_by_payment_intent(&state.owner_pool, pi).await?,
+                None => None,
+            };
+            match (matched, payment_intent) {
+                (Some((org, _purchase_id)), Some(pi)) if fully_refunded => {
+                    Ok(StripeAction::RefundPurchase {
+                        org,
+                        payment_intent: pi,
+                    })
+                }
+                (Some((org, _purchase_id)), Some(pi)) => {
+                    tracing::warn!(
+                        org = %org,
+                        amount_refunded = amount_refunded.unwrap_or(0),
+                        "partial refund on a purchase; keeping it paid (fulfillment \
+                         proceeds), recording the amount"
+                    );
+                    Ok(StripeAction::PartialRefund {
+                        org,
+                        payment_intent: pi,
+                        amount_refunded,
+                    })
+                }
+                _ => {
+                    tracing::warn!("charge.refunded with no matching purchase row; recording only");
+                    Ok(StripeAction::RecordOnly { org: None })
+                }
+            }
+        }
         _ => Ok(StripeAction::RecordOnly { org: None }),
     }
 }
@@ -391,6 +488,33 @@ async fn apply_stripe_action(
         StripeAction::PastDue { org } => {
             billing::mark_past_due_in_tx(tx, org).await?;
             Ok(true)
+        }
+        // Purchases never touch the plan, so they never trigger a mirror push.
+        StripeAction::RecordPurchase { org, purchase } => {
+            let inserted = billing::insert_purchase_in_tx(tx, org, &purchase, "webhook").await?;
+            if !inserted {
+                tracing::info!(org = %org, session = %purchase.stripe_checkout_session_id,
+                    "purchase already recorded (backstop or earlier event); no-op");
+            }
+            Ok(false)
+        }
+        StripeAction::RefundPurchase {
+            org,
+            payment_intent,
+        } => {
+            let flipped = billing::refund_purchase_in_tx(tx, org, &payment_intent).await?;
+            if !flipped {
+                tracing::info!(org = %org, "refund matched a purchase already refunded; no-op");
+            }
+            Ok(false)
+        }
+        StripeAction::PartialRefund {
+            org,
+            payment_intent,
+            amount_refunded,
+        } => {
+            billing::record_partial_refund_in_tx(tx, org, &payment_intent, amount_refunded).await?;
+            Ok(false)
         }
         StripeAction::RecordOnly { .. } => Ok(false),
     }

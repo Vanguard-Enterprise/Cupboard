@@ -1,7 +1,8 @@
-//! The **plan catalog**: the code-defined source of truth for subscription tiers
-//! (Phase 6 decision I). Stripe is payment truth; this module is gating truth: every
-//! limit the platform enforces (rate limiting, key/domain caps) reads from here, never
-//! from Stripe metadata.
+//! The **plan catalog**: the code-defined source of truth for subscription tiers and
+//! the one-off service catalog (Phase 6 decision I). Stripe is payment truth; this
+//! module is gating/catalog truth: every limit the platform enforces (rate limiting,
+//! key/domain caps) and every service card the UI shows reads from here, never from
+//! Stripe metadata.
 //!
 //! Wire format is the stable string (`"team"`), which is what lands in the JWT `plan`
 //! claim and the `org_plans` mirror. An **absent** plan (no subscription row, no claim)
@@ -83,9 +84,63 @@ impl std::fmt::Display for Plan {
     }
 }
 
+/// A one-off purchasable service (Phase 6 decision I; Resolved with Frank #2). The
+/// catalog is code-defined exactly like the plan table: Stripe is payment truth, this
+/// is catalog/display truth (Stripe-price-driven catalogs were rejected). Purchase is
+/// self-serve via Checkout (payment mode); fulfillment is manual/human, which the UI
+/// card states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServiceItem {
+    /// Stable identifier, stored in `billing_purchases.service_key`.
+    pub key: &'static str,
+    /// Display name.
+    pub name: &'static str,
+    /// Short, honest description of what is being bought.
+    pub description: &'static str,
+    /// The env var (`STRIPE_PRICE_<SERVICE>` configmap pattern) that carries the
+    /// Stripe price id this service checks out with.
+    pub price_env: &'static str,
+    /// Display price in minor units (code-defined truth; must match the Stripe price).
+    pub price_amount: i64,
+    /// ISO currency code (lowercase, the Stripe convention).
+    pub currency: &'static str,
+}
+
+/// Every purchasable service. v1 sells Custom Design only ($250 one-time); migration
+/// assistance is deferred per Frank.
+pub const SERVICES: &[ServiceItem] = &[ServiceItem {
+    key: "custom_design",
+    name: "Custom Design",
+    description: "A one-time professional design service: a custom look and layout \
+                  for your community's storefront, delivered by a designer.",
+    price_env: "STRIPE_PRICE_CUSTOM_DESIGN",
+    price_amount: 25_000,
+    currency: "usd",
+}];
+
+impl ServiceItem {
+    /// Look a service up by its stable key. `None` for unknown keys.
+    pub fn by_key(key: &str) -> Option<&'static ServiceItem> {
+        SERVICES.iter().find(|s| s.key == key)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_catalog_lookup() {
+        let svc = ServiceItem::by_key("custom_design").expect("v1 sells custom design");
+        assert_eq!(svc.name, "Custom Design");
+        assert_eq!(svc.price_env, "STRIPE_PRICE_CUSTOM_DESIGN");
+        assert_eq!((svc.price_amount, svc.currency), (25_000, "usd"));
+        assert!(ServiceItem::by_key("gold_plating").is_none());
+        // Keys are unique (the ledger's service_key must be unambiguous).
+        for (i, a) in SERVICES.iter().enumerate() {
+            assert!(SERVICES.iter().skip(i + 1).all(|b| b.key != a.key));
+        }
+    }
 
     #[test]
     fn wire_roundtrips_for_every_plan() {

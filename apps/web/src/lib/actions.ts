@@ -733,6 +733,26 @@ export async function startPlanCheckoutAction(
   redirect(body.redirect_url);
 }
 
+/** Hand the operator off to Stripe Checkout (payment mode) for a one-off service. The
+ * service key comes from the submit button. Purchase is self-serve; fulfillment stays
+ * manual (Resolved with Frank #2). */
+export async function buyServiceAction(
+  _prev: BillingActionState,
+  form: FormData,
+): Promise<BillingActionState> {
+  const service = form.get("service");
+  if (typeof service !== "string" || !service) return { error: "missing service" };
+  const res = await apiFetch("/billing/services/checkout", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ service, return_url: await billingReturnUrl() }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.redirect_url !== "string") return { error: "checkout returned no redirect" };
+  redirect(body.redirect_url);
+}
+
 /** Hand the operator off to the Stripe Customer Portal (manage/cancel/payment method). */
 export async function openBillingPortalAction(
   _prev: BillingActionState,

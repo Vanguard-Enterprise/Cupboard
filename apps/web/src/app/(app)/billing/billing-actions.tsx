@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { openBillingPortalAction, startPlanCheckoutAction } from "@/lib/actions";
+import { buyServiceAction, openBillingPortalAction, startPlanCheckoutAction } from "@/lib/actions";
 
 // Hosted-redirect handoff buttons. On success the server action redirects the browser to
 // Stripe, so these only ever render the pending state or an inline error.
@@ -28,6 +28,27 @@ export function UpgradeButtons() {
           className="rounded bg-indigo-600 px-3 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
         >
           Upgrade to Enterprise ($50/month)
+        </button>
+      </form>
+      {state.error && <p className="text-sm text-red-400">{state.error}</p>}
+    </div>
+  );
+}
+
+/** One-off service purchase (Checkout in payment mode); the service key rides on the
+ * submit button. */
+export function PurchaseButton({ service }: { service: string }) {
+  const [state, action, pending] = useActionState(buyServiceAction, {});
+  return (
+    <div className="flex flex-col gap-2">
+      <form action={action}>
+        <button
+          name="service"
+          value={service}
+          disabled={pending}
+          className="rounded bg-indigo-600 px-3 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
+        >
+          Purchase
         </button>
       </form>
       {state.error && <p className="text-sm text-red-400">{state.error}</p>}

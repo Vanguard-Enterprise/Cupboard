@@ -10,6 +10,11 @@ const BANNERS: Record<string, Banner> = {
     message: "Subscription checkout completed; your plan updates as soon as payment is confirmed.",
   },
   checkout_cancel: { tone: "neutral", message: "Checkout canceled." },
+  service_success: {
+    tone: "success",
+    message: "Purchase completed; our team will reach out to begin work.",
+  },
+  service_cancel: { tone: "neutral", message: "Purchase canceled." },
 };
 
 const TONE_STYLES: Record<Banner["tone"], string> = {

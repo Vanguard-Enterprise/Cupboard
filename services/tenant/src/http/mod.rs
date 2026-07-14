@@ -61,6 +61,11 @@ pub fn router(state: AppState) -> Router {
         // Operator platform billing (gateway `/billing/*` route; `billing.manage`).
         .route("/billing/subscription", get(billing::get_subscription))
         .route("/billing/checkout", axum::routing::post(billing::checkout))
+        .route("/billing/services", get(billing::services))
+        .route(
+            "/billing/services/checkout",
+            axum::routing::post(billing::services_checkout),
+        )
         .route("/billing/portal", axum::routing::post(billing::portal))
         // Player-facing storefront actions (gateway `/player/*` passthrough; the tenant
         // service verifies the PLAYER token itself with the disjoint player keypair).

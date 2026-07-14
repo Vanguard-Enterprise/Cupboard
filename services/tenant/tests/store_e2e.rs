@@ -103,6 +103,7 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
         http: reqwest::Client::new(),
+        verified_prices: Arc::new(Default::default()),
         config: Arc::new(config),
     }
 }

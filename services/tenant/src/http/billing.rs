@@ -1,7 +1,8 @@
-//! Operator billing surface (Phase 6 decision J): subscription read, Checkout handoff,
-//! and Customer Portal handoff. All routes require `billing.manage`; the gateway proxies
-//! `/billing/*` with require_auth and this service re-validates. Slice 1 is
-//! subscriptions; the one-off services catalog/checkout lands in slice 2.
+//! Operator billing surface (Phase 6 decision J): subscription read, Checkout handoff
+//! (subscription mode for plans, payment mode for one-off services: two trivial
+//! handlers beat one bimodal one), the services catalog + purchase history, and the
+//! Customer Portal handoff. All routes require `billing.manage`; the gateway proxies
+//! `/billing/*` with require_auth and this service re-validates.
 //!
 //! Stripe truth flows back through the webhook + reconcile loop, never through the
 //! return page: these handlers only read the local mirror and mint hosted-redirect URLs.
@@ -14,13 +15,19 @@ use crate::state::AppState;
 use crate::stripe::StripeClient;
 use axum::extract::State;
 use axum::Json;
-use cupboard_domain::{Permission, Plan, TenantId};
+use cupboard_domain::{Permission, Plan, ServiceItem, TenantId, SERVICES};
 use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct CheckoutRequest {
     pub plan: String,
+    pub return_url: String,
+}
+
+#[derive(Deserialize)]
+pub struct ServiceCheckoutRequest {
+    pub service: String,
     pub return_url: String,
 }
 
@@ -161,6 +168,164 @@ pub async fn checkout(
     tx.commit().await?;
 
     Ok(Json(json!({ "redirect_url": redirect_url })))
+}
+
+/// GET /billing/services: the code-defined service catalog (decision I: never a Stripe
+/// metadata read) + the org's purchase history, newest first.
+pub async fn services(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::BillingManage)?;
+    let purchases = billing::list_purchases(&state.app_pool, TenantId::from(org)).await?;
+    let catalog: Vec<serde_json::Value> = SERVICES
+        .iter()
+        .map(|s| {
+            json!({
+                "key": s.key,
+                "name": s.name,
+                "description": s.description,
+                "price_amount": s.price_amount,
+                "currency": s.currency,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "services": catalog,
+        "purchases": purchases,
+    })))
+}
+
+/// POST /billing/services/checkout {service, return_url} -> {redirect_url}: hand the
+/// operator off to Stripe Checkout in PAYMENT mode for a one-off service (decision J:
+/// deliberately separate from the plan checkout). No pending-session machinery here:
+/// unlike a subscription, buying the same service more than once is legitimate. The
+/// webhook (with the reconcile backstop) lands the ledger row; the return page is never
+/// truth.
+pub async fn services_checkout(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Json(req): Json<ServiceCheckoutRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::BillingManage)?;
+    let client = require_stripe(&state)?;
+
+    let service = ServiceItem::by_key(&req.service)
+        .ok_or_else(|| AppError::BadRequest("unknown service".into()))?;
+    let price_id = service_price_id(&state, service)
+        .ok_or_else(|| AppError::Unavailable("that service is not purchasable yet".into()))?;
+    let return_url = validate_return_url(&req.return_url)?;
+    let success_url = with_flag(&return_url, "service_success");
+    let cancel_url = with_flag(&return_url, "service_cancel");
+
+    verify_service_price(&state, &client, service, &price_id).await?;
+
+    let session = client
+        .create_payment_checkout(&price_id, org.0, service.key, &success_url, &cancel_url)
+        .await
+        .map_err(|e| AppError::Unavailable(format!("could not start checkout: {e}")))?;
+    let redirect_url = session
+        .get("url")
+        .and_then(|u| u.as_str())
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("checkout session has no url")))?
+        .to_string();
+    let session_id = session
+        .get("id")
+        .and_then(|i| i.as_str())
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("checkout session has no id")))?;
+
+    // Audit the handoff (the paid purchase itself is audited by the webhook/backstop
+    // writer when the ledger row lands).
+    let mut tx = state.owner_pool.begin().await?;
+    crate::domain::audit::record_in_tx(
+        &mut tx,
+        org.0,
+        Some(claims.0.sub.0),
+        "billing.service_checkout_created",
+        Some("checkout_session"),
+        None,
+        Some(json!({
+            "service_key": service.key,
+            "stripe_checkout_session_id": session_id,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+
+    Ok(Json(json!({ "redirect_url": redirect_url })))
+}
+
+/// Resolve a service's Stripe price id from config (the `STRIPE_PRICE_<SERVICE>` env
+/// mapping named by the catalog's `price_env`; decision I).
+fn service_price_id(state: &AppState, service: &ServiceItem) -> Option<String> {
+    match service.price_env {
+        "STRIPE_PRICE_CUSTOM_DESIGN" => state.config.stripe_price_custom_design.clone(),
+        other => {
+            // A catalog entry without a config mapping is a wiring bug, not operator
+            // input; keep it a loud 503 rather than a panic.
+            tracing::error!(
+                service = service.key,
+                env = other,
+                "unmapped service price env"
+            );
+            None
+        }
+    }
+}
+
+/// Sanity-check the configured Stripe price against the code-defined catalog entry
+/// before the first service checkout of this process (then cached per price id in
+/// `AppState::verified_prices`): the catalog is display truth, so a configmap pointing
+/// at a price with a different amount/currency/type would silently charge something
+/// other than what the card advertised. Divergence refuses the checkout (503); a
+/// transient fetch failure also refuses but is not cached, so the next attempt
+/// re-checks.
+async fn verify_service_price(
+    state: &AppState,
+    client: &StripeClient,
+    service: &ServiceItem,
+    price_id: &str,
+) -> Result<(), AppError> {
+    if state
+        .verified_prices
+        .lock()
+        .expect("verified_prices lock")
+        .contains(price_id)
+    {
+        return Ok(());
+    }
+    let price = client
+        .retrieve_price(price_id)
+        .await
+        .map_err(|e| AppError::Unavailable(format!("could not verify the service price: {e}")))?;
+    let unit_amount = price.get("unit_amount").and_then(|a| a.as_i64());
+    let currency = price.get("currency").and_then(|c| c.as_str());
+    let price_type = price.get("type").and_then(|t| t.as_str());
+    let matches = unit_amount == Some(service.price_amount)
+        && currency == Some(service.currency)
+        && price_type == Some("one_time");
+    if !matches {
+        tracing::error!(
+            service = service.key,
+            price = price_id,
+            expected_amount = service.price_amount,
+            expected_currency = service.currency,
+            got_amount = unit_amount.unwrap_or(-1),
+            got_currency = currency.unwrap_or("<none>"),
+            got_type = price_type.unwrap_or("<none>"),
+            "SERVICE PRICE MISMATCH: the Stripe price diverges from the code-defined \
+             catalog; refusing checkout (fix STRIPE_PRICE_* or the catalog)"
+        );
+        return Err(AppError::Unavailable(
+            "this service is temporarily unavailable".into(),
+        ));
+    }
+    state
+        .verified_prices
+        .lock()
+        .expect("verified_prices lock")
+        .insert(price_id.to_string());
+    Ok(())
 }
 
 /// POST /billing/portal {return_url} -> {redirect_url}: hand the operator off to the
