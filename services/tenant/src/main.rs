@@ -67,6 +67,23 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Ticket event bus (Phase 6 decision E): best-effort, mirroring the cache branch.
+    // Unset/unreachable Redis only costs Discord sync (decision G: web tickets never
+    // depend on Redis); publish failures at runtime are logged and swallowed.
+    let bus = match &config.redis_url {
+        Some(url) => match cupboard_bus::Bus::connect(url).await {
+            Ok(bus) => Some(bus),
+            Err(e) => {
+                tracing::warn!(error = %e, "Redis unreachable; ticket event publishing disabled");
+                None
+            }
+        },
+        None => {
+            tracing::warn!("REDIS_URL unset; ticket event publishing disabled");
+            None
+        }
+    };
+
     // Player token verifier (checkout + entitlement reads). Disjoint keypair from the
     // operator one; absent -> the /player/* surface returns 503.
     let player_keys = match &config.player_jwt_public_key_pem {
@@ -89,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
         http: reqwest::Client::new(),
+        bus,
         verified_prices: Arc::new(Default::default()),
         config: Arc::new(config.clone()),
     };

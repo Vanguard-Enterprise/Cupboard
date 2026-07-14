@@ -18,6 +18,7 @@ stub = []
 cupboard-domain.workspace = true
 cupboard-telemetry.workspace = true
 cupboard-db.workspace = true
+cupboard-bus.workspace = true
 cupboard-crypto.workspace = true
 cupboard-auth-core.workspace = true
 # For its provider-generic sliding-window RateLimiter only (PayNow publishes no rate

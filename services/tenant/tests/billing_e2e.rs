@@ -80,6 +80,10 @@ struct StripeStubState {
     expire_responses: VecDeque<(u16, Value)>,
     /// Monotonic counter minting unique checkout-session ids.
     next_session: u64,
+    /// Per-run nonce prefixing minted session ids: `billing_purchases` has a GLOBAL
+    /// unique on the session id, so a fixed `cs_test_N` would make the suite
+    /// non-re-runnable against a persisted database.
+    session_prefix: String,
     /// `GET /v1/subscriptions/{id}` fixtures.
     subscriptions: HashMap<String, Value>,
     /// `GET /v1/prices/{id}` fixtures. Missing ids default to a price matching the
@@ -107,7 +111,10 @@ impl Drop for StripeStub {
 
 impl StripeStub {
     async fn spawn() -> Self {
-        let state = Arc::new(Mutex::new(StripeStubState::default()));
+        let state = Arc::new(Mutex::new(StripeStubState {
+            session_prefix: format!("cs_{}", &Uuid::new_v4().simple().to_string()[..12]),
+            ..Default::default()
+        }));
         let router = Router::new()
             .route(
                 "/v1/checkout/sessions",
@@ -117,7 +124,7 @@ impl StripeStub {
                         let mut st = s.lock().unwrap();
                         st.checkout_forms.push(form);
                         st.next_session += 1;
-                        let id = format!("cs_test_{}", st.next_session);
+                        let id = format!("{}_{}", st.session_prefix, st.next_session);
                         Json(json!({
                             "id": id,
                             "url": format!("https://checkout.stripe.com/c/pay/{id}")
@@ -216,6 +223,11 @@ impl StripeStub {
             state,
             handle,
         }
+    }
+
+    /// The id this stub minted for its `n`-th created checkout session (1-based).
+    fn session_id(&self, n: u64) -> String {
+        format!("{}_{n}", self.state.lock().unwrap().session_prefix)
     }
 
     fn set_subscription(&self, id: &str, sub: Value) {
@@ -380,6 +392,7 @@ fn state(owner: PgPool, app: PgPool, stripe_base: &str, auth_base: &str) -> AppS
         stripe_api_base: stripe_base.to_string(),
         auth_internal_url: auth_base.to_string(),
         plan_write_token: Some(PLAN_WRITE_TOKEN.into()),
+        identity_internal_url: "http://identity.test".into(),
     };
     AppState {
         owner_pool: owner,
@@ -390,6 +403,7 @@ fn state(owner: PgPool, app: PgPool, stripe_base: &str, auth_base: &str) -> AppS
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
         http: reqwest::Client::new(),
+        bus: None,
         verified_prices: Arc::new(Default::default()),
         config: Arc::new(config),
     }
@@ -628,7 +642,7 @@ async fn checkout_flow_upserts_subscription_and_pushes_mirror() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         stripe.expired_sessions(),
-        vec!["cs_test_1".to_string()],
+        vec![stripe.session_id(1)],
         "the previous pending session must be expired first"
     );
     let pending: Option<String> = sqlx::query_scalar(
@@ -638,7 +652,7 @@ async fn checkout_flow_upserts_subscription_and_pushes_mirror() {
     .fetch_optional(&owner)
     .await
     .unwrap();
-    assert_eq!(pending.as_deref(), Some("cs_test_2"));
+    assert_eq!(pending, Some(stripe.session_id(2)));
 
     // Stripe completes: checkout.session.completed -> retrieve -> upsert + mirror push.
     let sub_id = format!("sub_{}", Uuid::new_v4().simple());
@@ -651,7 +665,7 @@ async fn checkout_flow_upserts_subscription_and_pushes_mirror() {
         "id": evt_id(),
         "type": "checkout.session.completed",
         "data": {"object": {
-            "id": "cs_test_2",
+            "id": stripe.session_id(2),
             "mode": "subscription",
             "client_reference_id": tenant.to_string(),
             "customer": format!("cus_for_{sub_id}"),
@@ -1521,8 +1535,12 @@ async fn service_checkout_and_purchase_lifecycle() {
         Some("https://app.test/billing?flag=service_cancel")
     );
 
-    // Completion webhook lands the ledger row exactly once.
-    let session = payment_session("cs_test_1", tenant, "custom_design", "pi_life_1");
+    // Completion webhook lands the ledger row exactly once. The payment intent is
+    // per-run unique like the session id: the refund-race guard scans the persisted
+    // billing_webhook_events journal by payment_intent, so a fixed id would see a
+    // PREVIOUS run's refund event and land the fresh purchase as refunded.
+    let pi_life = format!("pi_life_{}", Uuid::new_v4().simple());
+    let session = payment_session(&stripe.session_id(1), tenant, "custom_design", &pi_life);
     let event = json!({
         "id": evt_id(),
         "type": "checkout.session.completed",
@@ -1538,7 +1556,7 @@ async fn service_checkout_and_purchase_lifecycle() {
 
     // Replay (same event id) and a DIFFERENT event for the same session are both no-ops.
     assert_eq!(deliver_webhook(&st, &event, &sig).await, StatusCode::OK);
-    let dup_session = payment_session("cs_test_1", tenant, "custom_design", "pi_life_1");
+    let dup_session = payment_session(&stripe.session_id(1), tenant, "custom_design", &pi_life);
     let dup_event = json!({
         "id": evt_id(),
         "type": "checkout.session.completed",
@@ -1583,7 +1601,7 @@ async fn service_checkout_and_purchase_lifecycle() {
     let refund = json!({
         "id": evt_id(),
         "type": "charge.refunded",
-        "data": {"object": {"id": "ch_life_1", "payment_intent": "pi_life_1",
+        "data": {"object": {"id": "ch_life_1", "payment_intent": pi_life,
                             "refunded": true, "amount_refunded": 25000}}
     })
     .to_string();

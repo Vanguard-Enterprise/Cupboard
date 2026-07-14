@@ -88,6 +88,7 @@ fn state(owner: PgPool, app: PgPool, tebex_base: String) -> AppState {
         stripe_api_base: "http://stripe.test".into(),
         auth_internal_url: "http://auth.test".into(),
         plan_write_token: None,
+        identity_internal_url: "http://identity.test".into(),
     };
     AppState {
         owner_pool: owner,
@@ -98,6 +99,7 @@ fn state(owner: PgPool, app: PgPool, tebex_base: String) -> AppState {
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
         http: reqwest::Client::new(),
+        bus: None,
         verified_prices: Arc::new(Default::default()),
         config: Arc::new(config),
     }

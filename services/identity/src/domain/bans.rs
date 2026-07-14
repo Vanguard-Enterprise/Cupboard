@@ -220,6 +220,75 @@ pub async fn enforce(
         .collect())
 }
 
+/// Trimmed ban view for the cross-tenant `/internal/bans/*` reads the tenant service uses
+/// to build the ban-appeal picker and render a ticket's linked ban (Phase 6 decision C).
+/// The field set (and order) is the wire contract the tenant agent builds against; keep it
+/// in sync with the handler's documented shape.
+#[derive(Debug, sqlx::FromRow, serde::Serialize)]
+pub struct BanSummary {
+    pub id: Uuid,
+    pub subject_type: String,
+    pub subject_value: Option<String>,
+    pub reason: Option<String>,
+    pub status: String,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+const SUMMARY_COLS: &str =
+    "id, subject_type, subject_value, reason, status, issued_at, expires_at, revoked_at";
+
+/// Fetch a single ban by `(id, tenant_id)` on the owner pool (RLS-exempt; internal callers
+/// are cross-tenant by design, so the tenant is filtered explicitly in SQL (the `enforce`
+/// precedent), never via `begin_tenant_tx`). Returns `None` when no ban matches BOTH the id
+/// and the tenant, so tenant B can never read tenant A's ban by guessing an id.
+pub async fn get_by_id_for_tenant(
+    owner_pool: &PgPool,
+    tenant_id: Uuid,
+    id: Uuid,
+) -> Result<Option<BanSummary>, AppError> {
+    let ban = sqlx::query_as::<_, BanSummary>(&format!(
+        "SELECT {SUMMARY_COLS} FROM bans WHERE id = $1 AND tenant_id = $2"
+    ))
+    .bind(id)
+    .bind(tenant_id)
+    .fetch_optional(owner_pool)
+    .await?;
+    Ok(ban)
+}
+
+/// Every currently-active steam ban for `steam_id` on `tenant_id`, on the owner pool
+/// (RLS-exempt, tenant filtered explicitly). Powers the storefront "appeal this ban"
+/// picker: the logged-in player's steam_id is hashed here and matched against `subject_hash`.
+///
+/// Matching is `subject_type = 'steam' AND subject_hash = $`, NEVER hash alone: name/ip/...
+/// bans share the `subject_hash` column (Phase 4 widened subject types), so a name ban whose
+/// value happens to look like a SteamID64 would otherwise surface here. Mirrors the
+/// type-and-hash filter in [`enforce`].
+pub async fn active_for_steam(
+    owner_pool: &PgPool,
+    pepper: &[u8],
+    tenant_id: Uuid,
+    steam_id: &str,
+) -> Result<Vec<BanSummary>, AppError> {
+    let subject_hash = hmac_sha256(steam_id.as_bytes(), pepper).to_vec();
+    let bans = sqlx::query_as::<_, BanSummary>(&format!(
+        "SELECT {SUMMARY_COLS} FROM bans \
+         WHERE tenant_id = $1 \
+           AND subject_type = 'steam' \
+           AND subject_hash = $2 \
+           AND status = 'active' \
+           AND (expires_at IS NULL OR expires_at > now()) \
+         ORDER BY issued_at DESC"
+    ))
+    .bind(tenant_id)
+    .bind(&subject_hash)
+    .fetch_all(owner_pool)
+    .await?;
+    Ok(bans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

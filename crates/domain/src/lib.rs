@@ -15,8 +15,8 @@ pub mod push;
 pub mod events;
 pub use events::{
     ChatEvent, EventSource, HookTiming, ObservedPlayer, PerfEvent, ReportEvent, RosterEvent,
-    SessionEdge, SessionEvent, CHAT_STREAM, PERF_STREAM, REPORT_STREAM, ROSTER_STREAM,
-    SESSION_STREAM,
+    SessionEdge, SessionEvent, TicketEvent, TicketEventKind, CHAT_STREAM, PERF_STREAM,
+    REPORT_STREAM, ROSTER_STREAM, SESSION_STREAM, TICKET_STREAM,
 };
 
 use serde::{Deserialize, Serialize};

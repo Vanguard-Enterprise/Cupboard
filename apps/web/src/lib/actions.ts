@@ -769,6 +769,71 @@ export async function openBillingPortalAction(
   redirect(body.redirect_url);
 }
 
+export type TicketReplyState = { error?: string; ok?: boolean };
+
+/** Staff reply on a ticket; the internal checkbox turns it into a staff-only note the
+ * player never sees (the API excludes internal messages from the player surface). */
+export async function createTicketMessageAction(
+  _prev: TicketReplyState,
+  form: FormData,
+): Promise<TicketReplyState> {
+  const id = form.get("ticket_id");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  const body = trimmed(form, "body");
+  if (!body) return { error: "message is required" };
+  const res = await apiFetch(`/tickets/${id}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body, internal: form.get("internal") === "on" }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath(`/tickets/${id}`);
+  return { ok: true };
+}
+
+export type TicketActionState = { error?: string };
+
+/** Move a ticket between open/pending/resolved/closed; the status rides on the button.
+ * API refusals (e.g. a 409 for a change colliding with a sibling open appeal) surface
+ * as {error} for the controls to render. */
+export async function setTicketStatusAction(
+  _prev: TicketActionState,
+  form: FormData,
+): Promise<TicketActionState> {
+  const id = form.get("ticket_id");
+  const status = form.get("status");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  if (typeof status !== "string" || !status) return { error: "missing status" };
+  const res = await apiFetch(`/tickets/${id}/status`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath(`/tickets/${id}`);
+  return {};
+}
+
+/** Assign a ticket (assignee_user_id in the form; empty = unassign). */
+export async function assignTicketAction(
+  _prev: TicketActionState,
+  form: FormData,
+): Promise<TicketActionState> {
+  const id = form.get("ticket_id");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  const assignee = form.get("assignee_user_id");
+  const res = await apiFetch(`/tickets/${id}/assign`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      assignee_user_id: typeof assignee === "string" && assignee ? assignee : null,
+    }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath(`/tickets/${id}`);
+  return {};
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

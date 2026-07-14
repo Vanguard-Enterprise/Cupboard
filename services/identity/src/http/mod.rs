@@ -71,6 +71,15 @@ pub fn router(state: AppState) -> Router {
         )
         // Cluster-internal enforcement lookup for the Collector (token-guarded).
         .route("/internal/enforce", axum::routing::post(internal::enforce))
+        // Cluster-internal ban reads for the tenant service's ban-appeal link
+        // (Phase 6 decision C; token-guarded, cross-tenant, tenant_id filtered in SQL).
+        // The active lookup is a POST so steam_id (PII) rides the body, never a query
+        // string the TraceLayer span would record.
+        .route(
+            "/internal/bans/active",
+            axum::routing::post(internal::active_bans),
+        )
+        .route("/internal/bans/{id}", get(internal::get_ban))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
         .with_state(state)

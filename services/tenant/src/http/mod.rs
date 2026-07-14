@@ -7,6 +7,7 @@ mod player;
 pub mod public;
 mod sites;
 mod store;
+mod tickets;
 mod webhooks;
 
 use crate::error::AppError;
@@ -67,6 +68,18 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(billing::services_checkout),
         )
         .route("/billing/portal", axum::routing::post(billing::portal))
+        // Operator support tickets (gateway `/tickets/*` route; `support.respond`).
+        .route("/tickets", get(tickets::list))
+        .route("/tickets/{id}", get(tickets::get_ticket))
+        .route(
+            "/tickets/{id}/messages",
+            axum::routing::post(tickets::post_message),
+        )
+        .route(
+            "/tickets/{id}/status",
+            axum::routing::post(tickets::set_status),
+        )
+        .route("/tickets/{id}/assign", axum::routing::post(tickets::assign))
         // Player-facing storefront actions (gateway `/player/*` passthrough; the tenant
         // service verifies the PLAYER token itself with the disjoint player keypair).
         .route("/player/checkout", axum::routing::post(player::checkout))
@@ -75,6 +88,17 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(player::checkout_continue),
         )
         .route("/player/entitlements", get(player::entitlements))
+        // Player support tickets + the active-bans appeal picker (same passthrough).
+        .route(
+            "/player/tickets",
+            get(tickets::player_list).post(tickets::player_create),
+        )
+        .route("/player/tickets/{id}", get(tickets::player_get))
+        .route(
+            "/player/tickets/{id}/messages",
+            axum::routing::post(tickets::player_post_message),
+        )
+        .route("/player/bans/active", get(tickets::player_active_bans))
         // Provider webhook receiver (NOT via the gateway; public `cupboard-hooks` host,
         // per-connection URL, raw-body HMAC).
         .route(

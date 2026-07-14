@@ -23,6 +23,11 @@ pub const REPORT_STREAM: &str = "cupboard:reports";
 /// The Redis Stream key for perf samples (plugin sampler / perf mod → Metrics → Mimir).
 pub const PERF_STREAM: &str = "cupboard:perf";
 
+/// The Redis Stream key for ticket sync events (tenant → bot; Phase 6 decision E).
+/// The tenant service publishes post-commit with `publish_capped`, best-effort; the
+/// bot consumes via consumer group `bot` and relays into Discord threads.
+pub const TICKET_STREAM: &str = "cupboard:tickets";
+
 /// Which ingestion mechanism observed an event. Chat needs this for cross-source
 /// dedupe (a server with RCON *and* the plugin reports every message twice).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +161,68 @@ pub struct PerfEvent {
 pub struct HookTiming {
     pub plugin: String,
     pub total_ms: f64,
+}
+
+/// What a [`TicketEvent`] announces (Phase 6 decision E). Wire values match the plan's
+/// dotted kind names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TicketEventKind {
+    #[serde(rename = "ticket.created")]
+    Created,
+    #[serde(rename = "ticket.message")]
+    Message,
+    #[serde(rename = "ticket.status")]
+    Status,
+}
+
+/// One ticket sync event on [`TICKET_STREAM`] (tenant → bot). A single struct with a
+/// `kind` discriminator and per-kind optional fields (all `#[serde(default)]`, so kinds
+/// can grow fields without breaking consumers). Carries only what the bot needs to
+/// relay; the web store stays canonical and the bot backfills detail over
+/// `GET /internal/tickets/{id}` (PR5).
+///
+/// Invariants the producer enforces (decisions E/F, in the tenant publish helper):
+/// messages with `internal=true` are NEVER published, and `origin='discord'` messages
+/// are NEVER published (the bot already has them; loop prevention).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketEvent {
+    pub kind: TicketEventKind,
+    pub tenant_id: TenantId,
+    pub ticket_id: uuid::Uuid,
+
+    /// `ticket.created`: the ticket type (`general` | `ban_appeal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ticket_type: Option<String>,
+    /// `ticket.created`: the ticket subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// `ticket.created`: the optional category.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// `ticket.created`: display name of whoever opened the ticket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener_display: Option<String>,
+
+    /// `ticket.message`: the message id (uuidv7 = ordering key; also the bot's
+    /// relay-fence key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<uuid::Uuid>,
+    /// `ticket.message`: `player` | `staff` | `system`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_kind: Option<String>,
+    /// `ticket.message`: the author's display name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_display: Option<String>,
+    /// `ticket.message`: the message body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// `ticket.message`: `web` | `system` (never `discord`; see the invariants above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+
+    /// `ticket.status`: the new status (`open` | `pending` | `resolved` | `closed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 /// One F7 report: a player reporting another for cheating/abuse. Plugin-only fidelity;

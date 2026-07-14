@@ -225,6 +225,22 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // Support tickets (tenant service). Tenant enforces `support.respond`; the
+        // player ticket surface rides the existing `/player/{*path}` passthrough.
+        .route(
+            "/tickets",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/tickets/{*path}",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // Platform billing (tenant service). Tenant enforces `billing.manage`.
         .route(
             "/billing",

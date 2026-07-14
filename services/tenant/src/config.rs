@@ -44,9 +44,12 @@ pub struct Config {
     pub tebex_headless_base: String,
     pub tebex_plugin_base: String,
 
-    /// Shared secret the auth service presents (`X-Internal-Token`) to the cross-service
-    /// `/internal/*` endpoints (host -> tenant resolution on the player-login path).
-    /// `None` disables those endpoints (fail closed).
+    /// Shared cross-service `INTERNAL_API_TOKEN` (`X-Internal-Token`), used BOTH ways:
+    /// inbound, the auth service presents it to this service's `/internal/*` endpoints
+    /// (host -> tenant resolution on the player-login path); outbound, this service
+    /// presents it to identity's `/internal/bans/*` endpoints for the ban-appeal link
+    /// (Phase 6 decision C). `None` disables both (fail closed: inbound 503, appeal
+    /// validation 503).
     pub internal_api_token: Option<String>,
 
     /// Ed25519 PUBLIC key (PEM) for verifying PLAYER access tokens (checkout +
@@ -93,6 +96,11 @@ pub struct Config {
     /// The DISTINCT token guarding auth's `PUT /internal/orgs/{id}/plan` (decision K;
     /// never the shared INTERNAL_API_TOKEN). `None` => mirror pushes are skipped (logged).
     pub plan_write_token: Option<String>,
+    /// Identity service base URL for the ban-appeal internal lookups (Phase 6 decision
+    /// C: `GET /internal/bans/{id}` + `GET /internal/bans/active`). Authenticated with
+    /// the shared `internal_api_token`. Injectable so tests run against an in-process
+    /// stub; the default matches identity's dev port (the gateway's 8083 convention).
+    pub identity_internal_url: String,
 }
 
 impl Config {
@@ -209,6 +217,11 @@ impl Config {
                 .map(|s| s.trim_end_matches('/').to_string())
                 .unwrap_or_else(|| "http://127.0.0.1:8081".into()),
             plan_write_token: env::var("PLAN_WRITE_TOKEN").ok().filter(|s| !s.is_empty()),
+            identity_internal_url: env::var("IDENTITY_INTERNAL_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "http://127.0.0.1:8083".into()),
         })
     }
 

@@ -17,6 +17,7 @@ export const Permission = {
   BillingManage: "billing.manage",
   IntegrationsManage: "integrations.manage",
   ApiManage: "api.manage",
+  SupportRespond: "support.respond",
 } as const;
 
 export type Perm = (typeof Permission)[keyof typeof Permission];

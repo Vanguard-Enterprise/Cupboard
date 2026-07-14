@@ -204,6 +204,64 @@ async fn rls_isolates_org_subscriptions() {
 }
 
 #[tokio::test]
+async fn rls_isolates_tickets_and_messages() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP rls_isolates_tickets_and_messages: TEST_DATABASE_URL unset");
+        return;
+    };
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+    let ticket_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO tickets (tenant_id, type, subject, player_account_id) \
+         VALUES ($1, 'general', 'rls probe', $2) RETURNING id",
+    )
+    .bind(tenant_a)
+    .bind(Uuid::new_v4())
+    .fetch_one(&owner)
+    .await
+    .expect("seed ticket");
+    let message_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO ticket_messages \
+             (ticket_id, tenant_id, author_kind, author_display, body, origin) \
+         VALUES ($1, $2, 'player', 'p', 'hello', 'web') RETURNING id",
+    )
+    .bind(ticket_id)
+    .bind(tenant_a)
+    .fetch_one(&owner)
+    .await
+    .expect("seed message");
+
+    let count_as = |tenant: Uuid, table: &'static str, id: Uuid| {
+        let app = app.clone();
+        async move {
+            let mut tx = cupboard_db::begin_tenant_tx(&app, TenantId(tenant))
+                .await
+                .expect("begin tenant tx");
+            let count: i64 =
+                sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE id = $1"))
+                    .bind(id)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .expect("count");
+            tx.commit().await.expect("commit");
+            count
+        }
+    };
+    assert_eq!(count_as(tenant_a, "tickets", ticket_id).await, 1);
+    assert_eq!(
+        count_as(tenant_b, "tickets", ticket_id).await,
+        0,
+        "tenant B must not see tenant A's ticket"
+    );
+    assert_eq!(count_as(tenant_a, "ticket_messages", message_id).await, 1);
+    assert_eq!(
+        count_as(tenant_b, "ticket_messages", message_id).await,
+        0,
+        "tenant B must not see tenant A's ticket messages"
+    );
+}
+
+#[tokio::test]
 async fn rls_isolates_billing_purchases() {
     let Some((owner, app)) = setup().await else {
         eprintln!("SKIP rls_isolates_billing_purchases: TEST_DATABASE_URL unset");

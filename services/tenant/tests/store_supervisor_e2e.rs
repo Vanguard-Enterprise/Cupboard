@@ -117,6 +117,7 @@ async fn supervisor_claims_and_runner_syncs() {
         stripe_api_base: "http://stripe.test".into(),
         auth_internal_url: "http://auth.test".into(),
         plan_write_token: None,
+        identity_internal_url: "http://identity.test".into(),
     };
     let supervisor = tokio::spawn(cupboard_tenant::store::supervisor::run(
         owner.clone(),
