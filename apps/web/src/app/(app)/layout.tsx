@@ -83,6 +83,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Roles
             </Link>
           )}
+          {can(perms, Permission.ApiManage) && (
+            <Link href="/api-keys" className="rounded px-2 py-1 hover:bg-neutral-900">
+              API keys
+            </Link>
+          )}
         </nav>
         <form action={logoutAction} className="mt-auto">
           <button className="text-sm text-neutral-400 hover:text-neutral-100">Sign out</button>

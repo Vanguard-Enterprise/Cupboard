@@ -660,6 +660,49 @@ export async function syncStoreAction(
   return { ok: true };
 }
 
+export type ApiKeyCreateState = { error?: string; token?: string };
+
+/** Create a scoped API key. Scopes are capped server-side to the operator's own resolved
+ * permissions; the plaintext token comes back exactly once, so the UI must reveal it
+ * immediately. It is never retrievable again. */
+export async function createApiKeyAction(
+  _prev: ApiKeyCreateState,
+  form: FormData,
+): Promise<ApiKeyCreateState> {
+  const name = trimmed(form, "name");
+  if (!name) return { error: "name is required" };
+  const scopes = form.getAll("scopes").filter((s): s is string => typeof s === "string" && !!s);
+  if (scopes.length === 0) return { error: "select at least one scope" };
+
+  const body: Record<string, unknown> = { name, scopes };
+  // Already RFC 3339: the client converts the datetime-local value using the browser's
+  // timezone (this action runs in the container's timezone, so no date math here).
+  const expiresRaw = trimmed(form, "expires_at");
+  if (expiresRaw) {
+    if (Number.isNaN(new Date(expiresRaw).getTime())) return { error: "invalid expiry date" };
+    body.expires_at = expiresRaw;
+  }
+
+  const res = await apiFetch("/auth/api-keys", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const created = await res.json();
+  revalidatePath("/api-keys");
+  return { token: created.token };
+}
+
+/** Revoke an API key. The endpoint returns 204; the row stays visible but muted. */
+export async function revokeApiKeyAction(form: FormData): Promise<void> {
+  const id = form.get("key_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/auth/api-keys/${id}/revoke`, { method: "POST" });
+    revalidatePath("/api-keys");
+  }
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

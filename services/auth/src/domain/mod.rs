@@ -1,5 +1,6 @@
 //! HTTP-free business logic, organized by concern and unit-testable in isolation.
 
+pub mod api_keys;
 pub mod audit;
 pub mod invites;
 pub mod members;

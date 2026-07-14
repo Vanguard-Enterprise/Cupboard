@@ -35,6 +35,12 @@ pub struct Config {
 
     /// Process-wide secret for keyed-hashing refresh and invite tokens at rest.
     pub token_pepper: String,
+    /// Shared secret REQUIRED from callers of auth's own `/internal/*` server routes
+    /// (the API-key exchange; `x-internal-token` header). `None` disables those routes
+    /// (fail closed, 401). Distinct from the outbound copy nested in
+    /// [`PlayerAuthConfig::internal_api_token`], which auth presents to the tenant
+    /// service; both read the same `INTERNAL_API_TOKEN` env var.
+    pub internal_api_token: Option<String>,
     /// Base URL of the public dashboard, for building invite/OAuth links.
     pub public_base_url: String,
 
@@ -136,6 +142,9 @@ impl Config {
 
             token_pepper: env::var("TOKEN_PEPPER")
                 .map_err(|_| anyhow::anyhow!("TOKEN_PEPPER is required"))?,
+            internal_api_token: env::var("INTERNAL_API_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty()),
             public_base_url: env::var("PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000".into()),
 
