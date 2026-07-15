@@ -52,6 +52,13 @@ pub struct Config {
     /// validation 503).
     pub internal_api_token: Option<String>,
 
+    /// DISTINCT token the Discord bot presents (`X-Internal-Token`) to the
+    /// `/internal/tickets/*` endpoints ONLY (Phase 6 decision E: the bot is the largest
+    /// new attack surface and must never hold the shared `INTERNAL_API_TOKEN`; scoping
+    /// the credential keeps a compromised bot away from the rest of the internal
+    /// surface). `None` disables those endpoints (fail closed).
+    pub bot_api_token: Option<String>,
+
     /// Ed25519 PUBLIC key (PEM) for verifying PLAYER access tokens (checkout +
     /// entitlement reads). Disjoint from the operator key. `None` disables the
     /// `/player/*` surface (503).
@@ -169,6 +176,7 @@ impl Config {
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            bot_api_token: env::var("BOT_API_TOKEN").ok().filter(|s| !s.is_empty()),
             player_jwt_public_key_pem: env::var("PLAYER_JWT_PUBLIC_KEY_PEM")
                 .ok()
                 .filter(|s| !s.is_empty()),

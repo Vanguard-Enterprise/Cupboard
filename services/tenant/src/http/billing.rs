@@ -92,7 +92,7 @@ pub async fn checkout(
     // second argument, so unrelated flows never contend): 0 = tenant domains cap
     // (domain/domains.rs), 1 = auth API-key cap (services/auth), 2 = billing checkout
     // (here; held across two timeout-bounded Stripe calls, so it must not share the
-    // domains seed).
+    // domains seed), 3 = ticket bind-code mint (domain/tickets.rs).
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 2))")
         .bind(org.0)
         .execute(&mut *tx)

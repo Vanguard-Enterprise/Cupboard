@@ -80,6 +80,13 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(tickets::set_status),
         )
         .route("/tickets/{id}/assign", axum::routing::post(tickets::assign))
+        // Discord binding for tickets (decision D): status + one-time bind-code mint.
+        // Static `/tickets/discord` wins over the `/tickets/{id}` capture in axum.
+        .route("/tickets/discord", get(tickets::discord_status))
+        .route(
+            "/tickets/discord/bind-code",
+            axum::routing::post(tickets::mint_bind_code),
+        )
         // Player-facing storefront actions (gateway `/player/*` passthrough; the tenant
         // service verifies the PLAYER token itself with the disjoint player keypair).
         .route("/player/checkout", axum::routing::post(player::checkout))
@@ -119,6 +126,22 @@ pub fn router(state: AppState) -> Router {
         // auth service uses to validate a storefront host during player login. Not via
         // the gateway; X-Internal-Token guarded.
         .route("/internal/sites/resolve", get(internal::resolve_site))
+        // Bot-facing internal surface (decision E): guarded by the DISTINCT
+        // BOT_API_TOKEN, never the shared token (and vice versa). The guard is a
+        // route_layer on the whole `/internal/tickets` group, so every route PR5 adds
+        // under the prefix is covered by construction, not by a per-handler call.
+        .nest(
+            "/internal/tickets",
+            Router::new()
+                .route(
+                    "/discord/bind",
+                    axum::routing::post(tickets::internal_discord_bind),
+                )
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    tickets::require_bot_token,
+                )),
+        )
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))

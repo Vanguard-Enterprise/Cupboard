@@ -37,6 +37,7 @@ const PL_PRIV: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIB4bpLkv
 const PL_PUB: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEABiCdFFe9fKX0ClAgGoy/N0wOewhkz55No6MQbFoKjtM=\n-----END PUBLIC KEY-----\n";
 
 const INTERNAL_TOKEN: &str = "int_pr3_tickets";
+const BOT_TOKEN: &str = "bot_pr4_distinct";
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 static MIGRATED: OnceCell<()> = OnceCell::const_new();
@@ -164,6 +165,7 @@ async fn state(owner: PgPool, app: PgPool, identity_base: &str) -> AppState {
         tebex_headless_base: "http://tebex.test".into(),
         tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: Some(INTERNAL_TOKEN.into()),
+        bot_api_token: Some(BOT_TOKEN.into()),
         player_jwt_public_key_pem: Some(PL_PUB.into()),
         public_webhook_base: None,
         edge_hostname: None,
@@ -948,5 +950,215 @@ async fn sibling_open_appeal_blocks_reopen_without_losing_the_message() {
         first_statuses,
         vec!["resolved".to_string()],
         "a skipped reopen must not publish ticket.status"
+    );
+}
+
+// ============================ Discord bind (PR4) ============================
+
+/// POST the internal bind route with an arbitrary `x-internal-token` (or none).
+async fn send_bind(st: &AppState, token: Option<&str>, body: Value) -> (StatusCode, Value) {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/internal/tickets/discord/bind")
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(t) = token {
+        req = req.header("x-internal-token", t);
+    }
+    let req = req.body(Body::from(body.to_string())).unwrap();
+    let resp = http::router(st.clone()).oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let val = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    (status, val)
+}
+
+/// Mint a bind code as `op`; returns (plaintext, expires_at).
+async fn mint_code(st: &AppState, op: &str) -> (String, String) {
+    let (status, body) = send(st, "POST", "/tickets/discord/bind-code", op, None).await;
+    assert_eq!(status, StatusCode::CREATED, "mint: {body}");
+    (
+        body["code"].as_str().unwrap().to_string(),
+        body["expires_at"].as_str().unwrap().to_string(),
+    )
+}
+
+fn bind_body(code: &str, guild: &str, channel: &str) -> Value {
+    json!({ "code": code, "guild_id": guild, "tickets_channel_id": channel,
+            "staff_role_id": "role-1" })
+}
+
+#[tokio::test]
+async fn bind_code_lifecycle_and_credential_planes() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP bind_code_lifecycle...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let identity = IdentityStub::spawn().await;
+    let st = state(owner.clone(), app, &identity.base_url).await;
+    let tenant = Uuid::new_v4();
+    let op = operator_bearer(tenant, &["support.respond"]);
+    let guild = format!("g{}", Uuid::new_v4().simple());
+
+    // Mint requires support.respond.
+    let weak = operator_bearer(tenant, &["sites.edit"]);
+    let (status, _) = send(&st, "POST", "/tickets/discord/bind-code", &weak, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Unlinked status before any bind.
+    let (status, body) = send(&st, "GET", "/tickets/discord", &op, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["linked"], false);
+
+    // Mint: 201 with plaintext + expiry; only the sha256 is stored.
+    let (code, expires_at) = mint_code(&st, &op).await;
+    assert!(chrono::DateTime::parse_from_rfc3339(&expires_at).is_ok());
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ticket_bind_codes WHERE tenant_id = $1 AND code_hash = $2",
+    )
+    .bind(tenant)
+    .bind(cupboard_crypto::sha256(code.as_bytes()).to_vec())
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(stored, 1, "the stored hash must be the unkeyed sha256");
+
+    // Credential planes are disjoint: no token, a wrong token, and the SHARED
+    // INTERNAL_API_TOKEN are all 401 on the bot route.
+    let (status, _) = send_bind(&st, None, bind_body(&code, &guild, "chan-1")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = send_bind(&st, Some("wrong"), bind_body(&code, &guild, "chan-1")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = send_bind(
+        &st,
+        Some(INTERNAL_TOKEN),
+        bind_body(&code, &guild, "chan-1"),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the shared internal token must NOT work on /internal/tickets/* (decision E \
+         disjointness both ways)"
+    );
+
+    // ...and the other half of decision E: the BOT token gains nothing on the SHARED
+    // internal surface (a compromised bot cannot reach /internal/sites/resolve).
+    let req = Request::builder()
+        .method("GET")
+        .uri("/internal/sites/resolve?host=any.sites.test")
+        .header("x-internal-token", BOT_TOKEN)
+        .body(Body::empty())
+        .unwrap();
+    let resp = http::router(st.clone()).oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "BOT_API_TOKEN must not work on shared /internal/* routes"
+    );
+
+    // The real bot token binds; the code works exactly once.
+    let (status, body) = send_bind(&st, Some(BOT_TOKEN), bind_body(&code, &guild, "chan-1")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "bind: {body}");
+    let (status, _) = send_bind(&st, Some(BOT_TOKEN), bind_body(&code, &guild, "chan-1")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "a code is single-use");
+
+    // Status reflects the link.
+    let (status, body) = send(&st, "GET", "/tickets/discord", &op, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["linked"], true);
+    assert_eq!(body["guild_id"], json!(guild));
+    assert_eq!(body["tickets_channel_id"], "chan-1");
+    assert_eq!(body["staff_role_id"], "role-1");
+    assert!(body["linked_at"].is_string());
+
+    // Minting again replaces the outstanding code: the OLD code dies, the new works.
+    let (old_code, _) = mint_code(&st, &op).await;
+    let (new_code, _) = mint_code(&st, &op).await;
+    let (status, _) = send_bind(&st, Some(BOT_TOKEN), bind_body(&old_code, &guild, "chan-2")).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "mint replaces older codes"
+    );
+    // Same-tenant rebind (same guild, new channel) replaces the config row.
+    let (status, _) = send_bind(&st, Some(BOT_TOKEN), bind_body(&new_code, &guild, "chan-2")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, body) = send(&st, "GET", "/tickets/discord", &op, None).await;
+    assert_eq!(
+        body["tickets_channel_id"], "chan-2",
+        "rebind replaces the row"
+    );
+
+    // Expired code: minted, forcibly expired, rejected with the same generic 401.
+    let (expired_code, _) = mint_code(&st, &op).await;
+    sqlx::query(
+        "UPDATE ticket_bind_codes SET expires_at = now() - interval '1 minute' \
+                 WHERE tenant_id = $1",
+    )
+    .bind(tenant)
+    .execute(&owner)
+    .await
+    .unwrap();
+    let (status, body) = send_bind(
+        &st,
+        Some(BOT_TOKEN),
+        bind_body(&expired_code, &guild, "chan-3"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "expired code: {body}");
+
+    // Audit rows for mints and binds.
+    let audits: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_log WHERE tenant_id = $1 AND action IN \
+             ('tickets.discord_bind_code_created', 'tickets.discord_linked')",
+    )
+    .bind(tenant)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(audits, 6, "four mints + two binds");
+}
+
+#[tokio::test]
+async fn guild_bound_elsewhere_is_a_conflict_for_another_tenant() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP guild_bound_elsewhere...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let identity = IdentityStub::spawn().await;
+    let st = state(owner, app, &identity.base_url).await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+    let guild = format!("g{}", Uuid::new_v4().simple());
+
+    let (code_a, _) = mint_code(&st, &operator_bearer(tenant_a, &["support.respond"])).await;
+    let (status, _) = send_bind(&st, Some(BOT_TOKEN), bind_body(&code_a, &guild, "a-chan")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Tenant B's valid code + tenant A's guild: 409 (one guild binds one tenant,
+    // resolved server-side, never trusted from the bot payload).
+    let (code_b, _) = mint_code(&st, &operator_bearer(tenant_b, &["support.respond"])).await;
+    let (status, body) =
+        send_bind(&st, Some(BOT_TOKEN), bind_body(&code_b, &guild, "b-chan")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "cross-tenant guild: {body}");
+    assert_eq!(body["error"], "conflict");
+
+    // The conflict rolled the whole bind back, so B's code SURVIVES: the operator can
+    // retry against the right guild without re-minting.
+    let other_guild = format!("g{}", Uuid::new_v4().simple());
+    let (status, _) = send_bind(
+        &st,
+        Some(BOT_TOKEN),
+        bind_body(&code_b, &other_guild, "b-chan"),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "a 409 must not consume the code"
     );
 }

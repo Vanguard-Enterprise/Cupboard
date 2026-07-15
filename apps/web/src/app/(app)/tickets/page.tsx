@@ -2,6 +2,21 @@ import Link from "next/link";
 import { apiFetch, getSession } from "@/lib/api";
 import { can, Permission } from "@/lib/permissions";
 import { STATUS_STYLES, TICKET_STATUSES, TYPE_STYLES, typeLabel, type Ticket } from "./shared";
+import { GenerateBindCode } from "./discord-sync";
+
+type DiscordSync = {
+  linked: boolean;
+  guild_id?: string | null;
+  tickets_channel_id?: string | null;
+  staff_role_id?: string | null;
+  linked_at?: string | null;
+};
+
+async function fetchDiscordSync(): Promise<DiscordSync | null> {
+  const res = await apiFetch("/tickets/discord");
+  if (!res.ok) return null;
+  return res.json();
+}
 
 async function fetchTickets(status?: string, type?: string): Promise<Ticket[]> {
   const qs = new URLSearchParams();
@@ -62,7 +77,10 @@ export default async function TicketsPage({
     return <p className="text-sm text-neutral-400">You don&apos;t have access to tickets.</p>;
   }
   const { status, type } = await searchParams;
-  const tickets = await fetchTickets(status, type);
+  const [tickets, discord] = await Promise.all([
+    fetchTickets(status, type),
+    fetchDiscordSync(),
+  ]);
 
   const statusOther = new URLSearchParams(type ? { type } : {}).toString();
   const typeOther = new URLSearchParams(status ? { status } : {}).toString();
@@ -160,6 +178,56 @@ export default async function TicketsPage({
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-medium text-neutral-300">Discord sync</h2>
+        {!discord ? (
+          <p className="text-sm text-neutral-500">
+            Could not load the Discord link status right now.
+          </p>
+        ) : (
+          <div className="flex max-w-xl flex-col gap-3 rounded border border-neutral-800 px-4 py-3 text-sm">
+            {discord.linked ? (
+              <>
+                <p className="text-neutral-300">
+                  Linked to guild <code className="text-neutral-100">{discord.guild_id}</code>
+                  {discord.tickets_channel_id && (
+                    <>
+                      , tickets channel{" "}
+                      <code className="text-neutral-100">{discord.tickets_channel_id}</code>
+                    </>
+                  )}
+                  {discord.linked_at && (
+                    <> since {new Date(discord.linked_at).toLocaleString()}</>
+                  )}
+                  .
+                </p>
+                <p className="text-neutral-500">
+                  Tickets relay into private threads in your Discord server. Re-running
+                  /cupboard setup with a new code replaces this link.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-neutral-400">
+                  Relay tickets into private threads in your Discord server:
+                </p>
+                {/* TODO: once a NEXT_PUBLIC_DISCORD_CLIENT_ID is available in the web
+                    env, replace step 1 with a prebuilt bot invite link. */}
+                <ol className="list-decimal space-y-1 pl-5 text-neutral-400">
+                  <li>Invite the Cupboard bot to your Discord server.</li>
+                  <li>Generate a setup code below.</li>
+                  <li>
+                    Run <code className="text-neutral-200">/cupboard setup code:&lt;code&gt;</code>{" "}
+                    in your server, optionally picking a tickets channel and staff role.
+                  </li>
+                </ol>
+              </>
+            )}
+            <GenerateBindCode />
           </div>
         )}
       </section>

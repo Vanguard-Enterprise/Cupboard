@@ -834,6 +834,22 @@ export async function assignTicketAction(
   return {};
 }
 
+export type BindCodeState = { error?: string; code?: string; expiresAt?: string };
+
+/** Mint a one-time Discord setup code (the /cupboard setup handoff). The plaintext comes
+ * back exactly once and expires in 15 minutes; minting a new code invalidates the
+ * previous one. */
+export async function createTicketBindCodeAction(
+  _prev: BindCodeState,
+  _form: FormData,
+): Promise<BindCodeState> {
+  const res = await apiFetch("/tickets/discord/bind-code", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.code !== "string") return { error: "no code returned" };
+  return { code: body.code, expiresAt: body.expires_at };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

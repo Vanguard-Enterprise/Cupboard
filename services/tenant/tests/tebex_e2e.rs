@@ -72,6 +72,7 @@ fn state(owner: PgPool, app: PgPool, tebex_base: String) -> AppState {
         tebex_headless_base: tebex_base.clone(),
         tebex_plugin_base: tebex_base,
         internal_api_token: None,
+        bot_api_token: None,
         player_jwt_public_key_pem: Some(PL_PUB.into()),
         public_webhook_base: Some("https://hooks.test".into()),
         edge_hostname: None,

@@ -376,6 +376,7 @@ fn state(owner: PgPool, app: PgPool, stripe_base: &str, auth_base: &str) -> AppS
         tebex_headless_base: "http://tebex.test".into(),
         tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: None,
+        bot_api_token: None,
         player_jwt_public_key_pem: None,
         public_webhook_base: None,
         edge_hostname: None,

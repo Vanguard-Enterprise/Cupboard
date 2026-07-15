@@ -520,3 +520,129 @@ pub async fn player_active_bans(
         tickets::fetch_active_bans(&state.http, &state.config, claims.tenant.0, steam_id).await?;
     Ok(Json(json!({ "bans": bans })))
 }
+
+// ============================ Discord bind (decisions D/E) ============================
+
+/// Guard for the `/internal/tickets/*` surface: accepts ONLY the DISTINCT
+/// `BOT_API_TOKEN` (decision E: the bot never holds the shared `INTERNAL_API_TOKEN`,
+/// so a compromised bot cannot reach the wider internal surface). The disjointness is
+/// deliberately bidirectional even though decision E only mandates the bot direction:
+/// the SHARED token does not work on these routes either, keeping the two credential
+/// planes fully separate (a leak of the widely-held shared token gains nothing here).
+/// Same shape as `check_internal_token`: constant-time compare, fail closed (503) when
+/// the token is unconfigured, 401 on mismatch.
+///
+/// Applied STRUCTURALLY as a `route_layer` on the `/internal/tickets` route group in
+/// `http/mod.rs`, not called per handler: PR5 adds more bot routes under the prefix
+/// and each must be guarded by construction, not by remembering a call.
+pub async fn require_bot_token(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, AppError> {
+    let expected = state
+        .config
+        .bot_api_token
+        .as_deref()
+        .ok_or_else(|| AppError::Unavailable("bot internal API disabled".into()))?;
+    let presented = req
+        .headers()
+        .get("x-internal-token")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or_default();
+    if cupboard_crypto::constant_time_eq(presented.as_bytes(), expected.as_bytes()) {
+        Ok(next.run(req).await)
+    } else {
+        Err(AppError::Unauthorized("invalid bot token".into()))
+    }
+}
+
+/// POST /tickets/discord/bind-code (operator, support.respond): mint the one-time
+/// guild-bind code (decision D). The plaintext is returned exactly once and never
+/// logged; only its sha256 is stored. Minting replaces any outstanding code for the
+/// tenant, so at most one code is live.
+pub async fn mint_bind_code(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let org = claims.require(Permission::SupportRespond)?;
+    // Owner pool: ticket_bind_codes has no app-role grant (bind is bot/owner-side).
+    let mut tx = state.owner_pool.begin().await?;
+    let (code, expires_at) = tickets::mint_bind_code_in_tx(&mut tx, org.0, claims.0.sub.0).await?;
+    audit::record_in_tx(
+        &mut tx,
+        org.0,
+        Some(claims.0.sub.0),
+        "tickets.discord_bind_code_created",
+        Some("discord_guild"),
+        None,
+        Some(json!({ "expires_at": expires_at.to_rfc3339() })),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "code": code, "expires_at": expires_at.to_rfc3339() })),
+    ))
+}
+
+/// GET /tickets/discord (operator, support.respond): the tenant's Discord binding
+/// status for the admin UI.
+pub async fn discord_status(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let org = claims.require(Permission::SupportRespond)?;
+    let mut tx = cupboard_db::begin_tenant_tx(&state.app_pool, TenantId::from(org)).await?;
+    let config = tickets::get_discord_config_in_tx(&mut tx, org.0).await?;
+    tx.commit().await?;
+    Ok(Json(match config {
+        Some(c) => json!({
+            "linked": c.status == "linked",
+            "guild_id": c.guild_id,
+            "tickets_channel_id": c.tickets_channel_id,
+            "staff_role_id": c.staff_role_id,
+            "linked_at": c.linked_at.to_rfc3339(),
+        }),
+        None => json!({ "linked": false }),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct DiscordBindRequest {
+    pub code: String,
+    pub guild_id: String,
+    pub tickets_channel_id: String,
+    #[serde(default)]
+    pub staff_role_id: Option<String>,
+}
+
+/// POST /internal/tickets/discord/bind (bot; the route group's `require_bot_token`
+/// layer has already vetted the caller): redeem a one-time code and link the guild.
+/// 401 (generically) for an invalid, expired, or already-used code; 409 when the
+/// guild is already linked to a DIFFERENT tenant.
+pub async fn internal_discord_bind(
+    State(state): State<AppState>,
+    Json(req): Json<DiscordBindRequest>,
+) -> Result<StatusCode, AppError> {
+    if req.code.trim().is_empty()
+        || req.guild_id.trim().is_empty()
+        || req.tickets_channel_id.trim().is_empty()
+    {
+        return Err(AppError::BadRequest(
+            "code, guild_id, and tickets_channel_id are required".into(),
+        ));
+    }
+    tickets::bind_discord_guild(
+        &state.owner_pool,
+        req.code.trim(),
+        req.guild_id.trim(),
+        req.tickets_channel_id.trim(),
+        req.staff_role_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}

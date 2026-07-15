@@ -343,6 +343,165 @@ pub async fn set_assignee_in_tx(
     Ok(())
 }
 
+// ============================ Discord guild bind (decision D) ============================
+
+/// How long a minted guild-bind code stays redeemable.
+pub const BIND_CODE_TTL_SECS: i64 = 15 * 60;
+
+/// The per-tenant Discord binding, as the operator status endpoint reports it.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DiscordConfig {
+    pub guild_id: String,
+    pub tickets_channel_id: Option<String>,
+    pub staff_role_id: Option<String>,
+    pub status: String,
+    pub linked_at: DateTime<Utc>,
+}
+
+/// The tenant's Discord binding, if any (request path: app pool has SELECT).
+pub async fn get_discord_config_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+) -> Result<Option<DiscordConfig>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT guild_id, tickets_channel_id, staff_role_id, status, linked_at \
+         FROM ticket_discord_configs WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+/// The bind-code hash contract pinned by the 0006 migration comment: UNKEYED sha256 of
+/// the plaintext. The codes are 256-bit `random_token()` values, so the hash is
+/// preimage-safe without a pepper (the ingest-token precedent).
+fn bind_code_hash(code: &str) -> Vec<u8> {
+    cupboard_crypto::sha256(code.as_bytes()).to_vec()
+}
+
+/// Mint a one-time guild-bind code for `tenant_id` (decision D; the Phase 5
+/// one-time-code pattern). Any existing codes for the tenant are deleted first, so at
+/// most ONE code is outstanding per tenant. Returns the plaintext (shown once, never
+/// logged, never stored) and its expiry. Owner-pool transaction: `ticket_bind_codes`
+/// deliberately has no app-role grant.
+pub async fn mint_bind_code_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    created_by: Uuid,
+) -> Result<(String, DateTime<Utc>), sqlx::Error> {
+    // Serialize mints per tenant: DELETE-then-INSERT has nothing else to serialize on
+    // (no unique on tenant_id), so two concurrent mints could otherwise both survive
+    // and leave two live codes. Seed 3 in the per-tenant advisory-lock registry (see
+    // http/billing.rs: 0 domains, 1 auth key cap, 2 billing checkout, 3 here).
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 3))")
+        .bind(tenant_id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM ticket_bind_codes WHERE tenant_id = $1")
+        .bind(tenant_id)
+        .execute(&mut **tx)
+        .await?;
+    let code = cupboard_crypto::random_token();
+    let expires_at = Utc::now() + chrono::Duration::seconds(BIND_CODE_TTL_SECS);
+    sqlx::query(
+        "INSERT INTO ticket_bind_codes (code_hash, tenant_id, created_by, expires_at) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(bind_code_hash(&code))
+    .bind(tenant_id)
+    .bind(created_by)
+    .bind(expires_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok((code, expires_at))
+}
+
+/// Redeem a bind code and link the guild, atomically (owner-pool transaction:
+/// config writes are owner-side per the 0006 grants).
+///
+///   * Single-use consume: `DELETE .. WHERE expires_at > now() RETURNING` (the
+///     redeem_link_code precedent); invalid, expired, and already-used codes are the
+///     same generic 401 (no oracle for which).
+///   * Upsert on tenant_id: a rebind by the SAME tenant replaces its row, including a
+///     move to a different guild. The GLOBAL guild unique still rejects a guild that
+///     is already bound to a DIFFERENT tenant (409).
+///   * Expired codes are pruned opportunistically, and an audit row (actor = the
+///     operator who minted the code) commits with the bind.
+pub async fn bind_discord_guild(
+    owner_pool: &sqlx::PgPool,
+    code: &str,
+    guild_id: &str,
+    tickets_channel_id: &str,
+    staff_role_id: Option<&str>,
+) -> Result<(), AppError> {
+    let mut tx = owner_pool.begin().await?;
+    let consumed: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "DELETE FROM ticket_bind_codes WHERE code_hash = $1 AND expires_at > now() \
+         RETURNING tenant_id, created_by",
+    )
+    .bind(bind_code_hash(code))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((tenant_id, created_by)) = consumed else {
+        return Err(AppError::Unauthorized(
+            "invalid or expired bind code".into(),
+        ));
+    };
+
+    sqlx::query(
+        "INSERT INTO ticket_discord_configs \
+             (tenant_id, guild_id, tickets_channel_id, staff_role_id, status, \
+              linked_by, linked_at) \
+         VALUES ($1, $2, $3, $4, 'linked', $5, now()) \
+         ON CONFLICT (tenant_id) DO UPDATE SET \
+             guild_id = EXCLUDED.guild_id, \
+             tickets_channel_id = EXCLUDED.tickets_channel_id, \
+             staff_role_id = EXCLUDED.staff_role_id, \
+             status = 'linked', \
+             linked_by = EXCLUDED.linked_by, \
+             linked_at = now()",
+    )
+    .bind(tenant_id)
+    .bind(guild_id)
+    .bind(tickets_channel_id)
+    .bind(staff_role_id)
+    .bind(created_by)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        if e.as_database_error().and_then(|d| d.constraint())
+            == Some("ticket_discord_configs_guild_unique")
+        {
+            AppError::Conflict(
+                "this Discord server is already linked to another organization".into(),
+            )
+        } else {
+            AppError::from(e)
+        }
+    })?;
+    crate::domain::audit::record_in_tx(
+        &mut tx,
+        tenant_id,
+        created_by,
+        "tickets.discord_linked",
+        Some("discord_guild"),
+        None,
+        Some(serde_json::json!({
+            "guild_id": guild_id,
+            "tickets_channel_id": tickets_channel_id,
+            "staff_role_id": staff_role_id,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+
+    // Best-effort prune of expired codes (cheap; expiry index).
+    let _ = sqlx::query("DELETE FROM ticket_bind_codes WHERE expires_at < now()")
+        .execute(owner_pool)
+        .await;
+    Ok(())
+}
+
 // ============================ Identity ban link (decision C) ============================
 
 /// Fetch the player's ACTIVE bans from identity's internal endpoint
