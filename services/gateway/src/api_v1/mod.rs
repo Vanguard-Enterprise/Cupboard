@@ -16,14 +16,17 @@
 //! IngressRoute is VPN-only, so they inherit that reachability (decision P).
 
 pub mod bans;
+pub mod entitlements;
 pub mod key_auth;
+pub mod players;
 pub mod rate_limit;
+pub mod servers;
 
 #[cfg(test)]
 mod tests;
 
 use crate::AppState;
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -34,12 +37,44 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 use utoipa_scalar::{Scalar, Servable};
 
+/// Bound on typed downstream calls: larger than the exchange timeout (these calls
+/// carry real payloads) but still prompt when a downstream service blackholes; a hung
+/// pod yields a fast 502 instead of a hung /api/v1 request. The shared client is
+/// untimed (the blind streaming proxies need that), so this is applied per request.
+pub(crate) const DOWNSTREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The minted operator JWT that `require_api_key` attached; downstream services
+/// re-verify the signature and apply RLS themselves, unchanged.
+pub(crate) fn forwarded_bearer(headers: &HeaderMap) -> Result<String, ApiError> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::Internal("bearer missing after require_api_key".into()))
+}
+
+/// Pass a downstream non-success response through with its status. Downstream error
+/// bodies already carry the `{"error","message"}` envelope (the identity/tenant/fleet
+/// `AppError` shape), so they cross the v1 boundary unchanged.
+pub(crate) async fn passthrough(resp: reqwest::Response) -> Response {
+    let status = resp.status();
+    // Forward the downstream Content-Type when present (it is authoritative for its
+    // own body); default to JSON, which is what every downstream envelope is.
+    let content_type = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| axum::http::HeaderValue::from_static("application/json"));
+    let body = resp.bytes().await.unwrap_or_default();
+    (status, [(header::CONTENT_TYPE, content_type)], body).into_response()
+}
+
 /// The v1 error envelope, mirrored from the downstream services' `AppError` shape.
 /// Referenced by the OpenAPI doc; gateway-originated errors serialize to exactly this.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorBody {
-    /// Stable machine-readable code (`unauthorized`, `forbidden`, `too_many_requests`,
-    /// `unavailable`, `bad_gateway`, `internal`).
+    /// Stable machine-readable code (`bad_request`, `unauthorized`, `forbidden`,
+    /// `too_many_requests`, `unavailable`, `bad_gateway`, `internal`).
     pub error: String,
     /// Human-readable detail.
     pub message: String,
@@ -50,6 +85,10 @@ pub struct ErrorBody {
 /// `X-RateLimit-*` headers alongside the envelope.
 #[derive(Debug)]
 pub enum ApiError {
+    /// The request body failed facade-side deserialization (axum's default rejection
+    /// would be plain text; the v1 envelope applies to every facade-originated
+    /// response, decision P).
+    BadRequest(String),
     Unauthorized(String),
     Forbidden(String),
     /// A dependency needed to serve the request is unconfigured or unreachable
@@ -64,6 +103,7 @@ pub enum ApiError {
 impl ApiError {
     fn parts(&self) -> (StatusCode, &'static str, &str) {
         match self {
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m),
             ApiError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, "unauthorized", m),
             ApiError::Forbidden(m) => (StatusCode::FORBIDDEN, "forbidden", m),
             ApiError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable", m),
@@ -101,7 +141,18 @@ impl From<ApiError> for Response {
                        limited per organization by plan tier; every response includes \
                        `X-RateLimit-Limit`/`Remaining`/`Reset` headers."
     ),
-    tags((name = "bans", description = "Ban management")),
+    tags(
+        (name = "bans", description = "Ban management. PII-bearing: the bans.* scopes \
+            expose banned players' raw identifiers (subject_value) and player_id; \
+            creating a ban resolves and echoes the steam_id-to-player_id linkage. \
+            Issue these scopes accordingly."),
+        (name = "players", description = "Player list and profiles. IPs and raw \
+            identifier values require the players.view_pii scope and are null \
+            otherwise."),
+        (name = "servers", description = "Game server fleet, read-only"),
+        (name = "entitlements", description = "Store entitlements. PII-bearing: \
+            store.manage exposes players' steam_id values."),
+    ),
     modifiers(&ApiKeySecurity)
 )]
 struct ApiDoc;
@@ -132,7 +183,13 @@ pub fn router(state: AppState) -> Router<AppState> {
     let (api_routes, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .nest(
             "/api/v1",
-            OpenApiRouter::new().routes(routes!(bans::list_bans)),
+            OpenApiRouter::new()
+                .routes(routes!(bans::list_bans, bans::create_ban))
+                .routes(routes!(bans::revoke_ban))
+                .routes(routes!(players::list_players))
+                .routes(routes!(players::get_player))
+                .routes(routes!(servers::list_servers))
+                .routes(routes!(entitlements::list_entitlements)),
         )
         .split_for_parts();
 
