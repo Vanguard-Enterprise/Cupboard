@@ -46,6 +46,8 @@ pub enum Permission {
     BillingManage,
     /// Connect external services like BattleMetrics and manage import/sync.
     IntegrationsManage,
+    /// Create, list, and revoke the organization's public API keys.
+    ApiManage,
 }
 
 impl Permission {
@@ -68,6 +70,7 @@ impl Permission {
         Permission::SitesEdit,
         Permission::BillingManage,
         Permission::IntegrationsManage,
+        Permission::ApiManage,
     ];
 
     /// The stable wire/string identifier (`"bans.create"`).
@@ -89,6 +92,7 @@ impl Permission {
             Permission::SitesEdit => "sites.edit",
             Permission::BillingManage => "billing.manage",
             Permission::IntegrationsManage => "integrations.manage",
+            Permission::ApiManage => "api.manage",
         }
     }
 
@@ -109,6 +113,7 @@ impl Permission {
             Permission::SitesEdit => "sites",
             Permission::BillingManage => "billing",
             Permission::IntegrationsManage => "integrations",
+            Permission::ApiManage => "api",
         }
     }
 
@@ -133,6 +138,7 @@ impl Permission {
             Permission::IntegrationsManage => {
                 "Connect external services like BattleMetrics and manage import/sync"
             }
+            Permission::ApiManage => "Create, list, and revoke the organization's API keys",
         }
     }
 
@@ -189,6 +195,7 @@ pub const DEFAULT_ROLE_TEMPLATES: &[RoleTemplate] = &[
             Permission::SitesEdit,
             Permission::BillingManage,
             Permission::IntegrationsManage,
+            Permission::ApiManage,
         ],
     },
     RoleTemplate {

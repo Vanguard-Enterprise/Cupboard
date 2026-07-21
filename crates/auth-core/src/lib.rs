@@ -43,6 +43,16 @@ pub struct Claims {
     /// The session (refresh-token) this access token was minted from — lets the
     /// session be correlated/revoked.
     pub sid: Uuid,
+    /// The org's subscription plan wire string (`"team"`), for gateway gating/tiering
+    /// (Phase 6 decision K). Absent means the free tier; wire-compatible with older
+    /// tokens/verifiers exactly like `org`/`perms` (serde default, unknown-claim skip).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// The principal kind (`"api_key"` for exchange-minted API-key tokens, decision M);
+    /// absent for ordinary operator sessions. Lets downstream audit writes distinguish
+    /// key-id actors from user ids. Same wire-compat pattern as `plan`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// Issued-at (unix seconds).
     pub iat: i64,
     /// Expiry (unix seconds). Validated on decode.
@@ -53,7 +63,8 @@ pub struct Claims {
 
 impl Claims {
     /// Build claims valid for `ttl_secs` from now. `org`/`perms` are `None`/empty for a
-    /// freshly-logged-in token before an org is selected.
+    /// freshly-logged-in token before an org is selected. `plan`/`kind` start `None`
+    /// (free tier, ordinary operator); minters that need them set the fields directly.
     pub fn new(
         sub: UserId,
         sid: Uuid,
@@ -67,6 +78,8 @@ impl Claims {
             org,
             perms,
             sid,
+            plan: None,
+            kind: None,
             iat: now,
             exp: now + ttl_secs,
             jti: Uuid::new_v4(),
@@ -287,6 +300,27 @@ mod tests {
         let decoded = verifier().decode(&token).unwrap();
         assert!(decoded.has_permission(Permission::BansCreate));
         assert!(!decoded.has_permission(Permission::OrgManage));
+    }
+
+    #[test]
+    fn plan_and_kind_claims_are_wire_compatible() {
+        // Absent on the wire when None (an old-shape token), present when set; either
+        // shape decodes. This is the org/perms wire-compat pattern.
+        let mut claims = sample_claims();
+        let json = serde_json::to_value(&claims).unwrap();
+        assert!(json.get("plan").is_none() && json.get("kind").is_none());
+        let decoded = verifier()
+            .decode(&signer().encode(&claims).unwrap())
+            .unwrap();
+        assert!(decoded.plan.is_none() && decoded.kind.is_none());
+
+        claims.plan = Some("team".into());
+        claims.kind = Some("api_key".into());
+        let decoded = verifier()
+            .decode(&signer().encode(&claims).unwrap())
+            .unwrap();
+        assert_eq!(decoded.plan.as_deref(), Some("team"));
+        assert_eq!(decoded.kind.as_deref(), Some("api_key"));
     }
 
     #[test]

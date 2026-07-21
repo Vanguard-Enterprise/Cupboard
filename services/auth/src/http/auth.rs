@@ -2,7 +2,7 @@
 //! Org-scoping of the token (and Discord login) layer onto `token`/this module in later
 //! steps.
 
-use crate::domain::{audit, password, rbac, sessions, users};
+use crate::domain::{audit, password, plans, rbac, sessions, users};
 use crate::error::AppError;
 use crate::http::{client_info, AuthClaims};
 use crate::state::AppState;
@@ -155,6 +155,12 @@ pub async fn token(
         None => (None, Vec::new()),
     };
 
+    // Org-scoped tokens carry the mirrored plan claim (None = free, decision K).
+    let plan = match org {
+        Some(o) => plans::plan_claim(&state.owner_pool, o.0).await?,
+        None => None,
+    };
+
     sessions::touch(&state.owner_pool, session.id).await?;
     let access_token = sessions::mint_access_token(
         &state.keys,
@@ -162,6 +168,7 @@ pub async fn token(
         session.id,
         org,
         perms,
+        plan,
         state.config.access_token_ttl_secs,
     )?;
     Ok(Json(TokenResponse {
@@ -246,6 +253,11 @@ pub(crate) async fn issue_session_for_org(
         },
         None => (None, Vec::new()),
     };
+    // Org-scoped tokens carry the mirrored plan claim (None = free, decision K).
+    let plan = match org {
+        Some(o) => plans::plan_claim(&state.owner_pool, o.0).await?,
+        None => None,
+    };
 
     let access_token = sessions::mint_access_token(
         &state.keys,
@@ -253,6 +265,7 @@ pub(crate) async fn issue_session_for_org(
         new_session.session.id,
         org,
         perms,
+        plan,
         state.config.access_token_ttl_secs,
     )?;
     Ok(TokenResponse {

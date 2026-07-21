@@ -660,6 +660,196 @@ export async function syncStoreAction(
   return { ok: true };
 }
 
+export type ApiKeyCreateState = { error?: string; token?: string };
+
+/** Create a scoped API key. Scopes are capped server-side to the operator's own resolved
+ * permissions; the plaintext token comes back exactly once, so the UI must reveal it
+ * immediately. It is never retrievable again. */
+export async function createApiKeyAction(
+  _prev: ApiKeyCreateState,
+  form: FormData,
+): Promise<ApiKeyCreateState> {
+  const name = trimmed(form, "name");
+  if (!name) return { error: "name is required" };
+  const scopes = form.getAll("scopes").filter((s): s is string => typeof s === "string" && !!s);
+  if (scopes.length === 0) return { error: "select at least one scope" };
+
+  const body: Record<string, unknown> = { name, scopes };
+  // Already RFC 3339: the client converts the datetime-local value using the browser's
+  // timezone (this action runs in the container's timezone, so no date math here).
+  const expiresRaw = trimmed(form, "expires_at");
+  if (expiresRaw) {
+    if (Number.isNaN(new Date(expiresRaw).getTime())) return { error: "invalid expiry date" };
+    body.expires_at = expiresRaw;
+  }
+
+  const res = await apiFetch("/auth/api-keys", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const created = await res.json();
+  revalidatePath("/api-keys");
+  return { token: created.token };
+}
+
+/** Revoke an API key. The endpoint returns 204; the row stays visible but muted. */
+export async function revokeApiKeyAction(form: FormData): Promise<void> {
+  const id = form.get("key_id");
+  if (typeof id === "string" && id) {
+    await apiFetch(`/auth/api-keys/${id}/revoke`, { method: "POST" });
+    revalidatePath("/api-keys");
+  }
+}
+
+export type BillingActionState = { error?: string };
+
+/** Absolute (app)/billing return URL for the Stripe hosted-redirect handoffs, built from
+ * the request's Host header (only admin hosts reach these actions; the middleware routes
+ * every other host to the storefront). Stripe requires https. */
+async function billingReturnUrl(): Promise<string> {
+  const hdrs = await import("next/headers").then((m) => m.headers());
+  return `https://${hdrs.get("host")}/billing`;
+}
+
+/** Hand the operator off to Stripe Checkout (subscription mode) for a paid plan. The
+ * plan comes from the submit button. The tenant rejects checkout when a live
+ * subscription already exists; plan changes go through the portal instead. */
+export async function startPlanCheckoutAction(
+  _prev: BillingActionState,
+  form: FormData,
+): Promise<BillingActionState> {
+  const plan = form.get("plan");
+  if (plan !== "team" && plan !== "enterprise") return { error: "unsupported plan" };
+  const res = await apiFetch("/billing/checkout", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ plan, return_url: await billingReturnUrl() }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.redirect_url !== "string") return { error: "checkout returned no redirect" };
+  redirect(body.redirect_url);
+}
+
+/** Hand the operator off to Stripe Checkout (payment mode) for a one-off service. The
+ * service key comes from the submit button. Purchase is self-serve; fulfillment stays
+ * manual (Resolved with Frank #2). */
+export async function buyServiceAction(
+  _prev: BillingActionState,
+  form: FormData,
+): Promise<BillingActionState> {
+  const service = form.get("service");
+  if (typeof service !== "string" || !service) return { error: "missing service" };
+  const res = await apiFetch("/billing/services/checkout", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ service, return_url: await billingReturnUrl() }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.redirect_url !== "string") return { error: "checkout returned no redirect" };
+  redirect(body.redirect_url);
+}
+
+/** Hand the operator off to the Stripe Customer Portal (manage/cancel/payment method). */
+export async function openBillingPortalAction(
+  _prev: BillingActionState,
+  _form: FormData,
+): Promise<BillingActionState> {
+  const res = await apiFetch("/billing/portal", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ return_url: await billingReturnUrl() }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.redirect_url !== "string") return { error: "portal returned no redirect" };
+  redirect(body.redirect_url);
+}
+
+export type TicketReplyState = { error?: string; ok?: boolean };
+
+/** Staff reply on a ticket; the internal checkbox turns it into a staff-only note the
+ * player never sees (the API excludes internal messages from the player surface). */
+export async function createTicketMessageAction(
+  _prev: TicketReplyState,
+  form: FormData,
+): Promise<TicketReplyState> {
+  const id = form.get("ticket_id");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  const body = trimmed(form, "body");
+  if (!body) return { error: "message is required" };
+  const res = await apiFetch(`/tickets/${id}/messages`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body, internal: form.get("internal") === "on" }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath(`/tickets/${id}`);
+  return { ok: true };
+}
+
+export type TicketActionState = { error?: string };
+
+/** Move a ticket between open/pending/resolved/closed; the status rides on the button.
+ * API refusals (e.g. a 409 for a change colliding with a sibling open appeal) surface
+ * as {error} for the controls to render. */
+export async function setTicketStatusAction(
+  _prev: TicketActionState,
+  form: FormData,
+): Promise<TicketActionState> {
+  const id = form.get("ticket_id");
+  const status = form.get("status");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  if (typeof status !== "string" || !status) return { error: "missing status" };
+  const res = await apiFetch(`/tickets/${id}/status`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath(`/tickets/${id}`);
+  return {};
+}
+
+/** Assign a ticket (assignee_user_id in the form; empty = unassign). */
+export async function assignTicketAction(
+  _prev: TicketActionState,
+  form: FormData,
+): Promise<TicketActionState> {
+  const id = form.get("ticket_id");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  const assignee = form.get("assignee_user_id");
+  const res = await apiFetch(`/tickets/${id}/assign`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      assignee_user_id: typeof assignee === "string" && assignee ? assignee : null,
+    }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath(`/tickets/${id}`);
+  return {};
+}
+
+export type BindCodeState = { error?: string; code?: string; expiresAt?: string };
+
+/** Mint a one-time Discord setup code (the /cupboard setup handoff). The plaintext comes
+ * back exactly once and expires in 15 minutes; minting a new code invalidates the
+ * previous one. */
+export async function createTicketBindCodeAction(
+  _prev: BindCodeState,
+  _form: FormData,
+): Promise<BindCodeState> {
+  const res = await apiFetch("/tickets/discord/bind-code", { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  const body = await res.json();
+  if (typeof body.code !== "string") return { error: "no code returned" };
+  return { code: body.code, expiresAt: body.expires_at };
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

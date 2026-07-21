@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { getPlayer } from "@/lib/player";
 import { linkDiscord, logoutPlayer } from "@/lib/player-actions";
 import { fetchPlayerEntitlements, type Entitlement } from "@/lib/entitlements";
+import { fetchPlayerTickets } from "@/lib/tickets";
 import { safeHttpUrl } from "@/themes/registry";
 
 /** Format an ISO timestamp as a short calendar date; falls back to the raw string if the
@@ -38,7 +39,13 @@ export default async function AccountPage({
   const player = await getPlayer();
   if (!player) redirect("/login");
 
-  const entitlements = await fetchPlayerEntitlements();
+  const [entitlements, tickets] = await Promise.all([
+    fetchPlayerEntitlements(),
+    fetchPlayerTickets(),
+  ]);
+  const openTickets = tickets.filter(
+    (t) => t.status !== "resolved" && t.status !== "closed",
+  ).length;
   const { discord } = await searchParams;
   const notice = discord ? DISCORD_NOTICES[discord] : undefined;
   const discordIdentity = player.identities.find((i) => i.provider === "discord");
@@ -144,6 +151,18 @@ export default async function AccountPage({
             ))}
           </ul>
         )}
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-lg font-semibold tracking-tight">Your tickets</h2>
+        <p className="mt-3 text-sm text-[var(--sf-muted)]">
+          {openTickets > 0
+            ? `${openTickets} open ticket${openTickets === 1 ? "" : "s"}. `
+            : "No open tickets. "}
+          <a href="/tickets" className="text-[var(--sf-primary)] hover:underline">
+            {openTickets > 0 ? "View tickets" : "Get support"}
+          </a>
+        </p>
       </section>
     </div>
   );

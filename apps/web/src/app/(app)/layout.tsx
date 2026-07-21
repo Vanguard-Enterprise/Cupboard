@@ -58,6 +58,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Evasion alerts
             </Link>
           )}
+          {can(perms, Permission.SupportRespond) && (
+            <Link href="/tickets" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Tickets
+            </Link>
+          )}
           {can(perms, Permission.IntegrationsManage) && (
             <Link href="/integrations/battlemetrics" className="rounded px-2 py-1 hover:bg-neutral-900">
               Integrations
@@ -81,6 +86,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           {can(perms, Permission.RolesManage) && (
             <Link href="/roles" className="rounded px-2 py-1 hover:bg-neutral-900">
               Roles
+            </Link>
+          )}
+          {can(perms, Permission.ApiManage) && (
+            <Link href="/api-keys" className="rounded px-2 py-1 hover:bg-neutral-900">
+              API keys
+            </Link>
+          )}
+          {can(perms, Permission.BillingManage) && (
+            <Link href="/billing" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Billing
             </Link>
           )}
         </nav>

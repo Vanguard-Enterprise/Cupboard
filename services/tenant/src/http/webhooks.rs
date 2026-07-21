@@ -1,7 +1,9 @@
-//! Provider webhook receiver. Lives on the tenant service directly (not the gateway):
+//! Provider webhook receivers. Live on the tenant service directly (not the gateway):
 //! signatures HMAC the raw body byte-for-byte, so a re-serializing proxy would break
 //! them; there is no JWT here; and providers need a stable URL. Reached over the public
-//! `cupboard-hooks` IngressRoute at `/webhooks/{provider}/{connection_id}`.
+//! `cupboard-hooks` IngressRoute at `/webhooks/{provider}/{connection_id}` (per-tenant
+//! store providers) and `/webhooks/stripe` (single-merchant platform billing, Phase 6
+//! decision H: same host, no new ingress).
 //!
 //! Flow: load the connection + its (envelope-encrypted) signing secret by id, verify the
 //! signature, then dedupe + apply the entitlement delta in one transaction. A verified
@@ -9,11 +11,12 @@
 //! bad signature or an unconfigured webhook is rejected. Tebex additionally requires the
 //! `validation.webhook` handshake to echo the event id back.
 
-use crate::domain::{entitlements, store};
+use crate::domain::{billing, entitlements, store};
 use crate::error::AppError;
 use crate::providers::ProviderKind;
 use crate::providers::{paynow, tebex};
 use crate::state::AppState;
+use crate::stripe::{self, StripeClient};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -158,4 +161,393 @@ async fn ingest(
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|h| h.to_str().ok())
+}
+
+// ============================ Stripe (platform billing) ============================
+
+/// What a verified Stripe event asks us to do. Classification happens BEFORE the dedupe
+/// transaction and carries ALL outbound work (owner-pool lookups AND the Stripe
+/// retrieve): the transaction must never hold a pool connection across a network call,
+/// or a webhook burst during Stripe latency starves the owner pool.
+enum StripeAction {
+    /// `checkout.session.completed` (mode=subscription): the subscription was already
+    /// retrieved during classification; applying also clears the org's pending
+    /// checkout-session record IF it still names this session (a newer checkout may
+    /// already have replaced it).
+    UpsertFromCheckout {
+        org: Uuid,
+        state: billing::SubscriptionState,
+        session_id: Option<String>,
+    },
+    /// `customer.subscription.updated` / `.deleted`: the event carries the subscription.
+    Upsert {
+        org: Uuid,
+        state: billing::SubscriptionState,
+    },
+    /// `invoice.payment_failed`: flip the org's row to past_due ahead of the matching
+    /// subscription.updated (grace resolution decides gating).
+    PastDue { org: Uuid },
+    /// `checkout.session.completed` (mode=payment): land the one-off purchase in the
+    /// ledger (idempotent on the session id; slice 2).
+    RecordPurchase {
+        org: Uuid,
+        purchase: billing::NewPurchase,
+    },
+    /// `charge.refunded` with `refunded == true`: flip the matched purchase to refunded
+    /// (webhook-only per decision H; refunds are staff-initiated in the Stripe
+    /// dashboard).
+    RefundPurchase { org: Uuid, payment_intent: String },
+    /// `charge.refunded` for a PARTIAL amount: the purchase stays paid (fulfillment
+    /// proceeds); the amount is audited.
+    PartialRefund {
+        org: Uuid,
+        payment_intent: String,
+        amount_refunded: Option<i64>,
+    },
+    /// Everything else (and anything unattributable): dedupe-record + 2xx.
+    RecordOnly { org: Option<Uuid> },
+}
+
+impl StripeAction {
+    fn org(&self) -> Option<Uuid> {
+        match self {
+            StripeAction::UpsertFromCheckout { org, .. }
+            | StripeAction::Upsert { org, .. }
+            | StripeAction::PastDue { org }
+            | StripeAction::RecordPurchase { org, .. }
+            | StripeAction::RefundPurchase { org, .. }
+            | StripeAction::PartialRefund { org, .. } => Some(*org),
+            StripeAction::RecordOnly { org } => *org,
+        }
+    }
+}
+
+/// POST /webhooks/stripe. Verify the `Stripe-Signature` (HMAC over `"{t}.{raw_body}"`,
+/// 5-minute skew), then dedupe on the global `event.id` and apply in ONE owner-pool
+/// transaction (the `entitlements::ingest_webhook` flow). A replay rolls back and still
+/// answers 2xx; bad signature or stale timestamp is a 400 (Stripe's recommended reject).
+/// After a subscription change commits, the resolved plan is mirrored to auth
+/// (best-effort; the reconcile re-push heals losses).
+pub async fn receive_stripe(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let secret = state
+        .config
+        .stripe_webhook_secret
+        .as_deref()
+        .ok_or_else(|| AppError::Unavailable("billing webhooks are not configured".into()))?;
+    let sig = header(&headers, "stripe-signature")
+        .ok_or_else(|| AppError::BadRequest("missing Stripe-Signature header".into()))?;
+    stripe::verify_signature(secret, sig, &body, chrono::Utc::now()).map_err(|e| {
+        tracing::warn!(error = %e, "rejected stripe webhook");
+        AppError::BadRequest("webhook verification failed".into())
+    })?;
+
+    let doc: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| AppError::BadRequest("malformed webhook body".into()))?;
+    let event_id = doc
+        .get("id")
+        .and_then(|i| i.as_str())
+        .ok_or_else(|| AppError::BadRequest("event has no id".into()))?
+        .to_string();
+    let event_type = doc
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let object = doc
+        .pointer("/data/object")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    let action = classify_stripe_event(&state, &event_type, &object).await?;
+    let org = action.org();
+
+    // Dedupe + apply in the SAME transaction on the owner pool.
+    let mut tx = state.owner_pool.begin().await?;
+    let new = billing::begin_event_in_tx(&mut tx, &event_id, &event_type, org, &doc).await?;
+    if !new {
+        tx.rollback().await?;
+        tracing::info!(event = %event_id, "replayed stripe event; no-op");
+        return Ok(StatusCode::OK.into_response());
+    }
+    let subscription_touched = apply_stripe_action(&mut tx, action).await?;
+    billing::finish_event_in_tx(&mut tx, &event_id).await?;
+    tx.commit().await?;
+    tracing::info!(event = %event_id, event_type = %event_type, "stripe webhook processed");
+
+    // Mirror push AFTER commit (decision K): best-effort, retry-nothing.
+    if subscription_touched {
+        if let Some(org) = org {
+            stripe::resolve_and_push_mirror(&state.owner_pool, &state.http, &state.config, org)
+                .await;
+        }
+    }
+    Ok(StatusCode::OK.into_response())
+}
+
+/// Map a verified event to an action (slice 1: subscription lifecycle only).
+async fn classify_stripe_event(
+    state: &AppState,
+    event_type: &str,
+    object: &serde_json::Value,
+) -> Result<StripeAction, AppError> {
+    match event_type {
+        // `async_payment_succeeded` is the paid signal for async payment methods, whose
+        // `completed` event fires while payment_status is still unpaid AND whose
+        // settlement (days) can outlive the backstop's 24h created-window: without this
+        // arm an async purchase would collect money with no ledger row ever. Checkout
+        // creation is card-only today, so this is belt-and-braces; the session-id
+        // unique key makes any double delivery a no-op.
+        "checkout.session.completed" | "checkout.session.async_payment_succeeded" => {
+            // Payment mode = a one-off service purchase (slice 2): the ledger insert is
+            // idempotent on the session id. Sessions that are not paid or carry no
+            // org/service attribution are dedupe-recorded only.
+            if object.get("mode").and_then(|m| m.as_str()) == Some("payment") {
+                return Ok(match stripe::payment_session_facts(object) {
+                    Some(facts) => StripeAction::RecordPurchase {
+                        org: facts.org,
+                        purchase: billing::NewPurchase {
+                            service_key: facts.service_key,
+                            stripe_checkout_session_id: facts.session_id,
+                            stripe_payment_intent_id: facts.payment_intent,
+                            amount: facts.amount_total,
+                            currency: facts.currency,
+                        },
+                    },
+                    None => {
+                        tracing::warn!(
+                            event_type,
+                            "payment-mode session without paid status or org/service \
+                             metadata; recording only"
+                        );
+                        StripeAction::RecordOnly { org: None }
+                    }
+                });
+            }
+            // The subscription flow below belongs to `completed` only.
+            if event_type != "checkout.session.completed"
+                || object.get("mode").and_then(|m| m.as_str()) != Some("subscription")
+            {
+                return Ok(StripeAction::RecordOnly { org: None });
+            }
+            let org = object
+                .get("client_reference_id")
+                .and_then(|c| c.as_str())
+                .and_then(|s| s.parse::<Uuid>().ok());
+            let subscription_id = object.get("subscription").and_then(stripe_ref_id);
+            let (Some(org), Some(subscription_id)) = (org, subscription_id) else {
+                tracing::warn!(
+                    "checkout.session.completed without client_reference_id/subscription; recording only"
+                );
+                return Ok(StripeAction::RecordOnly { org });
+            };
+            // Retrieve the full subscription NOW, before the dedupe transaction opens
+            // (never a network call inside an open tx). A replayed event pays this call
+            // again and is then dropped by the dedupe: correct, just not free.
+            let client = StripeClient::from_config(&state.http, &state.config)
+                .ok_or_else(|| AppError::Unavailable("billing is not configured".into()))?;
+            let sub = client
+                .retrieve_subscription(&subscription_id)
+                .await
+                // 5xx so Stripe retries; nothing was recorded yet.
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("retrieve subscription: {e}")))?;
+            let facts = stripe::subscription_facts(&sub).ok_or_else(|| {
+                AppError::Internal(anyhow::anyhow!("unparseable subscription from retrieve"))
+            })?;
+            let mut sub_state = subscription_state(state, &facts, false);
+            // The session's customer fills in when the retrieve returned none.
+            sub_state.stripe_customer_id = sub_state
+                .stripe_customer_id
+                .or_else(|| object.get("customer").and_then(stripe_ref_id));
+            Ok(StripeAction::UpsertFromCheckout {
+                org,
+                state: sub_state,
+                session_id: object.get("id").and_then(stripe_ref_id),
+            })
+        }
+        "customer.subscription.updated" | "customer.subscription.deleted" => {
+            let Some(facts) = stripe::subscription_facts(object) else {
+                tracing::warn!(
+                    event_type,
+                    "unparseable subscription payload; recording only"
+                );
+                return Ok(StripeAction::RecordOnly { org: None });
+            };
+            let org = match facts.org_hint {
+                Some(org) => Some(org),
+                None => billing::find_tenant_by_subscription(&state.owner_pool, &facts.id).await?,
+            };
+            let Some(org) = org else {
+                tracing::warn!(subscription = %facts.id, "stripe subscription for no known org; recording only");
+                return Ok(StripeAction::RecordOnly { org: None });
+            };
+            let deleted = event_type == "customer.subscription.deleted";
+            Ok(StripeAction::Upsert {
+                org,
+                state: subscription_state(state, &facts, deleted),
+            })
+        }
+        "invoice.payment_failed" => {
+            // The subscription reference sits at `subscription` (classic) or under
+            // `parent.subscription_details.subscription` (2025 API shapes).
+            let sub_id = object
+                .get("subscription")
+                .and_then(stripe_ref_id)
+                .or_else(|| {
+                    object
+                        .pointer("/parent/subscription_details/subscription")
+                        .and_then(stripe_ref_id)
+                });
+            let org = match &sub_id {
+                Some(id) => billing::find_tenant_by_subscription(&state.owner_pool, id).await?,
+                None => None,
+            };
+            match org {
+                Some(org) => Ok(StripeAction::PastDue { org }),
+                None => Ok(StripeAction::RecordOnly { org: None }),
+            }
+        }
+        "charge.refunded" => {
+            // The charge carries the payment intent; the ledger row maps it back to the
+            // org and purchase. An unmatched intent (a refund on something that never
+            // landed a purchase row) is recorded + warned, still 2xx; the purchase
+            // insert's pre-recorded-refund check (billing::insert_purchase_in_tx) picks
+            // it up if the row lands later.
+            let payment_intent = object.get("payment_intent").and_then(stripe_ref_id);
+            // `charge.refunded` fires for ANY refund amount; only `refunded == true`
+            // (fully refunded) may flip the row, or a mostly-paid customer would lose
+            // fulfillment over a partial goodwill refund.
+            let fully_refunded = object
+                .get("refunded")
+                .and_then(|r| r.as_bool())
+                .unwrap_or(false);
+            let amount_refunded = object.get("amount_refunded").and_then(|a| a.as_i64());
+            let matched = match &payment_intent {
+                Some(pi) => billing::find_purchase_by_payment_intent(&state.owner_pool, pi).await?,
+                None => None,
+            };
+            match (matched, payment_intent) {
+                (Some((org, _purchase_id)), Some(pi)) if fully_refunded => {
+                    Ok(StripeAction::RefundPurchase {
+                        org,
+                        payment_intent: pi,
+                    })
+                }
+                (Some((org, _purchase_id)), Some(pi)) => {
+                    tracing::warn!(
+                        org = %org,
+                        amount_refunded = amount_refunded.unwrap_or(0),
+                        "partial refund on a purchase; keeping it paid (fulfillment \
+                         proceeds), recording the amount"
+                    );
+                    Ok(StripeAction::PartialRefund {
+                        org,
+                        payment_intent: pi,
+                        amount_refunded,
+                    })
+                }
+                _ => {
+                    tracing::warn!("charge.refunded with no matching purchase row; recording only");
+                    Ok(StripeAction::RecordOnly { org: None })
+                }
+            }
+        }
+        _ => Ok(StripeAction::RecordOnly { org: None }),
+    }
+}
+
+/// Apply an action inside the dedupe transaction (pure DB work; every network call
+/// already happened during classification). Returns whether an org's subscription state
+/// was touched (drives the post-commit mirror push).
+async fn apply_stripe_action(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    action: StripeAction,
+) -> Result<bool, AppError> {
+    match action {
+        StripeAction::UpsertFromCheckout {
+            org,
+            state: sub,
+            session_id,
+        } => {
+            billing::upsert_subscription_in_tx(tx, org, &sub, Some(Uuid::nil()), "webhook").await?;
+            // The session this event completes is no longer pending (double-charge
+            // guard). Session-id-conditional: completing an OLD session must not wipe
+            // the record of a newer pending checkout.
+            if let Some(sid) = session_id {
+                billing::clear_pending_checkout_in_tx(tx, org, &sid).await?;
+            }
+            Ok(true)
+        }
+        StripeAction::Upsert { org, state: sub } => {
+            billing::upsert_subscription_in_tx(tx, org, &sub, Some(Uuid::nil()), "webhook").await?;
+            Ok(true)
+        }
+        StripeAction::PastDue { org } => {
+            billing::mark_past_due_in_tx(tx, org).await?;
+            Ok(true)
+        }
+        // Purchases never touch the plan, so they never trigger a mirror push.
+        StripeAction::RecordPurchase { org, purchase } => {
+            let inserted = billing::insert_purchase_in_tx(tx, org, &purchase, "webhook").await?;
+            if !inserted {
+                tracing::info!(org = %org, session = %purchase.stripe_checkout_session_id,
+                    "purchase already recorded (backstop or earlier event); no-op");
+            }
+            Ok(false)
+        }
+        StripeAction::RefundPurchase {
+            org,
+            payment_intent,
+        } => {
+            let flipped = billing::refund_purchase_in_tx(tx, org, &payment_intent).await?;
+            if !flipped {
+                tracing::info!(org = %org, "refund matched a purchase already refunded; no-op");
+            }
+            Ok(false)
+        }
+        StripeAction::PartialRefund {
+            org,
+            payment_intent,
+            amount_refunded,
+        } => {
+            billing::record_partial_refund_in_tx(tx, org, &payment_intent, amount_refunded).await?;
+            Ok(false)
+        }
+        StripeAction::RecordOnly { .. } => Ok(false),
+    }
+}
+
+/// Build the row state from parsed facts. An unmappable price id passes `plan: None`;
+/// the upsert preserves prior plan knowledge for the same subscription (or floors to
+/// free when there is none) and does the loud logging.
+fn subscription_state(
+    state: &AppState,
+    facts: &stripe::SubscriptionFacts,
+    deleted: bool,
+) -> billing::SubscriptionState {
+    billing::SubscriptionState {
+        stripe_customer_id: facts.customer.clone(),
+        stripe_subscription_id: facts.id.clone(),
+        plan: facts
+            .price_id
+            .as_deref()
+            .and_then(|p| stripe::plan_for_price(&state.config, p)),
+        status: if deleted {
+            "canceled"
+        } else {
+            billing::normalize_status(&facts.status)
+        },
+        current_period_end: facts.current_period_end,
+    }
+}
+
+/// An expandable Stripe reference on an event object: bare id string or object with `id`.
+fn stripe_ref_id(v: &serde_json::Value) -> Option<String> {
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    v.get("id").and_then(|i| i.as_str()).map(str::to_string)
 }

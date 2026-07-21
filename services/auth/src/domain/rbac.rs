@@ -48,7 +48,7 @@ pub async fn resolve_permissions(
 }
 
 /// Validate that every string is a known permission; returns the unknown one if not.
-fn validate_permissions(perms: &[String]) -> Result<(), AppError> {
+pub fn validate_permissions(perms: &[String]) -> Result<(), AppError> {
     for p in perms {
         if Permission::from_wire(p).is_none() {
             return Err(AppError::BadRequest(format!("unknown permission: {p}")));

@@ -1,10 +1,12 @@
 //! HTTP surface: router assembly, health probes, and the access-token extractor.
 
+mod api_keys;
 mod auth;
 mod invites;
 mod members;
 mod oauth_discord;
 mod orgs;
+mod plans;
 mod player;
 mod player_discord;
 mod roles;
@@ -48,6 +50,14 @@ pub fn router(state: AppState) -> Router {
         // Staff invites (accept is public — no token yet)
         .route("/auth/invites", post(invites::create).get(invites::list))
         .route("/auth/invites/accept", post(invites::accept))
+        // Public API keys (management requires `api.manage`)
+        .route("/auth/api-keys", get(api_keys::list).post(api_keys::create))
+        .route("/auth/api-keys/{id}/revoke", post(api_keys::revoke))
+        // Cluster-internal (shared-token guarded, never exposed via the gateway's
+        // /auth passthrough): the gateway exchanges a raw API key for a short JWT,
+        // and the tenant service pushes the resolved plan mirror (distinct token).
+        .route("/internal/api-keys/exchange", post(api_keys::exchange))
+        .route("/internal/orgs/{id}/plan", put(plans::put_org_plan))
         // Discord OAuth (browser redirect flow)
         .route("/auth/discord/start", get(oauth_discord::start))
         .route("/auth/discord/callback", get(oauth_discord::callback))

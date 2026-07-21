@@ -5,6 +5,7 @@
 //! that carry the verified [`Claims`] downstream. The RBAC permission gate and real
 //! tenant data routes land in later steps/phases.
 
+mod api_v1;
 mod auth;
 mod config;
 mod proxy;
@@ -42,6 +43,14 @@ pub(crate) struct AppState {
     pub collector_service_url: String,
     pub metrics_service_url: String,
     pub tenant_service_url: String,
+    /// Shared secret for auth's cluster-internal API-key exchange. `None` = exchange
+    /// disabled: `/api/v1` requests needing a fresh exchange fail closed (503).
+    pub internal_api_token: Option<String>,
+    /// In-process cache of API-key exchanges for `/api/v1` (Phase 6 decision M).
+    pub key_cache: Arc<api_v1::key_auth::KeyCache>,
+    /// Redis fixed-window rate limiter for `/api/v1` (Phase 6 decision N). Disabled
+    /// (no REDIS_URL) or unreachable = fail open.
+    pub limiter: api_v1::rate_limit::Limiter,
 }
 
 #[tokio::main]
@@ -66,6 +75,23 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+    let limiter = match config.redis_url.as_deref() {
+        Some(url) => api_v1::rate_limit::Limiter::new(url)?,
+        None => {
+            tracing::warn!(
+                "REDIS_URL not set: the /api/v1 rate limiter is disabled and fails OPEN \
+                 (requests pass unlimited)"
+            );
+            api_v1::rate_limit::Limiter::disabled()
+        }
+    };
+    if config.internal_api_token.is_none() {
+        tracing::warn!(
+            "INTERNAL_API_TOKEN not set: the API-key exchange is disabled, so /api/v1 \
+             requests needing a fresh exchange will return 503 until it is configured"
+        );
+    }
+
     let state = AppState {
         pool,
         environment: config.environment.clone(),
@@ -83,6 +109,9 @@ async fn main() -> anyhow::Result<()> {
         collector_service_url: config.collector_service_url.clone(),
         metrics_service_url: config.metrics_service_url.clone(),
         tenant_service_url: config.tenant_service_url.clone(),
+        internal_api_token: config.internal_api_token.clone(),
+        key_cache: Arc::new(api_v1::key_auth::KeyCache::default()),
+        limiter,
     };
 
     let app = Router::new()
@@ -196,6 +225,37 @@ async fn main() -> anyhow::Result<()> {
                 auth::require_auth,
             )),
         )
+        // Support tickets (tenant service). Tenant enforces `support.respond`; the
+        // player ticket surface rides the existing `/player/{*path}` passthrough.
+        .route(
+            "/tickets",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/tickets/{*path}",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        // Platform billing (tenant service). Tenant enforces `billing.manage`.
+        .route(
+            "/billing",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
+        .route(
+            "/billing/{*path}",
+            any(proxy::proxy_tenant).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                auth::require_auth,
+            )),
+        )
         // White-label site management (tenant service). Tenant enforces `sites.edit`.
         .route(
             "/sites",
@@ -240,6 +300,10 @@ async fn main() -> anyhow::Result<()> {
                     auth::require_auth,
                 )),
         )
+        // The /api/v1 public-API facade (Phase 6): require_api_key -> rate_limit ->
+        // typed endpoints, plus the unauthenticated OpenAPI/Scalar docs routes. See
+        // api_v1::router for the middleware ordering and the envelope contract.
+        .merge(api_v1::router(state.clone()))
         // `route_layer` so the metrics middleware sees the matched-path template
         // (bounded cardinality); see `cupboard_telemetry::http`.
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))

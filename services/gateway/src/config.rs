@@ -32,6 +32,15 @@ pub struct Config {
     /// Base URL of the internal tenant service, for reverse-proxying `/sites/*` +
     /// `/store/*` (operator, JWT-gated) and `/public/*` (storefront SSR reads, no JWT).
     pub tenant_service_url: String,
+    /// Redis URL for the `/api/v1` rate limiter (Phase 6 decision N). Optional: when
+    /// unset the limiter is disabled and `/api/v1` requests pass unlimited (fail
+    /// **open** with a warning; availability over billing fairness).
+    pub redis_url: Option<String>,
+    /// Shared secret for auth's cluster-internal API-key exchange. Optional so the
+    /// gateway can roll out before the secret is wired: when absent, `/api/v1` requests
+    /// that need a fresh exchange fail **closed** (503), mirroring the
+    /// `JWT_PUBLIC_KEY_PEM` precedent (cached keys keep working until they expire).
+    pub internal_api_token: Option<String>,
 }
 
 impl Config {
@@ -61,6 +70,10 @@ impl Config {
                 .unwrap_or_else(|_| "http://127.0.0.1:8085".into()),
             tenant_service_url: env::var("TENANT_SERVICE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8086".into()),
+            redis_url: env::var("REDIS_URL").ok().filter(|s| !s.is_empty()),
+            internal_api_token: env::var("INTERNAL_API_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 }

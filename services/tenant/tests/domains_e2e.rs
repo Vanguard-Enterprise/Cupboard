@@ -91,7 +91,7 @@ async fn domain_lifecycle_dns_issue_active_and_resolve() {
         "store-{}.example.gg",
         &Uuid::new_v4().simple().to_string()[..8]
     );
-    let row = domains::add_domain(&app, cupboard_domain::TenantId(tenant), &domain)
+    let row = domains::add_domain(&app, cupboard_domain::TenantId(tenant), &domain, 5)
         .await
         .expect("add domain");
     assert_eq!(row.status, "pending_dns");
@@ -165,22 +165,47 @@ async fn domain_cap_and_isolation() {
         .await
         .unwrap();
     let t = cupboard_domain::TenantId(tenant);
-    for i in 0..domains::MAX_DOMAINS_PER_TENANT {
-        let dom = format!(
-            "d{i}-{}.example.gg",
-            &Uuid::new_v4().simple().to_string()[..6]
-        );
-        domains::add_domain(&app, t, &dom)
-            .await
-            .expect("add within cap");
-    }
+    // Per-plan caps (Phase 6 decision H): free = 1, so a 2nd add is rejected...
+    let free_cap = cupboard_domain::Plan::Free.limits().max_custom_domains;
+    assert_eq!(free_cap, 1);
+    let dom = format!(
+        "d0-{}.example.gg",
+        &Uuid::new_v4().simple().to_string()[..6]
+    );
+    domains::add_domain(&app, t, &dom, free_cap)
+        .await
+        .expect("free tier first domain");
     let over = format!(
         "over-{}.example.gg",
         &Uuid::new_v4().simple().to_string()[..6]
     );
-    let err = domains::add_domain(&app, t, &over)
+    let err = domains::add_domain(&app, t, &over, free_cap)
         .await
-        .expect_err("cap enforced");
+        .expect_err("free cap enforced on the 2nd domain");
+    assert!(matches!(
+        err,
+        cupboard_tenant::error::AppError::BadRequest(_)
+    ));
+
+    // ...while team = 3 allows up to three total (the same tenant, threaded cap only).
+    let team_cap = cupboard_domain::Plan::Team.limits().max_custom_domains;
+    assert_eq!(team_cap, 3);
+    for i in 1..3 {
+        let dom = format!(
+            "d{i}-{}.example.gg",
+            &Uuid::new_v4().simple().to_string()[..6]
+        );
+        domains::add_domain(&app, t, &dom, team_cap)
+            .await
+            .expect("team tier allows 3 domains");
+    }
+    let fourth = format!(
+        "d4-{}.example.gg",
+        &Uuid::new_v4().simple().to_string()[..6]
+    );
+    let err = domains::add_domain(&app, t, &fourth, team_cap)
+        .await
+        .expect_err("team cap enforced on the 4th domain");
     assert!(matches!(
         err,
         cupboard_tenant::error::AppError::BadRequest(_)
@@ -228,7 +253,7 @@ async fn readd_revives_and_stale_transition_does_not_revert() {
         &Uuid::new_v4().simple().to_string()[..8]
     );
 
-    let first = domains::add_domain(&app, t, &domain).await.expect("add");
+    let first = domains::add_domain(&app, t, &domain, 1).await.expect("add");
     // Operator removes it -> row retained as 'disabled' (awaiting loop teardown).
     let removed = domains::remove_domain(&app, t, first.id)
         .await
@@ -236,7 +261,11 @@ async fn readd_revives_and_stale_transition_does_not_revert() {
     assert_eq!(removed.as_deref(), Some(domain.as_str()));
 
     // Re-add the same domain: revives the same row rather than 409-ing on the unique.
-    let revived = domains::add_domain(&app, t, &domain).await.expect("re-add");
+    // Cap 1 with one retained (disabled) row already present: revival must NOT count
+    // against the cap (grandfathering, Phase 6 decision H).
+    let revived = domains::add_domain(&app, t, &domain, 1)
+        .await
+        .expect("re-add");
     assert_eq!(revived.id, first.id, "re-add revives the retained row");
     assert_eq!(revived.status, "pending_dns");
 

@@ -1,25 +1,14 @@
-//! Cupboard Identity & Moderation — the global identity graph + per-tenant moderation
-//! (Phase 2). This slice: ingest roster snapshots from the bus into players / identifiers
-//! / IP+owner signals / name history / sessions, and serve the dashboard's player list +
-//! profiles. Bans, links, and evasion alerts land in later PRs.
-//!
-//! Boots telemetry, opens two Postgres pools (owner for migrations + the ingestion
-//! consumer, `cupboard_app` for RLS-scoped reads), migrates the `identity` schema, spawns
-//! the bus consumer, then serves the HTTP read API.
-
-mod bm;
-mod config;
-mod consumer;
-mod domain;
-mod error;
-mod http;
-mod state;
+//! Cupboard Identity & Moderation binary: see the crate docs (`lib.rs`) for the
+//! architecture. Boots telemetry, opens two Postgres pools (owner for migrations + the
+//! ingestion consumer, `cupboard_app` for RLS-scoped reads), migrates the `identity`
+//! schema, spawns the bus consumers + BM supervisor, then serves the HTTP read API.
 
 use anyhow::Context as _;
-use config::Config;
 use cupboard_auth_core::Keys;
 use cupboard_bus::Bus;
-use state::AppState;
+use cupboard_identity::config::Config;
+use cupboard_identity::state::AppState;
+use cupboard_identity::{bm, consumer, http};
 use std::net::SocketAddr;
 use std::sync::Arc;
 

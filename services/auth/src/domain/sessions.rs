@@ -104,15 +104,19 @@ pub async fn revoke_by_token(
 }
 
 /// Sign an access token for this session, scoped to `org` with the resolved `perms`
-/// (both empty/`None` for a just-logged-in token before an org is selected).
+/// (both empty/`None` for a just-logged-in token before an org is selected). `plan`
+/// is the org's mirrored plan claim from [`crate::domain::plans::plan_claim`]
+/// (`None` = free tier, and always `None` for org-less tokens).
 pub fn mint_access_token(
     keys: &Keys,
     user_id: Uuid,
     session_id: Uuid,
     org: Option<OrgId>,
     perms: Vec<String>,
+    plan: Option<String>,
     ttl_secs: i64,
 ) -> Result<String, AppError> {
-    let claims = Claims::new(UserId(user_id), session_id, org, perms, ttl_secs);
+    let mut claims = Claims::new(UserId(user_id), session_id, org, perms, ttl_secs);
+    claims.plan = plan;
     Ok(keys.encode(&claims)?)
 }

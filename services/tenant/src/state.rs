@@ -25,5 +25,18 @@ pub struct AppState {
     /// one per query class so a flood on one endpoint cannot starve the other.
     pub site_miss_budget: Arc<MissBudget>,
     pub catalog_miss_budget: Arc<MissBudget>,
+    /// Shared outbound HTTP client: Stripe calls, the plan-mirror push to auth, and the
+    /// identity ban lookups for ticket appeals (reqwest clients are cheap Arcs).
+    pub http: reqwest::Client,
+    /// Redis Streams producer for ticket sync events (Phase 6 decision E; the first
+    /// producer outside collector). `None` when Redis is unconfigured/unreachable at
+    /// boot: publishing is strictly best-effort post-commit (decision G), so tickets
+    /// work without it and failures are logged, never surfaced.
+    pub bus: Option<cupboard_bus::Bus>,
+    /// Stripe price ids whose live Price object was verified against the code-defined
+    /// service catalog (amount/currency/one_time) this process. Checked once per price
+    /// per process before a service checkout: an advertised-vs-charged divergence is
+    /// worse than a failed checkout.
+    pub verified_prices: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     pub config: Arc<Config>,
 }

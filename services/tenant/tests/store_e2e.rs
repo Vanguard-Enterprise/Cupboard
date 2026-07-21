@@ -77,6 +77,7 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         tebex_headless_base: "http://tebex.test".into(),
         tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: None,
+        bot_api_token: None,
         player_jwt_public_key_pem: None,
         public_webhook_base: None,
         edge_hostname: None,
@@ -85,6 +86,15 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         web_service_name: "cupboard-web".into(),
         web_service_port: 3000,
         ingress_class: "traefik-external".into(),
+        stripe_secret_key: None,
+        stripe_webhook_secret: None,
+        stripe_price_team: None,
+        stripe_price_enterprise: None,
+        stripe_price_custom_design: None,
+        stripe_api_base: "http://stripe.test".into(),
+        auth_internal_url: "http://auth.test".into(),
+        plan_write_token: None,
+        identity_internal_url: "http://identity.test".into(),
     };
     AppState {
         owner_pool: owner,
@@ -94,6 +104,9 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         cache: SiteCache::disabled(),
         site_miss_budget: Arc::new(Default::default()),
         catalog_miss_budget: Arc::new(Default::default()),
+        http: reqwest::Client::new(),
+        bus: None,
+        verified_prices: Arc::new(Default::default()),
         config: Arc::new(config),
     }
 }

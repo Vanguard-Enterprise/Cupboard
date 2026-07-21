@@ -1,0 +1,26 @@
+-- Phase 6: backfill `api.manage` into pre-existing orgs' Owner/Admin roles.
+-- Role templates only apply at org creation (domain/orgs.rs materializes them into
+-- role_permissions), so a permission added to the compile-time templates is invisible
+-- to every org created before this deploy without a backfill.
+--
+-- The catalog row is upserted here too: boot-time seeding (main.rs) runs AFTER
+-- migrations, so on a fresh deploy the FK target would not exist yet otherwise. The
+-- boot seeder re-upserts the same row harmlessly.
+
+INSERT INTO permission_catalog (permission, area, description)
+VALUES (
+    'api.manage',
+    'api',
+    'Create, list, and revoke the organization''s API keys'
+)
+ON CONFLICT (permission) DO UPDATE
+    SET area = EXCLUDED.area, description = EXCLUDED.description;
+
+-- Owner = the immutable role (template semantics; name-independent). Admin roles are
+-- matched by their template name; a renamed Admin keeps its explicit grants and can be
+-- granted the new permission through the roles UI.
+INSERT INTO role_permissions (organization_id, role_id, permission)
+SELECT r.organization_id, r.id, 'api.manage'
+FROM roles r
+WHERE r.immutable OR r.name = 'Admin'
+ON CONFLICT (role_id, permission) DO NOTHING;

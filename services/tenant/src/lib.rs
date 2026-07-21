@@ -1,8 +1,10 @@
-//! Cupboard Tenant: commerce (external store providers: PayNow/Tebex) and white-label
-//! sites (themes, config, hostname resolution, custom domains). Phase 5. The public
-//! storefront (`apps/web`) renders through this service's `/public/*` surface; operators
-//! manage their site and store through the JWT-gated `/sites/*` and `/store/*` surfaces.
+//! Cupboard Tenant: commerce (external store providers: PayNow/Tebex), white-label
+//! sites (themes, config, hostname resolution, custom domains), and platform billing
+//! (Stripe subscriptions, Phase 6). The public storefront (`apps/web`) renders through
+//! this service's `/public/*` surface; operators manage their site, store, and
+//! subscription through the JWT-gated `/sites/*`, `/store/*`, and `/billing/*` surfaces.
 
+pub mod billing_loop;
 pub mod cache;
 pub mod certmgr;
 pub mod config;
@@ -13,3 +15,4 @@ pub mod http;
 pub mod providers;
 pub mod state;
 pub mod store;
+pub mod stripe;

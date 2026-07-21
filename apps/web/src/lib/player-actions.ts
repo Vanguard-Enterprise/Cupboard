@@ -60,6 +60,82 @@ export async function linkDiscord(): Promise<void> {
   redirect("/account?discord=error");
 }
 
+export type PlayerTicketFormState = { error?: string };
+
+async function playerTicketError(res: Response | null): Promise<string> {
+  if (!res) return "request failed";
+  try {
+    const body = await res.json();
+    return body?.message ?? body?.error ?? `request failed (${res.status})`;
+  } catch {
+    return `request failed (${res.status})`;
+  }
+}
+
+/** Open a support ticket (general or ban appeal). The tenant comes from the player token;
+ * on success the browser is sent to the new ticket's thread (or the list when the create
+ * response carries no id). */
+export async function createPlayerTicketAction(
+  _prev: PlayerTicketFormState,
+  form: FormData,
+): Promise<PlayerTicketFormState> {
+  const token = (await cookies()).get("cb_player_access")?.value;
+  if (!token) redirect("/login");
+
+  const type = form.get("type");
+  if (type !== "general" && type !== "ban_appeal") return { error: "unsupported ticket type" };
+  const subject = typeof form.get("subject") === "string" ? String(form.get("subject")).trim() : "";
+  if (!subject) return { error: "subject is required" };
+  const messageBody = typeof form.get("body") === "string" ? String(form.get("body")).trim() : "";
+  if (!messageBody) return { error: "message is required" };
+
+  const payload: Record<string, unknown> = { type, subject, body: messageBody };
+  const category = form.get("category");
+  if (typeof category === "string" && category.trim()) payload.category = category.trim();
+  const banId = form.get("ban_id");
+  if (type === "ban_appeal") {
+    if (typeof banId !== "string" || !banId) return { error: "pick the ban you are appealing" };
+    payload.ban_id = banId;
+  }
+
+  const res = await fetch(`${gatewayBase()}/player/tickets`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  }).catch(() => null);
+  if (!res || !res.ok) return { error: await playerTicketError(res) };
+  // The 201 body is {"ticket": {...}} (tenant tickets contract).
+  const created = (await res.json().catch(() => null)) as { ticket?: { id?: unknown } } | null;
+  const id = created?.ticket?.id;
+  // redirect() throws NEXT_REDIRECT; keep it out of any try/catch above.
+  redirect(typeof id === "string" ? `/tickets/${id}` : "/tickets");
+}
+
+/** Reply on the player's own ticket; redirects back to the thread so it re-renders
+ * fresh. */
+export async function replyPlayerTicketAction(
+  _prev: PlayerTicketFormState,
+  form: FormData,
+): Promise<PlayerTicketFormState> {
+  const token = (await cookies()).get("cb_player_access")?.value;
+  if (!token) redirect("/login");
+
+  const id = form.get("ticket_id");
+  if (typeof id !== "string" || !id) return { error: "missing ticket" };
+  const messageBody = typeof form.get("body") === "string" ? String(form.get("body")).trim() : "";
+  if (!messageBody) return { error: "message is required" };
+
+  const res = await fetch(`${gatewayBase()}/player/tickets/${id}/messages`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ body: messageBody }),
+    cache: "no-store",
+  }).catch(() => null);
+  if (!res || !res.ok) return { error: await playerTicketError(res) };
+  redirect(`/tickets/${id}`);
+}
+
 /** Sign the player out: best-effort revoke at the gateway, drop the cookies, go home. */
 export async function logoutPlayer(): Promise<void> {
   const refresh = await playerRefreshToken();
