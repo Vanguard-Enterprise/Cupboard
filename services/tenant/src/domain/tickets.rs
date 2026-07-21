@@ -177,13 +177,15 @@ pub async fn list_messages_in_tx(
 
 // ============================ Writes ============================
 
-/// A ticket to open (web player surface in PR3; the bot's internal open arrives in PR5).
+/// A ticket to open (web player surface, PR3; Discord `/ticket open` via the bot's
+/// internal route, PR5: `opener_discord_user_id` set, `player_account_id` null).
 #[derive(Debug)]
 pub struct NewTicket<'a> {
     pub ticket_type: &'a str,
     pub category: Option<&'a str>,
     pub subject: &'a str,
     pub player_account_id: Option<Uuid>,
+    pub opener_discord_user_id: Option<&'a str>,
     pub ban_id: Option<Uuid>,
     pub ban_snapshot: Option<serde_json::Value>,
 }
@@ -197,8 +199,9 @@ pub async fn insert_ticket_in_tx(
 ) -> Result<Ticket, AppError> {
     sqlx::query_as(&format!(
         "INSERT INTO tickets \
-             (tenant_id, type, category, subject, player_account_id, ban_id, ban_snapshot) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             (tenant_id, type, category, subject, player_account_id, \
+              opener_discord_user_id, ban_id, ban_snapshot) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          RETURNING {TICKET_COLS}"
     ))
     .bind(tenant_id)
@@ -206,6 +209,7 @@ pub async fn insert_ticket_in_tx(
     .bind(new.category)
     .bind(new.subject)
     .bind(new.player_account_id)
+    .bind(new.opener_discord_user_id)
     .bind(new.ban_id)
     .bind(&new.ban_snapshot)
     .fetch_one(&mut **tx)
@@ -268,6 +272,107 @@ pub async fn insert_message_in_tx(
             .await?;
     }
     Ok(inserted)
+}
+
+/// A Discord-relayed message (bot internal route, PR5). Always `origin='discord'`,
+/// never internal, no platform author id; `author_kind` is the bot's staff-role
+/// determination, validated to `player`/`staff` at the HTTP layer.
+#[derive(Debug)]
+pub struct NewDiscordMessage<'a> {
+    pub author_kind: &'a str,
+    pub author_display: &'a str,
+    pub body: &'a str,
+    pub discord_message_id: &'a str,
+}
+
+/// Insert a Discord-relayed message idempotently: Discord deliveries are
+/// at-least-once, so a replayed `discord_message_id` lands on the partial unique
+/// `(tenant_id, discord_message_id)` and dedupes to `None` (decision F). Only a REAL
+/// insert touches the ticket's `updated_at`.
+pub async fn insert_discord_message_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    ticket_id: Uuid,
+    msg: &NewDiscordMessage<'_>,
+) -> Result<Option<TicketMessage>, sqlx::Error> {
+    let inserted: Option<TicketMessage> = sqlx::query_as(&format!(
+        "INSERT INTO ticket_messages \
+             (ticket_id, tenant_id, author_kind, author_id, author_display, body, \
+              internal, origin, discord_message_id) \
+         VALUES ($1, $2, $3, NULL, $4, $5, false, 'discord', $6) \
+         ON CONFLICT (tenant_id, discord_message_id) WHERE discord_message_id IS NOT NULL \
+             DO NOTHING \
+         RETURNING {MESSAGE_COLS}"
+    ))
+    .bind(ticket_id)
+    .bind(tenant_id)
+    .bind(msg.author_kind)
+    .bind(msg.author_display)
+    .bind(msg.body)
+    .bind(msg.discord_message_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if inserted.is_some() {
+        sqlx::query("UPDATE tickets SET updated_at = now() WHERE id = $1")
+            .bind(ticket_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(inserted)
+}
+
+/// The ticket a Discord thread is recorded on, if any (RLS scopes the tenant; the
+/// relay resolves every incoming Discord reply through this, index in 0007).
+pub async fn find_by_thread_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    thread_id: &str,
+) -> Result<Option<Ticket>, sqlx::Error> {
+    sqlx::query_as(&format!(
+        "SELECT {TICKET_COLS} FROM tickets WHERE discord_thread_id = $1 LIMIT 1"
+    ))
+    .bind(thread_id)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+/// Record the Discord channel/thread the bot created for a ticket. Guarded: only
+/// writes when no thread is recorded yet (rows_affected = 0 means the caller must
+/// compare against the stored ids: identical = idempotent no-op, different = a bot
+/// bug surfaced as 409).
+pub async fn record_discord_thread_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    ticket_id: Uuid,
+    channel_id: &str,
+    thread_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE tickets SET discord_channel_id = $2, discord_thread_id = $3 \
+         WHERE id = $1 AND discord_thread_id IS NULL",
+    )
+    .bind(ticket_id)
+    .bind(channel_id)
+    .bind(thread_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Clear a ticket's recorded Discord channel/thread (deleted-thread recovery: a
+/// Discord admin deleted the thread, so the guarded `record_discord_thread_in_tx`
+/// would otherwise refuse a replacement forever). Returns whether anything was
+/// recorded (false = already clear, the caller's idempotent no-op).
+pub async fn clear_discord_thread_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    ticket_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE tickets SET discord_channel_id = NULL, discord_thread_id = NULL \
+         WHERE id = $1 AND discord_thread_id IS NOT NULL",
+    )
+    .bind(ticket_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 /// Set a ticket's status (+ `updated_at`). The caller decides no-op/transition policy.
@@ -369,6 +474,46 @@ pub async fn get_discord_config_in_tx(
     )
     .bind(tenant_id)
     .fetch_optional(&mut **tx)
+    .await
+}
+
+/// Resolve the tenant a Discord guild is bound to (decision D: the bot's internal
+/// routes carry ONLY guild_id; the tenant is always resolved server-side from the
+/// binding, never trusted from the payload). Cross-tenant lookup, owner pool.
+pub async fn resolve_tenant_by_guild(
+    owner_pool: &sqlx::PgPool,
+    guild_id: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT tenant_id FROM ticket_discord_configs \
+         WHERE guild_id = $1 AND status = 'linked'",
+    )
+    .bind(guild_id)
+    .fetch_optional(owner_pool)
+    .await
+}
+
+/// A guild's binding as the bot's config-hydration route reports it (PR5: the bot
+/// enumerates its guilds on boot and asks for each binding, instead of keeping
+/// restart-amnesiac caches or probing).
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct GuildBinding {
+    pub tenant_id: Uuid,
+    pub tickets_channel_id: Option<String>,
+    pub staff_role_id: Option<String>,
+}
+
+/// The full binding for a guild (cross-tenant lookup, owner pool; linked only).
+pub async fn get_guild_binding(
+    owner_pool: &sqlx::PgPool,
+    guild_id: &str,
+) -> Result<Option<GuildBinding>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT tenant_id, tickets_channel_id, staff_role_id FROM ticket_discord_configs \
+         WHERE guild_id = $1 AND status = 'linked'",
+    )
+    .bind(guild_id)
+    .fetch_optional(owner_pool)
     .await
 }
 

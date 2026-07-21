@@ -1162,3 +1162,643 @@ async fn guild_bound_elsewhere_is_a_conflict_for_another_tenant() {
         "a 409 must not consume the code"
     );
 }
+
+// ============================ Bot relay (PR5) ============================
+
+/// Send a bot-authenticated request to the `/internal/tickets` surface.
+async fn send_bot(
+    st: &AppState,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-internal-token", BOT_TOKEN)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(match body {
+            Some(b) => Body::from(b.to_string()),
+            None => Body::empty(),
+        })
+        .unwrap();
+    let resp = http::router(st.clone()).oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let val = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    (status, val)
+}
+
+/// Bind `guild` to `tenant` directly (the bind flow itself is covered by the PR4 tests).
+async fn seed_guild(owner: &PgPool, tenant: Uuid, guild: &str) {
+    sqlx::query(
+        "INSERT INTO ticket_discord_configs (tenant_id, guild_id, tickets_channel_id, status) \
+         VALUES ($1, $2, 'seed-chan', 'linked')",
+    )
+    .bind(tenant)
+    .bind(guild)
+    .execute(owner)
+    .await
+    .expect("seed guild");
+}
+
+fn open_body(guild: &str, subject: &str, body: Option<&str>) -> Value {
+    json!({
+        "guild_id": guild,
+        "opener_discord_user_id": "111222333",
+        "opener_display": "opener#0001",
+        "subject": subject,
+        "category": "discord",
+        "body": body,
+    })
+}
+
+#[tokio::test]
+async fn discord_open_backfill_thread_and_guild_isolation() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP discord_open_backfill...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let identity = IdentityStub::spawn().await;
+    let st = state(owner.clone(), app, &identity.base_url).await;
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+    let guild_a = format!("g{}", Uuid::new_v4().simple());
+    let guild_b = format!("g{}", Uuid::new_v4().simple());
+    seed_guild(&owner, tenant_a, &guild_a).await;
+    seed_guild(&owner, tenant_b, &guild_b).await;
+
+    // Unknown guild: uniform 404 on the open route.
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        "/internal/tickets",
+        Some(open_body("g-unknown", "hi", Some("body"))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Open from Discord: general ticket, opener recorded, no platform player.
+    let (status, body) = send_bot(
+        &st,
+        "POST",
+        "/internal/tickets",
+        Some(open_body(
+            &guild_a,
+            "opened from discord",
+            Some("first words"),
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "open: {body}");
+    let ticket: Uuid = body["ticket"]["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(body["ticket"]["type"], "general");
+    assert_eq!(body["ticket"]["status"], "open");
+    assert_eq!(body["ticket"]["opener_discord_user_id"], "111222333");
+    assert!(body["ticket"]["player_account_id"].is_null());
+
+    // Tenant A's operator sees it; tenant B's does not (RLS through the web surface).
+    let op_a = operator_bearer(tenant_a, &["support.respond"]);
+    let (_, list) = send(&st, "GET", "/tickets", &op_a, None).await;
+    assert_eq!(list["tickets"].as_array().unwrap().len(), 1);
+    let op_b = operator_bearer(tenant_b, &["support.respond"]);
+    let (status, _) = send(&st, "GET", &format!("/tickets/{ticket}"), &op_b, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Backfill GET: the opening message, origin discord, no discord_message_id row.
+    let (status, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/{ticket}?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "backfill: {body}");
+    assert_eq!(body["ticket"]["id"], json!(ticket.to_string()));
+    assert!(body["ticket"]["discord_thread_id"].is_null());
+    let msgs = body["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0]["origin"], "discord");
+    assert_eq!(msgs[0]["author_kind"], "player");
+    assert_eq!(msgs[0]["author_display"], "opener#0001");
+    assert_eq!(msgs[0]["body"], "first words");
+
+    // Guild isolation through EVERY read/write route: guild B's bot context cannot
+    // touch tenant A's ticket even with its valid id.
+    let (status, _) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/{ticket}?guild_id={guild_b}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "cross-guild GET must 404");
+    let (status, _) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/{ticket}?guild_id=g-unknown"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/messages"),
+        Some(json!({"guild_id": guild_b, "discord_message_id": "dm-x",
+                    "author_display": "who", "author_kind": "player", "body": "sneak"})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "cross-guild message must 404"
+    );
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(json!({"guild_id": guild_b, "discord_channel_id": "c", "discord_thread_id": "t"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "cross-guild thread must 404");
+
+    // Internal staff notes never reach the backfill (SQL-level exclusion).
+    let (status, _) = send(
+        &st,
+        "POST",
+        &format!("/tickets/{ticket}/messages"),
+        &op_a,
+        Some(json!({"body": "INTERNAL: verify their claim", "internal": true}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/{ticket}?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        body["messages"].as_array().unwrap().len(),
+        1,
+        "internal notes must never reach Discord"
+    );
+    assert!(!body.to_string().contains("INTERNAL:"));
+
+    // Thread recording: first write 204, identical retry 204, different thread 409.
+    let thread = json!({"guild_id": guild_a, "discord_channel_id": "chan-9",
+                        "discord_thread_id": "thr-9"});
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(thread.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(thread),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "identical retry is idempotent"
+    );
+    let (status, body) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(json!({"guild_id": guild_a, "discord_channel_id": "chan-9",
+                    "discord_thread_id": "thr-OTHER"})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "double thread creation: {body}"
+    );
+    assert_eq!(body["error"], "conflict");
+
+    // The recorded ids surface on the backfill GET (the lazy-creation check).
+    let (_, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/{ticket}?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(body["ticket"]["discord_thread_id"], "thr-9");
+    assert_eq!(body["ticket"]["discord_channel_id"], "chan-9");
+
+    // Thread -> ticket resolution, guild-scoped.
+    let (status, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/by-thread/thr-9?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ticket"]["id"], json!(ticket.to_string()));
+    let (status, _) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/by-thread/thr-9?guild_id={guild_b}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "thread lookup is guild-scoped"
+    );
+    let (status, _) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/by-thread/thr-none?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Deleted-thread recovery: clearing is guild-scoped, idempotent, and unblocks
+    // recording a DIFFERENT thread (which the guarded write just refused with 409).
+    let (status, _) = send_bot(
+        &st,
+        "DELETE",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(json!({"guild_id": guild_b})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "cross-guild clear must 404");
+    let (status, _) = send_bot(
+        &st,
+        "DELETE",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(json!({"guild_id": guild_a})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/{ticket}?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert!(body["ticket"]["discord_thread_id"].is_null(), "cleared");
+    assert!(body["ticket"]["discord_channel_id"].is_null(), "cleared");
+    let (status, _) = send_bot(
+        &st,
+        "DELETE",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(json!({"guild_id": guild_a})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "clear is idempotent");
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/discord-thread"),
+        Some(json!({"guild_id": guild_a, "discord_channel_id": "chan-9",
+                    "discord_thread_id": "thr-OTHER"})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "recovery re-record must succeed"
+    );
+    let (status, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/by-thread/thr-OTHER?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ticket"]["id"], json!(ticket.to_string()));
+    let (status, _) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/by-thread/thr-9?guild_id={guild_a}"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the old thread no longer resolves"
+    );
+}
+
+#[tokio::test]
+async fn discord_messages_dedupe_reopen_and_stay_off_the_stream() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP discord_messages_dedupe...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let identity = IdentityStub::spawn().await;
+    let st = state(owner.clone(), app, &identity.base_url).await;
+    let tenant = Uuid::new_v4();
+    let guild = format!("g{}", Uuid::new_v4().simple());
+    seed_guild(&owner, tenant, &guild).await;
+    let player = player_bearer(tenant, Uuid::new_v4(), Some("76561198000000555"));
+    let op = operator_bearer(tenant, &["support.respond"]);
+
+    // A web-opened ticket (its ticket.created publish is the web side, expected).
+    let ticket = open_ticket(&st, &player, "synced ticket", "web opener").await;
+
+    // Relay a Discord message; the replayed delivery dedupes to one row.
+    let msg_body = json!({"guild_id": guild, "discord_message_id": "dm-1",
+                          "author_display": "mod#42", "author_kind": "staff",
+                          "body": "from the thread"});
+    let (status, body) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/messages"),
+        Some(msg_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "relay: {body}");
+    assert_eq!(body["message"]["origin"], "discord");
+    assert_eq!(body["message"]["author_kind"], "staff");
+    let (status, body) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/messages"),
+        Some(msg_body),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "replay: {body}");
+    assert_eq!(body["deduped"], true);
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM ticket_messages WHERE tenant_id = $1 AND discord_message_id = 'dm-1'",
+    )
+    .bind(tenant)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(rows, 1, "at-least-once delivery must land exactly one row");
+
+    // An invalid author_kind is rejected up front.
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/messages"),
+        Some(json!({"guild_id": guild, "discord_message_id": "dm-2",
+                    "author_display": "x", "author_kind": "system", "body": "no"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Reopen-on-discord-message: resolved -> a relayed message reopens to open.
+    let (status, _) = send(
+        &st,
+        "POST",
+        &format!("/tickets/{ticket}/status"),
+        &op,
+        Some(json!({"status": "resolved"}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/messages"),
+        Some(json!({"guild_id": guild, "discord_message_id": "dm-3",
+                    "author_display": "player#7", "author_kind": "player",
+                    "body": "still broken"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let db_status: String = sqlx::query_scalar("SELECT status FROM tickets WHERE id = $1")
+        .bind(ticket)
+        .fetch_one(&owner)
+        .await
+        .unwrap();
+    assert_eq!(
+        db_status, "open",
+        "a discord message must reopen the ticket"
+    );
+
+    // Decision F, stream side: NOTHING the bot relayed publishes. No discord-origin
+    // events, no relayed bodies, and the discord-triggered reopen is silent (only the
+    // operator's `resolved` transition is on the stream).
+    let Some(url) = redis_url_or_skip("discord_messages_dedupe_reopen_and_stay_off_the_stream")
+    else {
+        return;
+    };
+    let events = stream_events_for(&url, tenant).await;
+    assert!(
+        events.iter().all(|e| e["origin"] != "discord"),
+        "no discord-origin event may publish: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| e["body"] != "from the thread" && e["body"] != "still broken"),
+        "relayed bodies must stay off the stream: {events:?}"
+    );
+    let statuses: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "ticket.status")
+        .map(|e| e["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        statuses,
+        vec!["resolved"],
+        "the discord-triggered reopen must not publish ticket.status"
+    );
+}
+
+#[tokio::test]
+async fn discord_message_on_resolved_appeal_skips_reopen_when_sibling_is_open() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP discord_message_on_resolved_appeal...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let identity = IdentityStub::spawn().await;
+    let st = state(owner.clone(), app, &identity.base_url).await;
+    let tenant = Uuid::new_v4();
+    let guild = format!("g{}", Uuid::new_v4().simple());
+    seed_guild(&owner, tenant, &guild).await;
+    let steam = "76561198000000777";
+    let player = player_bearer(tenant, Uuid::new_v4(), Some(steam));
+    let op = operator_bearer(tenant, &["support.respond"]);
+
+    let ban_id = Uuid::new_v4();
+    identity.set_active_bans(
+        tenant,
+        steam,
+        vec![json!({"id": ban_id.to_string(), "subject_type": "steam_id",
+                    "subject_value": steam, "reason": "x", "status": "active",
+                    "issued_at": "2026-07-01T00:00:00Z", "expires_at": null,
+                    "revoked_at": null})],
+    );
+    let appeal = |subject: &'static str| {
+        json!({"type": "ban_appeal", "subject": subject, "body": "please",
+               "ban_id": ban_id})
+        .to_string()
+    };
+
+    // First appeal resolved; a sibling appeal now holds the one-open-appeal slot.
+    let (status, first) = send(&st, "POST", "/player/tickets", &player, Some(appeal("a1"))).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let first_id: Uuid = first["ticket"]["id"].as_str().unwrap().parse().unwrap();
+    let (status, _) = send(
+        &st,
+        "POST",
+        &format!("/tickets/{first_id}/status"),
+        &op,
+        Some(json!({"status": "resolved"}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(&st, "POST", "/player/tickets", &player, Some(appeal("a2"))).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // A relayed Discord message on the RESOLVED appeal: the savepoint guard skips the
+    // reopen (the sibling covers the open state) and the message still lands.
+    let (status, body) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{first_id}/messages"),
+        Some(
+            json!({"guild_id": guild, "discord_message_id": "dm-appeal-1",
+                    "author_display": "player#7", "author_kind": "player",
+                    "body": "context from discord"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "message must land: {body}");
+    let (db_status, msg_count): (String, i64) = sqlx::query_as(
+        "SELECT status, (SELECT count(*) FROM ticket_messages WHERE ticket_id = $1) \
+         FROM tickets WHERE id = $1",
+    )
+    .bind(first_id)
+    .fetch_one(&owner)
+    .await
+    .unwrap();
+    assert_eq!(
+        db_status, "resolved",
+        "the skipped reopen leaves it resolved"
+    );
+    assert_eq!(msg_count, 2, "opener + the relayed message");
+}
+
+#[tokio::test]
+async fn discord_close_is_closed_only_and_config_route_hydrates_the_bot() {
+    let Some((owner, app)) = setup().await else {
+        eprintln!("SKIP discord_close_is_closed_only...: TEST_DATABASE_URL unset");
+        return;
+    };
+    let identity = IdentityStub::spawn().await;
+    let st = state(owner.clone(), app, &identity.base_url).await;
+    let tenant = Uuid::new_v4();
+    let guild = format!("g{}", Uuid::new_v4().simple());
+    seed_guild(&owner, tenant, &guild).await;
+    let player = player_bearer(tenant, Uuid::new_v4(), Some("76561198000000888"));
+    let op = operator_bearer(tenant, &["support.respond"]);
+
+    let ticket = open_ticket(&st, &player, "close me from discord", "opener").await;
+
+    // v1 accepts ONLY "closed" from Discord: every other transition is a 400.
+    for status_word in ["open", "pending", "resolved", "bogus"] {
+        let (status, body) = send_bot(
+            &st,
+            "POST",
+            &format!("/internal/tickets/{ticket}/status"),
+            Some(json!({"guild_id": guild, "status": status_word})),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "discord status {status_word}: {body}"
+        );
+    }
+
+    // The wrong guild cannot close it (uniform 404), the right one can (204).
+    let other_guild = format!("g{}", Uuid::new_v4().simple());
+    seed_guild(&owner, Uuid::new_v4(), &other_guild).await;
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/status"),
+        Some(json!({"guild_id": other_guild, "status": "closed"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/status"),
+        Some(json!({"guild_id": guild, "status": "closed"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // Repeat close: silent no-op 204 (the operator-path semantics).
+    let (status, _) = send_bot(
+        &st,
+        "POST",
+        &format!("/internal/tickets/{ticket}/status"),
+        Some(json!({"guild_id": guild, "status": "closed"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The close shows on the operator surface.
+    let (_, body) = send(&st, "GET", &format!("/tickets/{ticket}"), &op, None).await;
+    assert_eq!(body["ticket"]["status"], "closed");
+
+    // Config hydration: the binding for the guild, 404 for an unknown one.
+    let (status, body) = send_bot(
+        &st,
+        "GET",
+        &format!("/internal/tickets/discord/config?guild_id={guild}"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "config: {body}");
+    assert_eq!(body["tenant_id"], json!(tenant.to_string()));
+    assert_eq!(body["tickets_channel_id"], "seed-chan");
+    assert!(body["staff_role_id"].is_null());
+    let (status, _) = send_bot(
+        &st,
+        "GET",
+        "/internal/tickets/discord/config?guild_id=g-unknown",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Stream side: the Discord-initiated close publishes ticket.status normally
+    // (desirable confirmation; the origin rule is about relayed message content).
+    let Some(url) =
+        redis_url_or_skip("discord_close_is_closed_only_and_config_route_hydrates_the_bot")
+    else {
+        return;
+    };
+    let statuses: Vec<String> = stream_events_for(&url, tenant)
+        .await
+        .iter()
+        .filter(|e| e["kind"] == "ticket.status")
+        .map(|e| e["status"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        statuses,
+        vec!["closed".to_string()],
+        "the discord close must publish ticket.status exactly once"
+    );
+}

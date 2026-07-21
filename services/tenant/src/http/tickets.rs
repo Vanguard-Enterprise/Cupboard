@@ -384,6 +384,7 @@ pub async fn player_create(
             category,
             subject,
             player_account_id: Some(claims.sub),
+            opener_discord_user_id: None,
             ban_id,
             ban_snapshot,
         },
@@ -644,5 +645,418 @@ pub async fn internal_discord_bind(
             .filter(|s| !s.is_empty()),
     )
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ============================ Bot relay surface (PR5, decisions D/E/F) ============================
+//
+// Every route here lives INSIDE the `/internal/tickets` nested router, so the
+// structural `require_bot_token` layer has vetted the caller before any handler runs.
+// The bot presents ONLY a guild_id; the tenant is resolved server-side from the guild
+// binding (decision D) and every ticket access then runs RLS-scoped to that tenant, so
+// a valid ticket id from another tenant is a uniform 404. Nothing on this surface
+// publishes to the stream: these writes ARE the Discord side (decision F).
+
+/// Resolve the guild's bound tenant (404 for an unknown/unlinked guild) and open the
+/// RLS-scoped transaction every bot route works inside.
+async fn guild_tenant_tx(
+    state: &AppState,
+    guild_id: &str,
+) -> Result<(Uuid, sqlx::Transaction<'static, sqlx::Postgres>), AppError> {
+    let tenant = tickets::resolve_tenant_by_guild(&state.owner_pool, guild_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("unknown guild".into()))?;
+    let tx = cupboard_db::begin_tenant_tx(&state.app_pool, TenantId(tenant)).await?;
+    Ok((tenant, tx))
+}
+
+#[derive(Deserialize)]
+pub struct GuildQuery {
+    pub guild_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct InternalOpenRequest {
+    pub guild_id: String,
+    pub opener_discord_user_id: String,
+    pub opener_display: String,
+    pub subject: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+/// POST /internal/tickets: open a general ticket from Discord (`/ticket open`). The
+/// opening body, when present, lands as the first message with `origin='discord'` and
+/// NO discord_message_id (a slash command is an interaction, not a message). Nothing
+/// publishes: the bot already has everything it relayed here.
+pub async fn internal_open_ticket(
+    State(state): State<AppState>,
+    Json(req): Json<InternalOpenRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let subject = req.subject.trim();
+    if subject.is_empty() || subject.chars().count() > MAX_SUBJECT {
+        return Err(AppError::BadRequest(format!(
+            "subject must be 1 to {MAX_SUBJECT} characters"
+        )));
+    }
+    let opener_id = req.opener_discord_user_id.trim();
+    let opener_display = req.opener_display.trim();
+    if opener_id.is_empty() || opener_display.is_empty() {
+        return Err(AppError::BadRequest(
+            "opener_discord_user_id and opener_display are required".into(),
+        ));
+    }
+    let category = req
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    if category.is_some_and(|c| c.chars().count() > MAX_CATEGORY) {
+        return Err(AppError::BadRequest(format!(
+            "category must be at most {MAX_CATEGORY} characters"
+        )));
+    }
+    let body = match req.body.as_deref() {
+        Some(b) if !b.trim().is_empty() => Some(validate_body(b)?),
+        _ => None,
+    };
+
+    let (tenant, mut tx) = guild_tenant_tx(&state, req.guild_id.trim()).await?;
+    let ticket = tickets::insert_ticket_in_tx(
+        &mut tx,
+        tenant,
+        &tickets::NewTicket {
+            ticket_type: "general",
+            category,
+            subject,
+            player_account_id: None,
+            opener_discord_user_id: Some(opener_id),
+            ban_id: None,
+            ban_snapshot: None,
+        },
+    )
+    .await?;
+    if let Some(body) = body {
+        tickets::insert_message_in_tx(
+            &mut tx,
+            tenant,
+            ticket.id,
+            &tickets::NewMessage {
+                author_kind: "player",
+                author_id: None,
+                author_display: opener_display,
+                body,
+                internal: false,
+                origin: "discord",
+            },
+        )
+        .await?;
+    }
+    audit::record_in_tx(
+        &mut tx,
+        tenant,
+        None,
+        "tickets.created",
+        Some("ticket"),
+        Some(ticket.id),
+        Some(json!({
+            "type": "general",
+            "origin": "discord",
+            "opener_discord_user_id": opener_id,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(json!({ "ticket": ticket }))))
+}
+
+/// GET /internal/tickets/{id}?guild_id=: the ticket + its messages for lazy thread
+/// creation and backfill. Internal staff notes are excluded at the SQL level (the
+/// player-read precedent): they must never reach Discord.
+pub async fn internal_get_ticket(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Query(q): Query<GuildQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_tenant, mut tx) = guild_tenant_tx(&state, q.guild_id.trim()).await?;
+    let ticket = tickets::get_in_tx(&mut tx, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such ticket".into()))?;
+    let messages = tickets::list_messages_in_tx(&mut tx, id, false).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ticket": ticket, "messages": messages })))
+}
+
+/// GET /internal/tickets/by-thread/{thread_id}?guild_id=: thread -> ticket resolution
+/// so the bot can relay Discord replies after a restart (its in-memory map is gone).
+pub async fn internal_get_by_thread(
+    State(state): State<AppState>,
+    Path(thread_id): Path<String>,
+    Query(q): Query<GuildQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (_tenant, mut tx) = guild_tenant_tx(&state, q.guild_id.trim()).await?;
+    let ticket = tickets::find_by_thread_in_tx(&mut tx, thread_id.trim())
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such ticket".into()))?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ticket": ticket })))
+}
+
+#[derive(Deserialize)]
+pub struct InternalMessageRequest {
+    pub guild_id: String,
+    pub discord_message_id: String,
+    pub author_display: String,
+    pub author_kind: String,
+    pub body: String,
+}
+
+/// POST /internal/tickets/{id}/messages: relay one Discord message into the ticket.
+/// Deliveries are at-least-once, so a replayed discord_message_id dedupes to
+/// 200 {deduped:true} instead of a second row. A message on a resolved/closed ticket
+/// reopens it per the PR3 player-message semantics (same savepoint guard: a sibling
+/// open appeal skips the reopen, the message still lands). No stream events for any
+/// of this (decision F).
+pub async fn internal_post_message(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<InternalMessageRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    if !matches!(req.author_kind.as_str(), "player" | "staff") {
+        return Err(AppError::BadRequest(
+            "author_kind must be \"player\" or \"staff\"".into(),
+        ));
+    }
+    let body = validate_body(&req.body)?;
+    let discord_message_id = req.discord_message_id.trim();
+    let author_display = req.author_display.trim();
+    if discord_message_id.is_empty() || author_display.is_empty() {
+        return Err(AppError::BadRequest(
+            "discord_message_id and author_display are required".into(),
+        ));
+    }
+
+    let (tenant, mut tx) = guild_tenant_tx(&state, req.guild_id.trim()).await?;
+    let ticket = tickets::get_in_tx(&mut tx, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such ticket".into()))?;
+    let Some(msg) = tickets::insert_discord_message_in_tx(
+        &mut tx,
+        tenant,
+        ticket.id,
+        &tickets::NewDiscordMessage {
+            author_kind: &req.author_kind,
+            author_display,
+            body,
+            discord_message_id,
+        },
+    )
+    .await?
+    else {
+        // Replayed delivery: nothing changed, nothing to commit.
+        tx.rollback().await?;
+        return Ok((StatusCode::OK, Json(json!({ "deduped": true }))));
+    };
+    let mut reopened = matches!(ticket.status.as_str(), "resolved" | "closed");
+    if reopened {
+        reopened = tickets::try_reopen_in_tx(&mut tx, ticket.id).await?;
+    }
+    if reopened {
+        audit::record_in_tx(
+            &mut tx,
+            tenant,
+            None,
+            "tickets.status_changed",
+            Some("ticket"),
+            Some(ticket.id),
+            Some(json!({ "from": ticket.status, "to": "open", "reason": "discord_message" })),
+        )
+        .await?;
+    }
+    audit::record_in_tx(
+        &mut tx,
+        tenant,
+        None,
+        "tickets.message_created",
+        Some("ticket"),
+        Some(ticket.id),
+        Some(json!({
+            "message_id": msg.id,
+            "internal": false,
+            "origin": "discord",
+            "discord_message_id": discord_message_id,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(json!({ "message": msg }))))
+}
+
+#[derive(Deserialize)]
+pub struct InternalThreadRequest {
+    pub guild_id: String,
+    pub discord_channel_id: String,
+    pub discord_thread_id: String,
+}
+
+/// POST /internal/tickets/{id}/discord-thread: record the thread the bot created for
+/// this ticket. Idempotent 204 when the same ids are already recorded; 409 when a
+/// DIFFERENT thread is (a bot bug guard: a ticket maps to exactly one thread).
+pub async fn internal_set_thread(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<InternalThreadRequest>,
+) -> Result<StatusCode, AppError> {
+    let channel_id = req.discord_channel_id.trim();
+    let thread_id = req.discord_thread_id.trim();
+    if channel_id.is_empty() || thread_id.is_empty() {
+        return Err(AppError::BadRequest(
+            "discord_channel_id and discord_thread_id are required".into(),
+        ));
+    }
+
+    let (tenant, mut tx) = guild_tenant_tx(&state, req.guild_id.trim()).await?;
+    let ticket = tickets::get_in_tx(&mut tx, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such ticket".into()))?;
+    if tickets::record_discord_thread_in_tx(&mut tx, ticket.id, channel_id, thread_id).await? {
+        audit::record_in_tx(
+            &mut tx,
+            tenant,
+            None,
+            "tickets.discord_thread_recorded",
+            Some("ticket"),
+            Some(ticket.id),
+            Some(json!({
+                "discord_channel_id": channel_id,
+                "discord_thread_id": thread_id,
+            })),
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    tx.rollback().await?;
+    // Guarded write declined: a thread is already recorded. Same ids = idempotent
+    // retry; different ids = a bot bug (double thread creation), surfaced loudly.
+    if ticket.discord_thread_id.as_deref() == Some(thread_id)
+        && ticket.discord_channel_id.as_deref() == Some(channel_id)
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::Conflict(
+            "a different Discord thread is already recorded for this ticket".into(),
+        ))
+    }
+}
+
+#[derive(Deserialize)]
+pub struct InternalStatusRequest {
+    pub guild_id: String,
+    pub status: String,
+}
+
+/// POST /internal/tickets/{id}/status: `/ticket close` from Discord. v1 accepts ONLY
+/// "closed": Discord-side status control is deliberately minimal (close confirms a
+/// finished conversation in the thread; every other transition is the web surface's
+/// job). Same operator-path semantics: silent 204 no-op, set_status's sibling-appeal
+/// 409 mapping (unreachable for "closed", kept for uniformity), and a NORMAL
+/// ticket.status publish; the origin restriction is for relayed message content, and
+/// the bot posting the resulting status line in the thread is desirable confirmation.
+pub async fn internal_set_status(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<InternalStatusRequest>,
+) -> Result<StatusCode, AppError> {
+    if req.status != "closed" {
+        return Err(AppError::BadRequest(
+            "only \"closed\" is supported from Discord; other status changes are \
+             web-side"
+                .into(),
+        ));
+    }
+    let (tenant, mut tx) = guild_tenant_tx(&state, req.guild_id.trim()).await?;
+    let ticket = tickets::get_in_tx(&mut tx, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such ticket".into()))?;
+    if ticket.status == req.status {
+        tx.rollback().await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    tickets::set_status_in_tx(&mut tx, ticket.id, &req.status).await?;
+    audit::record_in_tx(
+        &mut tx,
+        tenant,
+        None,
+        "tickets.status_changed",
+        Some("ticket"),
+        Some(ticket.id),
+        Some(json!({ "from": ticket.status, "to": req.status, "origin": "discord" })),
+    )
+    .await?;
+    tx.commit().await?;
+
+    tickets::publish_event(
+        &state.bus,
+        tickets::status_event(tenant, ticket.id, &req.status),
+        false,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /internal/tickets/discord/config?guild_id=: the guild's binding, so the bot can
+/// hydrate its guild -> tenant/channel/role caches on boot instead of probing (its
+/// restart config-amnesia fix). Returning tenant_id to the bot is fine: stream events
+/// already carry it and the bot needs the mapping to route.
+pub async fn internal_get_config(
+    State(state): State<AppState>,
+    Query(q): Query<GuildQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let binding = tickets::get_guild_binding(&state.owner_pool, q.guild_id.trim())
+        .await?
+        .ok_or_else(|| AppError::NotFound("unknown guild".into()))?;
+    Ok(Json(json!({
+        "tenant_id": binding.tenant_id,
+        "tickets_channel_id": binding.tickets_channel_id,
+        "staff_role_id": binding.staff_role_id,
+    })))
+}
+
+/// DELETE /internal/tickets/{id}/discord-thread {guild_id}: deleted-thread recovery.
+/// A Discord admin deleting the ticket thread would otherwise strand the ticket: the
+/// guarded record refuses replacements forever. The bot calls this on Discord's
+/// Unknown Channel (10003); lazy creation then rebuilds the thread with backfill.
+/// Idempotent 204 when nothing is recorded.
+pub async fn internal_clear_thread(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<GuildQuery>,
+) -> Result<StatusCode, AppError> {
+    let (tenant, mut tx) = guild_tenant_tx(&state, req.guild_id.trim()).await?;
+    let ticket = tickets::get_in_tx(&mut tx, id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("no such ticket".into()))?;
+    if !tickets::clear_discord_thread_in_tx(&mut tx, ticket.id).await? {
+        tx.rollback().await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    audit::record_in_tx(
+        &mut tx,
+        tenant,
+        None,
+        "tickets.discord_thread_cleared",
+        Some("ticket"),
+        Some(ticket.id),
+        Some(json!({
+            "reason": "discord_thread_deleted",
+            "discord_channel_id": ticket.discord_channel_id,
+            "discord_thread_id": ticket.discord_thread_id,
+        })),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

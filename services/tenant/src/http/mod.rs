@@ -133,9 +133,38 @@ pub fn router(state: AppState) -> Router {
         .nest(
             "/internal/tickets",
             Router::new()
+                // Open from Discord (`/ticket open`); the nest root maps to
+                // `POST /internal/tickets`.
+                .route("/", axum::routing::post(tickets::internal_open_ticket))
                 .route(
                     "/discord/bind",
                     axum::routing::post(tickets::internal_discord_bind),
+                )
+                // Boot-time config hydration for the bot (guild -> tenant/channel/role).
+                .route("/discord/config", get(tickets::internal_get_config))
+                // Thread -> ticket resolution for the relay (static segment wins
+                // over the `{id}` capture).
+                .route(
+                    "/by-thread/{thread_id}",
+                    get(tickets::internal_get_by_thread),
+                )
+                // Lazy thread creation + backfill (internal notes excluded).
+                .route("/{id}", get(tickets::internal_get_ticket))
+                .route(
+                    "/{id}/messages",
+                    axum::routing::post(tickets::internal_post_message),
+                )
+                // Record the created thread; DELETE is deleted-thread recovery (the
+                // bot clears on Unknown Channel and lazy creation rebuilds).
+                .route(
+                    "/{id}/discord-thread",
+                    axum::routing::post(tickets::internal_set_thread)
+                        .delete(tickets::internal_clear_thread),
+                )
+                // `/ticket close` (v1: "closed" only; other transitions are web-side).
+                .route(
+                    "/{id}/status",
+                    axum::routing::post(tickets::internal_set_status),
                 )
                 .route_layer(axum::middleware::from_fn_with_state(
                     state.clone(),

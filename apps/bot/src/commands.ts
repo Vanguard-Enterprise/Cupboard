@@ -1,9 +1,6 @@
 /**
  * Slash-command definitions, registration, and the /cupboard setup handler.
- *
- * PR4 ships only `/cupboard setup` (the guild bind). PR5 adds the `/ticket`
- * command family (open/close from Discord); register it by appending to
- * `buildCommands()` and branching in the interaction dispatcher in index.ts.
+ * The /ticket open|close handlers live in ticket-commands.ts.
  */
 
 import {
@@ -42,7 +39,31 @@ export function buildCommands() {
                     opt.setName("staff_role").setDescription("Role to ping on new tickets"),
                 ),
         );
-    return [cupboard.toJSON()];
+    const ticket = new SlashCommandBuilder()
+        .setName("ticket")
+        .setDescription("Cupboard support tickets")
+        .addSubcommand((sub) =>
+            sub
+                .setName("open")
+                .setDescription("Open a support ticket")
+                .addStringOption((opt) =>
+                    opt
+                        .setName("subject")
+                        .setDescription("What the ticket is about")
+                        .setRequired(true)
+                        .setMaxLength(200),
+                )
+                .addStringOption((opt) =>
+                    opt.setName("body").setDescription("Describe the issue").setMaxLength(4000),
+                )
+                .addStringOption((opt) =>
+                    opt.setName("category").setDescription("Optional category").setMaxLength(100),
+                ),
+        )
+        .addSubcommand((sub) =>
+            sub.setName("close").setDescription("Close the ticket in this thread"),
+        );
+    return [cupboard.toJSON(), ticket.toJSON()];
 }
 
 /** Register the command set globally via the REST API (idempotent overwrite). */
@@ -86,6 +107,12 @@ export type SetupDeps = {
      * live client; index.ts wires `fetchBotChannelPermissions`.
      */
     botPermissionsIn(channelId: string): Promise<BotChannelPermissions | null>;
+    /**
+     * Called after a successful bind so the guild state learns the configured
+     * channel and staff role (the bind response itself is a bare 204, so this
+     * is the only moment the bot sees the configuration; see guild-state.ts).
+     */
+    onBound?(guildId: string, ticketsChannelId: string, staffRoleId: string | undefined): void;
 };
 
 /**
@@ -199,6 +226,7 @@ export async function handleCupboardSetup(
             { guild_id: interaction.guildId, tickets_channel_id: ticketsChannelId },
             "guild bound",
         );
+        deps.onBound?.(interaction.guildId, ticketsChannelId, staffRole?.id);
         await ephemeral(
             `This server is now linked; tickets will sync to <#${ticketsChannelId}>.`,
         );

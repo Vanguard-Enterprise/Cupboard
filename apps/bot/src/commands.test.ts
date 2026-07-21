@@ -70,6 +70,17 @@ function replyContent(reply: ReturnType<typeof vi.fn>): string {
 }
 
 describe("buildCommands", () => {
+    it("registers /ticket with open (subject required, body/category optional) and close", () => {
+        const commands = buildCommands();
+        const ticket = commands.find((c) => c.name === "ticket");
+        expect(ticket).toBeDefined();
+        const subs = (ticket?.options ?? []) as { name: string; options?: { name: string; required?: boolean }[] }[];
+        expect(subs.map((s) => s.name)).toEqual(["open", "close"]);
+        const open = subs.find((s) => s.name === "open");
+        expect(open?.options?.map((o) => o.name)).toEqual(["subject", "body", "category"]);
+        expect(open?.options?.find((o) => o.name === "subject")?.required).toBe(true);
+    });
+
     it("registers /cupboard with a setup subcommand and the expected options", () => {
         const [cupboard] = buildCommands();
         expect(cupboard.name).toBe("cupboard");
