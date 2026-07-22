@@ -131,6 +131,13 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
+    // Retention/purge loop (Phase 7 decisions #3/E): always on, needs only the owner
+    // pool. Redis is optional; the stream trim skips with a log when it is absent.
+    tokio::spawn(cupboard_tenant::retention_loop::run(
+        state.owner_pool.clone(),
+        Arc::new(config.clone()),
+    ));
+
     // Custom-domain TLS loop: only when running in a cluster with the ServiceAccount
     // that can create Certificate/IngressRoute CRs. Absent (local/dev) => domains can be
     // added but stay pending; no automation runs.

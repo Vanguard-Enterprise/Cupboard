@@ -76,6 +76,15 @@ async fn setup(token: Option<&str>) -> Option<AppState> {
         fleet_internal_url: None,
         identity_master_key: None,
         bm_api_base: String::new(),
+        retention_tick_secs: 3600,
+        retention_session_raw_days: 90,
+        retention_signal_raw_days: 90,
+        retention_chat_days: 180,
+        retention_reports_days: 365,
+        retention_name_history_days: 730,
+        retention_audit_days: 730,
+        retention_bm_job_blob_days: 30,
+        retention_stream_days: 14,
     };
     let keys = Keys::verifier_from_ed_pem(&config.jwt_public_key_pem).expect("test verifier key");
 

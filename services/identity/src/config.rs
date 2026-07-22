@@ -46,6 +46,30 @@ pub struct Config {
     /// BattleMetrics API base URL. Overridable (`BM_API_BASE`) for the local stub in
     /// tests/dev; the real default otherwise.
     pub bm_api_base: String,
+
+    /// Retention/purge loop cadence (Phase 7 decision E). Hourly by default.
+    pub retention_tick_secs: u64,
+    /// Per-table retention windows in days (Phase 7 decision #3 defaults; all
+    /// env-overridable). Raw session ip/name and raw signal values are NULLed past
+    /// their window (hashes retained); chat/reports/name_history/audit rows are
+    /// deleted; terminal BM import jobs get their cursor/phase_counts blobs cleared;
+    /// the bus streams are time-trimmed to the stream horizon.
+    pub retention_session_raw_days: i64,
+    pub retention_signal_raw_days: i64,
+    pub retention_chat_days: i64,
+    pub retention_reports_days: i64,
+    pub retention_name_history_days: i64,
+    pub retention_audit_days: i64,
+    pub retention_bm_job_blob_days: i64,
+    pub retention_stream_days: i64,
+}
+
+/// Parse an env var, falling back to the code default when unset or unparseable.
+fn env_parse<T: std::str::FromStr>(name: &str, default: T) -> T {
+    env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 impl Config {
@@ -105,6 +129,16 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| cupboard_bmapi::DEFAULT_BASE.to_string()),
+            // .max(1): a zero interval would panic inside the loop task and kill it.
+            retention_tick_secs: env_parse("RETENTION_TICK_SECS", 3600u64).max(1),
+            retention_session_raw_days: env_parse("RETENTION_SESSION_RAW_DAYS", 90),
+            retention_signal_raw_days: env_parse("RETENTION_SIGNAL_RAW_DAYS", 90),
+            retention_chat_days: env_parse("RETENTION_CHAT_DAYS", 180),
+            retention_reports_days: env_parse("RETENTION_REPORTS_DAYS", 365),
+            retention_name_history_days: env_parse("RETENTION_NAME_HISTORY_DAYS", 730),
+            retention_audit_days: env_parse("RETENTION_AUDIT_DAYS", 730),
+            retention_bm_job_blob_days: env_parse("RETENTION_BM_JOB_BLOB_DAYS", 30),
+            retention_stream_days: env_parse("RETENTION_STREAM_DAYS", 14),
         })
     }
 }

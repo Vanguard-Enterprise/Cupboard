@@ -94,6 +94,10 @@ fn test_state(owner: PgPool, app: PgPool) -> AppState {
         cookie_signing_key: None,
         player: None,
         steam_web_api_key: None,
+        retention_tick_secs: 3600,
+        retention_sessions_days: 90,
+        retention_invites_days: 30,
+        retention_audit_days: 730,
     };
     AppState {
         owner_pool: owner,

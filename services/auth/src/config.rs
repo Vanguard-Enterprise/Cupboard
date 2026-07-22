@@ -61,6 +61,15 @@ pub struct Config {
     /// Steam Web API key for player profile enrichment (persona name + avatar). Optional:
     /// login works without it, degrading to a steamid-only display name.
     pub steam_web_api_key: Option<String>,
+
+    /// Retention/purge loop cadence (Phase 7 decision E). Code defaults apply when unset.
+    pub retention_tick_secs: u64,
+    /// Days past end-of-life (expiry/revocation) before session rows are purged.
+    pub retention_sessions_days: i64,
+    /// Days past terminal status before invite rows are purged.
+    pub retention_invites_days: i64,
+    /// Days before audit_log rows are purged.
+    pub retention_audit_days: i64,
 }
 
 /// Config for the player-facing auth surface (Steam OpenID + player Discord OAuth + the
@@ -159,6 +168,25 @@ impl Config {
             cookie_signing_key: env::var("COOKIE_SIGNING_KEY").ok(),
             player: PlayerAuthConfig::from_env(),
             steam_web_api_key: env::var("STEAM_WEB_API_KEY").ok().filter(|s| !s.is_empty()),
+
+            retention_tick_secs: env::var("RETENTION_TICK_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600) // hourly
+                // .max(1): a zero interval would panic inside the loop task and kill it.
+                .max(1),
+            retention_sessions_days: env::var("RETENTION_SESSIONS_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(90),
+            retention_invites_days: env::var("RETENTION_INVITES_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30),
+            retention_audit_days: env::var("RETENTION_AUDIT_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(730), // 2 years
         })
     }
 }

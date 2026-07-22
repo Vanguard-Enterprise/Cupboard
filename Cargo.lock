@@ -629,6 +629,7 @@ dependencies = [
  "cupboard-domain",
  "cupboard-telemetry",
  "http-body-util",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",

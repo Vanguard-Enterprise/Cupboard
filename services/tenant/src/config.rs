@@ -108,6 +108,16 @@ pub struct Config {
     /// the shared `internal_api_token`. Injectable so tests run against an in-process
     /// stub; the default matches identity's dev port (the gateway's 8083 convention).
     pub identity_internal_url: String,
+
+    /// Retention/purge loop cadence (Phase 7 decision E; hourly default).
+    pub retention_tick_secs: u64,
+    /// Days before webhook payload bodies (store + billing events) are NULLed; the rows
+    /// stay as the replay-dedupe record (plan decision #3).
+    pub retention_webhook_payload_days: i64,
+    /// Days before `audit_log` rows are deleted (2y default; legal/ops record basis).
+    pub retention_audit_days: i64,
+    /// Ticket-stream horizon for the `XTRIM MINID` time-trim.
+    pub retention_stream_days: i64,
 }
 
 impl Config {
@@ -230,6 +240,24 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim_end_matches('/').to_string())
                 .unwrap_or_else(|| "http://127.0.0.1:8083".into()),
+            retention_tick_secs: env::var("RETENTION_TICK_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600)
+                // .max(1): a zero interval would panic inside the loop task and kill it.
+                .max(1),
+            retention_webhook_payload_days: env::var("RETENTION_WEBHOOK_PAYLOAD_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(90),
+            retention_audit_days: env::var("RETENTION_AUDIT_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(730),
+            retention_stream_days: env::var("RETENTION_STREAM_DAYS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(14),
         })
     }
 

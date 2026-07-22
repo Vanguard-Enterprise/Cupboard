@@ -394,6 +394,10 @@ fn state(owner: PgPool, app: PgPool, stripe_base: &str, auth_base: &str) -> AppS
         auth_internal_url: auth_base.to_string(),
         plan_write_token: Some(PLAN_WRITE_TOKEN.into()),
         identity_internal_url: "http://identity.test".into(),
+        retention_tick_secs: 3600,
+        retention_webhook_payload_days: 90,
+        retention_audit_days: 730,
+        retention_stream_days: 14,
     };
     AppState {
         owner_pool: owner,

@@ -82,6 +82,10 @@ fn test_state(owner: PgPool) -> AppState {
             internal_api_token: "test-internal-token".into(),
         }),
         steam_web_api_key: None,
+        retention_tick_secs: 3600,
+        retention_sessions_days: 90,
+        retention_invites_days: 30,
+        retention_audit_days: 730,
     };
     AppState {
         owner_pool: owner.clone(),

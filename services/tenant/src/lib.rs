@@ -13,6 +13,7 @@ pub mod domains_loop;
 pub mod error;
 pub mod http;
 pub mod providers;
+pub mod retention_loop;
 pub mod state;
 pub mod store;
 pub mod stripe;

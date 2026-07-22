@@ -79,6 +79,13 @@ async fn main() -> anyhow::Result<()> {
         cookie_key,
     };
 
+    // Retention/purge loop (Phase 7 decision E): always-on, owner pool only. Runs as a
+    // plain spawned task; each tick absorbs its own panics, so no supervisor is needed.
+    tokio::spawn(cupboard_auth::retention_loop::run(
+        state.owner_pool.clone(),
+        state.config.clone(),
+    ));
+
     let app = http::router(state);
 
     let addr: SocketAddr = config.bind_addr.parse()?;

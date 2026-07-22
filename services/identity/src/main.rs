@@ -8,7 +8,7 @@ use cupboard_auth_core::Keys;
 use cupboard_bus::Bus;
 use cupboard_identity::config::Config;
 use cupboard_identity::state::AppState;
-use cupboard_identity::{bm, consumer, http};
+use cupboard_identity::{bm, consumer, http, retention_loop};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -84,6 +84,13 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(config.clone()),
         ));
     }
+
+    // Retention/purge loop (Phase 7 decisions #3/E): always on; needs only the owner
+    // pool plus the redis url, both already present.
+    tokio::spawn(retention_loop::run(
+        owner_pool.clone(),
+        Arc::new(config.clone()),
+    ));
 
     let state = AppState {
         owner_pool,

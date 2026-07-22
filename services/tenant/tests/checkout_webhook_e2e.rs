@@ -90,6 +90,10 @@ fn state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         auth_internal_url: "http://auth.test".into(),
         plan_write_token: None,
         identity_internal_url: "http://identity.test".into(),
+        retention_tick_secs: 3600,
+        retention_webhook_payload_days: 90,
+        retention_audit_days: 730,
+        retention_stream_days: 14,
     };
     AppState {
         owner_pool: owner,

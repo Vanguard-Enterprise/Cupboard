@@ -14,7 +14,7 @@ use uuid::Uuid;
 const LOGIN_CODE_TTL_SECS: i64 = 60;
 /// How long a Steam response nonce is remembered (Steam assertions are short-lived; this
 /// only needs to outlast their freshness window).
-const NONCE_RETENTION_SECS: i64 = 3600;
+pub(crate) const NONCE_RETENTION_SECS: i64 = 3600;
 
 #[derive(Debug, Clone)]
 pub struct PlayerAccount {

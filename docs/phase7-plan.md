@@ -111,15 +111,18 @@ Frank prerequisites, is never blocked behind infra decisions.
    with the three existing token planes retained as an application-layer second
    factor (they also keep working during any mesh outage/bypass).
 3. **Retention windows** (defaults proposed; all configurable per-table cutoffs):
-   identity `player_sessions.ip` + `identity_signals` raw values **90d** (hashes
-   retained), `chat_messages` **180d**, `player_reports` **1y**, `name_history` **2y**;
+   identity `player_sessions` raw `ip` AND per-session `name` + `identity_signals`
+   raw values **90d** (hashes and rows retained; the 2y `name_history` remains the
+   name record past that), `chat_messages` **180d**, `player_reports` **1y**,
+   `name_history` **2y**;
    auth `player_sessions` + operator `sessions` rows **90d past expiry/revocation**,
    expired `player_login_codes`/`player_link_codes`/`openid_replay` swept continuously;
    tenant `store_webhook_events.payload` + `billing_webhook_events` payloads **90d**
    (row kept for dedupe, payload NULLed); expired/revoked `invites` rows purged
    **30d** after terminal status (they hold third-party emails of people who may
-   never have accepted); both `audit_log` tables **2y** (retention basis: legal
-   obligation + legitimate interest, stated on the disclosure page); Redis streams
+   never have accepted); all three schema-local `audit_log` tables (auth, identity,
+   tenant) **2y** (retention basis: legal obligation + legitimate interest, stated
+   on the disclosure page); Redis streams
    time-trimmed to **14d** via `XTRIM MINID` in the same loops (decision E; `MAXLEN`
    alone bounds length, not time, and a quiet stream could otherwise hold an erased
    player's IP/chat for months); completed `bm_import_jobs` cursor/phase_counts
