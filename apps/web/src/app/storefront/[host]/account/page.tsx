@@ -7,6 +7,7 @@ import { linkDiscord, logoutPlayer } from "@/lib/player-actions";
 import { fetchPlayerEntitlements, type Entitlement } from "@/lib/entitlements";
 import { fetchPlayerTickets } from "@/lib/tickets";
 import { safeHttpUrl } from "@/themes/registry";
+import { PrivacySection } from "./privacy-section";
 
 /** Format an ISO timestamp as a short calendar date; falls back to the raw string if the
  * value is not a parseable date. */
@@ -31,10 +32,34 @@ const DISCORD_NOTICES: Record<string, { tone: "success" | "error"; message: stri
   error: { tone: "error", message: "Could not link Discord, please try again." },
 };
 
+// The privacy server actions and the export download route return here with a ?privacy=
+// flag; same shape as the Discord notices. Anything else shows nothing.
+const PRIVACY_NOTICES: Record<string, { tone: "success" | "error"; message: string }> = {
+  export_started: {
+    tone: "success",
+    message: "Export started. A download link appears below when it is ready.",
+  },
+  erase_started: {
+    tone: "success",
+    message:
+      "Deletion request started. We will show you a summary of what gets deleted below, and nothing is removed until you confirm it.",
+  },
+  erase_confirmed: {
+    tone: "success",
+    message: "Deletion confirmed. It finishes shortly; after that you will be signed out.",
+  },
+  download_gone: {
+    tone: "error",
+    message:
+      "That export was already downloaded or has expired. Start a new one if you need another copy.",
+  },
+  error: { tone: "error", message: "That did not work, please try again." },
+};
+
 export default async function AccountPage({
   searchParams,
 }: {
-  searchParams: Promise<{ discord?: string }>;
+  searchParams: Promise<{ discord?: string; privacy?: string }>;
 }) {
   const player = await getPlayer();
   if (!player) redirect("/login");
@@ -46,8 +71,10 @@ export default async function AccountPage({
   const openTickets = tickets.filter(
     (t) => t.status !== "resolved" && t.status !== "closed",
   ).length;
-  const { discord } = await searchParams;
-  const notice = discord ? DISCORD_NOTICES[discord] : undefined;
+  const { discord, privacy } = await searchParams;
+  const notice =
+    (discord ? DISCORD_NOTICES[discord] : undefined) ??
+    (privacy ? PRIVACY_NOTICES[privacy] : undefined);
   const discordIdentity = player.identities.find((i) => i.provider === "discord");
 
   const avatar = safeHttpUrl(player.avatar_url);
@@ -164,6 +191,8 @@ export default async function AccountPage({
           </a>
         </p>
       </section>
+
+      <PrivacySection />
     </div>
   );
 }

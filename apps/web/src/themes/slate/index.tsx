@@ -59,7 +59,11 @@ function Shell({ site, config, children }: ThemeProps & { children: ReactNode })
       </header>
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-10">{children}</main>
       <footer className="border-t border-[var(--sf-border)] py-6 text-center text-xs text-[var(--sf-muted)]">
-        {name} · powered by Cupboard
+        {name} ·{" "}
+        <a href="/privacy" className="transition-colors hover:text-[var(--sf-primary)]">
+          Privacy
+        </a>{" "}
+        · powered by Cupboard
       </footer>
     </div>
   );

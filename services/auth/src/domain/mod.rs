@@ -9,6 +9,7 @@ pub mod password;
 pub mod plans;
 pub mod players;
 pub mod privacy;
+pub mod privacy_walk;
 pub mod rbac;
 pub mod sessions;
 pub mod users;

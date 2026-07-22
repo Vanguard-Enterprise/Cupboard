@@ -57,6 +57,11 @@ pub struct Config {
     /// the fan-out reuses [`PlayerAuthConfig::tenant_internal_url`]'s env var
     /// (`TENANT_INTERNAL_URL`).
     pub identity_internal_url: String,
+    /// Tenant service base URL for the privacy fan-out. Reads the same
+    /// `TENANT_INTERNAL_URL` env var [`PlayerAuthConfig`] uses (one var, two
+    /// consumers), so a deployment configured for player login needs nothing extra;
+    /// defaults to tenant's dev port (the gateway 8086 convention).
+    pub tenant_internal_url: String,
     /// Base URL of the public dashboard, for building invite/OAuth links.
     pub public_base_url: String,
 
@@ -71,6 +76,10 @@ pub struct Config {
     /// Steam Web API key for player profile enrichment (persona name + avatar). Optional:
     /// login works without it, degrading to a steamid-only display name.
     pub steam_web_api_key: Option<String>,
+
+    /// Privacy coordinator worker cadence (Phase 7 decision A): how often queued
+    /// privacy jobs are claimed and driven. Code default (15s) applies when unset.
+    pub privacy_worker_tick_secs: u64,
 
     /// Retention/purge loop cadence (Phase 7 decision E). Code defaults apply when unset.
     pub retention_tick_secs: u64,
@@ -177,6 +186,11 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.trim_end_matches('/').to_string())
                 .unwrap_or_else(|| "http://127.0.0.1:8083".into()),
+            tenant_internal_url: env::var("TENANT_INTERNAL_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "http://127.0.0.1:8086".into()),
             public_base_url: env::var("PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000".into()),
 
@@ -184,6 +198,13 @@ impl Config {
             cookie_signing_key: env::var("COOKIE_SIGNING_KEY").ok(),
             player: PlayerAuthConfig::from_env(),
             steam_web_api_key: env::var("STEAM_WEB_API_KEY").ok().filter(|s| !s.is_empty()),
+
+            privacy_worker_tick_secs: env::var("PRIVACY_WORKER_TICK_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(15)
+                // .max(1): a zero interval would panic inside the loop task and kill it.
+                .max(1),
 
             retention_tick_secs: env::var("RETENTION_TICK_SECS")
                 .ok()

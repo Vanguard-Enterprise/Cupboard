@@ -4,6 +4,7 @@ import { can, Permission } from "@/lib/permissions";
 import { BanForm } from "../../bans/ban-form";
 import { EntitlementsTable } from "../../store/entitlements-table";
 import type { Entitlement } from "../../store/shared";
+import { PrivacyCard } from "./privacy-card";
 
 type Profile = {
   player: {
@@ -80,7 +81,9 @@ export default async function PlayerProfilePage({
   const chatRes = await apiFetch(`/chat?player_id=${id}&limit=25`);
   const chat: ChatMessage[] = chatRes.ok ? await chatRes.json() : [];
   const steamId = profile.identifiers.find((i) => i.type === "steam")?.value ?? null;
+  const discordId = profile.identifiers.find((i) => i.type === "discord")?.value ?? null;
   const canBan = can(session.permissions, Permission.BansCreate);
+  const canErase = can(session.permissions, Permission.PlayersErase);
 
   // Entitlements are only fetched (and only shown) for operators with store.manage, and only
   // when the player has a Steam identity to key the purchase history on.
@@ -129,6 +132,13 @@ export default async function PlayerProfilePage({
       )}
 
       {steamId && canStore && <EntitlementsTable entitlements={entitlements} />}
+
+      {canErase && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-neutral-300">Privacy</h2>
+          <PrivacyCard steamId={steamId} discordId={discordId} />
+        </section>
+      )}
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-300">Identifiers</h2>

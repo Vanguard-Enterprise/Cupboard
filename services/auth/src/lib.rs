@@ -7,5 +7,6 @@ pub mod config;
 pub mod domain;
 pub mod error;
 pub mod http;
+pub mod privacy_worker;
 pub mod retention_loop;
 pub mod state;

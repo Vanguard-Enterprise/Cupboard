@@ -83,6 +83,8 @@ hex = "0.4"
 # Envelope encryption for tenant-supplied secrets at rest (RCON/panel creds): a random
 # per-secret data key encrypts the value; the master key (from Vault) wraps the data key.
 aes-gcm = "0.10"
+# Gzip for privacy export bundles (Phase 7 decision C); pure-Rust backend by default.
+flate2 = "1"
 # Discord OAuth + internal HTTP (gateway → auth proxy). rustls, no native-tls.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 # Signed cookies for OAuth state/PKCE (matches axum 0.8).

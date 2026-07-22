@@ -850,6 +850,53 @@ export async function createTicketBindCodeAction(
   return { code: body.code, expiresAt: body.expires_at };
 }
 
+export type PrivacyJobFormState = { error?: string };
+
+/** Start a TENANT-SCOPED privacy job (export or erase) for a player, from the admin
+ * profile card. Covers this org's records only; the global identity graph and other
+ * orgs' rows are never touched by an operator job (decision A2). The kind rides on the
+ * submit button; identifiers come from the profile (whichever exist). Auth self-gates on
+ * players.erase, so its refusals surface as-is. On success the operator lands on the
+ * Privacy page, where erase jobs wait for dry-run confirmation. */
+export async function createPrivacyJobAction(
+  _prev: PrivacyJobFormState,
+  form: FormData,
+): Promise<PrivacyJobFormState> {
+  const kind = form.get("kind");
+  if (kind !== "export" && kind !== "erase") return { error: "unsupported job kind" };
+  const body: Record<string, unknown> = { kind };
+  const steamId = trimmed(form, "steam_id");
+  if (steamId) body.steam_id = steamId;
+  const discordId = trimmed(form, "discord_id");
+  if (discordId) body.discord_id = discordId;
+  if (!steamId && !discordId) {
+    return { error: "this profile has no Steam or Discord identifier to key the job on" };
+  }
+
+  const res = await apiFetch("/auth/privacy/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  redirect(`/privacy?flag=${kind}_started`);
+  return {};
+}
+
+/** Confirm an erase job sitting in awaiting_confirm (the dry-run counts have been shown).
+ * Auth refuses confirms from any other status; that refusal surfaces as-is. */
+export async function confirmPrivacyJobAction(
+  _prev: PrivacyJobFormState,
+  form: FormData,
+): Promise<PrivacyJobFormState> {
+  const id = form.get("job_id");
+  if (typeof id !== "string" || !id) return { error: "missing job" };
+  const res = await apiFetch(`/auth/privacy/jobs/${id}/confirm`, { method: "POST" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/privacy");
+  return {};
+}
+
 export async function logoutAction(): Promise<void> {
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;

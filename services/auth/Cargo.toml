@@ -35,6 +35,8 @@ argon2.workspace = true
 reqwest.workspace = true
 base64.workspace = true
 rand.workspace = true
+# Privacy export bundles (Phase 7 decision C).
+flate2.workspace = true
 
 [dev-dependencies]
 cupboard-db.workspace = true
@@ -48,3 +50,4 @@ serde_json.workspace = true
 axum.workspace = true
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
+flate2.workspace = true

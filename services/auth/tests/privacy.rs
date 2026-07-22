@@ -1,8 +1,10 @@
 //! Integration tests for the Phase 7 privacy-job data layer (migration 0009 + 0010,
 //! `domain::privacy`): the CHECK constraints on job shape, the exactly-once worker
-//! claim, the stale-running crash-recovery reclaim, the dry-run/confirm status guard,
-//! the one-time bundle download, and the `players.erase` Owner/Admin backfill against
-//! a pre-existing org.
+//! claim, the stale-running crash-recovery reclaim, the bounded requeue_for_retry
+//! counter, the running-only guards on every worker-side transition (finish, fail,
+//! dry-run park, bundle store), the dry-run/confirm status guard, the one-time
+//! bundle download, and the `players.erase` Owner/Admin backfill against a
+//! pre-existing org.
 //!
 //! Requires a Postgres reachable via `TEST_DATABASE_URL` (owner role; privacy_jobs is
 //! owner-pool only). Skips (passes) when unset, so `cargo test` stays green where no
@@ -41,6 +43,17 @@ async fn setup() -> Option<PgPool> {
         })
         .await;
     Some(owner)
+}
+
+/// Force a job into a given status directly (simulating a worker claim or a
+/// terminal transition without driving the worker).
+async fn set_status(owner: &PgPool, id: Uuid, status: &str) {
+    sqlx::query("UPDATE privacy_jobs SET status = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(status)
+        .execute(owner)
+        .await
+        .expect("set status");
 }
 
 /// A well-formed platform-scope job naming the subject by steam id.
@@ -217,6 +230,60 @@ async fn reclaim_stale_running_requeues_only_stale_jobs() {
 }
 
 #[tokio::test]
+async fn requeue_for_retry_bounds_attempts_and_requires_running() {
+    let Some(owner) = setup().await else {
+        eprintln!(
+            "SKIP requeue_for_retry_bounds_attempts_and_requires_running: \
+             TEST_DATABASE_URL unset"
+        );
+        return;
+    };
+    let _guard = LOCK.lock().await;
+
+    let job = privacy::create_job(&owner, platform_job("export"))
+        .await
+        .expect("create job");
+    assert_eq!(job.attempts, 0);
+
+    // A job that is not running never requeues.
+    assert!(!privacy::requeue_for_retry(&owner, job.id)
+        .await
+        .expect("requeue queued"));
+
+    // Two retries are allowed, each bumping the counter and requeueing.
+    for expected_attempts in [1, 2] {
+        set_status(&owner, job.id, "running").await;
+        assert!(privacy::requeue_for_retry(&owner, job.id)
+            .await
+            .expect("requeue running"));
+        let requeued = privacy::get_job(&owner, job.id)
+            .await
+            .expect("get")
+            .expect("job exists");
+        assert_eq!(requeued.status, "queued");
+        assert_eq!(requeued.attempts, expected_attempts);
+    }
+
+    // The third failure finds the attempts exhausted: no requeue, caller fails it.
+    set_status(&owner, job.id, "running").await;
+    assert!(!privacy::requeue_for_retry(&owner, job.id)
+        .await
+        .expect("requeue exhausted"));
+    let stuck = privacy::get_job(&owner, job.id)
+        .await
+        .expect("get")
+        .expect("job exists");
+    assert_eq!(stuck.status, "running", "an exhausted job is left running");
+    assert_eq!(stuck.attempts, 2);
+
+    sqlx::query("DELETE FROM privacy_jobs WHERE id = $1")
+        .bind(job.id)
+        .execute(&owner)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
 async fn dry_run_confirm_flow_guards_status() {
     let Some(owner) = setup().await else {
         eprintln!("SKIP dry_run_confirm_flow_guards_status: TEST_DATABASE_URL unset");
@@ -228,6 +295,15 @@ async fn dry_run_confirm_flow_guards_status() {
         .await
         .expect("create job");
     let counts = serde_json::json!({ "identity": { "player_identifiers": 3 } });
+
+    // Every worker-side transition is guarded on `running`: parking a job that was
+    // never claimed must refuse.
+    let err = privacy::store_dry_run(&owner, job.id, &counts)
+        .await
+        .expect_err("store_dry_run on a queued job must refuse");
+    assert!(matches!(err, AppError::NotFound(_)), "got: {err:?}");
+
+    set_status(&owner, job.id, "running").await;
     privacy::store_dry_run(&owner, job.id, &counts)
         .await
         .expect("store dry run");
@@ -255,7 +331,13 @@ async fn dry_run_confirm_flow_guards_status() {
         .expect_err("confirming an unknown job must refuse");
     assert!(matches!(err, AppError::NotFound(_)));
 
-    // Terminal transitions + the requester-filtered listing.
+    // Terminal transitions are guarded on `running` too: failing the (queued) job
+    // must refuse until it is claimed.
+    let err = privacy::fail_job(&owner, job.id, "identity walker unreachable")
+        .await
+        .expect_err("fail_job on a queued job must refuse");
+    assert!(matches!(err, AppError::NotFound(_)));
+    set_status(&owner, job.id, "running").await;
     privacy::fail_job(&owner, job.id, "identity walker unreachable")
         .await
         .expect("fail");
@@ -265,7 +347,28 @@ async fn dry_run_confirm_flow_guards_status() {
         .expect("job exists");
     assert_eq!(failed.status, "failed");
     assert_eq!(failed.error.as_deref(), Some("identity walker unreachable"));
+
+    // A late finish can NEVER overwrite the terminal state (the running guard).
     let results = serde_json::json!({ "auth": { "player_identities": 2 } });
+    let err = privacy::finish_job(&owner, job.id, &results)
+        .await
+        .expect_err("finish after fail must refuse, never overwrite");
+    assert!(matches!(err, AppError::NotFound(_)));
+    let still_failed = privacy::get_job(&owner, job.id)
+        .await
+        .expect("get")
+        .expect("job exists");
+    assert_eq!(still_failed.status, "failed", "terminal state is immutable");
+    assert!(still_failed.result_counts.is_none());
+
+    // Nor can a late bundle store resurrect a bundle on a terminal job.
+    let err = privacy::store_bundle(&owner, job.id, b"late", Utc::now() + Duration::days(7))
+        .await
+        .expect_err("store_bundle on a failed job must refuse");
+    assert!(matches!(err, AppError::NotFound(_)));
+
+    // A running job finishes normally.
+    set_status(&owner, job.id, "running").await;
     privacy::finish_job(&owner, job.id, &results)
         .await
         .expect("finish");
@@ -305,6 +408,8 @@ async fn take_bundle_once_returns_bytes_exactly_once() {
         .await
         .expect("create job");
     let bytes = b"gzip-bundle-bytes".to_vec();
+    // store_bundle is guarded on `running` (only the claimed export pass writes it).
+    set_status(&owner, job.id, "running").await;
     privacy::store_bundle(&owner, job.id, &bytes, Utc::now() + Duration::days(7))
         .await
         .expect("store bundle");

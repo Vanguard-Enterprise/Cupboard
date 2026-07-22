@@ -136,6 +136,50 @@ export async function replyPlayerTicketAction(
   redirect(`/tickets/${id}`);
 }
 
+/** Start a self-serve privacy job (export or erase) for the signed-in player. The subject
+ * is the token holder (no body): the data subject's own authenticated request, so the job
+ * runs PLATFORM-GLOBAL scope server-side. Failures ride back as ?privacy= flags so the
+ * account page stays fully server-rendered, like the linkDiscord flow. */
+async function startPlayerPrivacyJob(kind: "export" | "erase"): Promise<void> {
+  const token = (await cookies()).get("cb_player_access")?.value;
+  if (!token) redirect("/login");
+
+  const res = await fetch(`${gatewayBase()}/auth/player/privacy/${kind}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    cache: "no-store",
+  }).catch(() => null);
+  // redirect() throws NEXT_REDIRECT; keep it out of any try/catch above.
+  if (!res || !res.ok) redirect("/account?privacy=error");
+  redirect(`/account?privacy=${kind}_started`);
+}
+
+export async function startPlayerDataExportAction(): Promise<void> {
+  await startPlayerPrivacyJob("export");
+}
+
+export async function startPlayerDataEraseAction(): Promise<void> {
+  await startPlayerPrivacyJob("erase");
+}
+
+/** Confirm the player's own erase job after the dry-run summary (awaiting_confirm only;
+ * the gateway refuses anything else). */
+export async function confirmPlayerErasureAction(form: FormData): Promise<void> {
+  const token = (await cookies()).get("cb_player_access")?.value;
+  if (!token) redirect("/login");
+
+  const id = form.get("job_id");
+  if (typeof id !== "string" || !id) redirect("/account?privacy=error");
+  const res = await fetch(`${gatewayBase()}/auth/player/privacy/jobs/${id}/confirm`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    cache: "no-store",
+  }).catch(() => null);
+  // redirect() throws NEXT_REDIRECT; keep it out of any try/catch above.
+  if (!res || !res.ok) redirect("/account?privacy=error");
+  redirect("/account?privacy=erase_confirmed");
+}
+
 /** Sign the player out: best-effort revoke at the gateway, drop the cookies, go home. */
 export async function logoutPlayer(): Promise<void> {
   const refresh = await playerRefreshToken();

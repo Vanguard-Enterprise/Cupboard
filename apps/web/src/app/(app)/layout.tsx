@@ -93,6 +93,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               API keys
             </Link>
           )}
+          {can(perms, Permission.PlayersErase) && (
+            <Link href="/privacy" className="rounded px-2 py-1 hover:bg-neutral-900">
+              Privacy
+            </Link>
+          )}
           {can(perms, Permission.BillingManage) && (
             <Link href="/billing" className="rounded px-2 py-1 hover:bg-neutral-900">
               Billing

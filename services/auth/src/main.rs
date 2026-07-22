@@ -86,6 +86,19 @@ async fn main() -> anyhow::Result<()> {
         state.config.clone(),
     ));
 
+    // Privacy coordinator worker (Phase 7 decisions A/C/D): gated on the scoped
+    // PRIVACY_TOKEN; without it the fan-out cannot authenticate, so the worker stays
+    // off (fail closed) and jobs queue until a configured deploy picks them up.
+    if state.config.privacy_token.is_some() {
+        tokio::spawn(cupboard_auth::privacy_worker::run(
+            state.owner_pool.clone(),
+            state.http.clone(),
+            state.config.clone(),
+        ));
+    } else {
+        tracing::info!("PRIVACY_TOKEN unset; privacy coordinator worker disabled");
+    }
+
     let app = http::router(state);
 
     let addr: SocketAddr = config.bind_addr.parse()?;

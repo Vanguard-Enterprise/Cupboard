@@ -9,6 +9,7 @@ mod orgs;
 mod plans;
 mod player;
 mod player_discord;
+mod privacy;
 mod roles;
 mod steam_openid;
 
@@ -78,6 +79,43 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/auth/player/discord/complete",
             post(player_discord::complete),
+        )
+        // Privacy jobs (Phase 7 PR2). Operator surface: `players.erase` gated,
+        // ALWAYS scoped to the claims org (decision A2). Player surface: verified
+        // with the PLAYER keypair, platform scope, self only.
+        .route(
+            "/auth/privacy/jobs",
+            post(privacy::create_operator_job).get(privacy::list_operator_jobs),
+        )
+        .route("/auth/privacy/jobs/{id}", get(privacy::get_operator_job))
+        .route(
+            "/auth/privacy/jobs/{id}/confirm",
+            post(privacy::confirm_operator_job),
+        )
+        .route(
+            "/auth/privacy/jobs/{id}/download",
+            get(privacy::download_operator_job),
+        )
+        .route(
+            "/auth/player/privacy/export",
+            post(privacy::create_player_export),
+        )
+        .route(
+            "/auth/player/privacy/erase",
+            post(privacy::create_player_erase),
+        )
+        .route("/auth/player/privacy/jobs", get(privacy::list_player_jobs))
+        .route(
+            "/auth/player/privacy/jobs/{id}",
+            get(privacy::get_player_job),
+        )
+        .route(
+            "/auth/player/privacy/jobs/{id}/confirm",
+            post(privacy::confirm_player_job),
+        )
+        .route(
+            "/auth/player/privacy/jobs/{id}/download",
+            get(privacy::download_player_job),
         )
         .route("/auth/player/exchange", post(player::exchange))
         .route("/auth/player/refresh", post(player::refresh))

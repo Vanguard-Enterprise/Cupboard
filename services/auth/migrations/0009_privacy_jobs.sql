@@ -20,6 +20,9 @@ CREATE TABLE privacy_jobs (
     player_account_id uuid,
     status            text NOT NULL DEFAULT 'queued' CHECK
         (status IN ('queued', 'running', 'awaiting_confirm', 'completed', 'failed')),
+    -- Transient walker failures (5xx/timeout/connect) requeue with a bump here, up to
+    -- 2 retries (3 total attempts); the walkers are idempotent so a re-run is safe.
+    attempts          int NOT NULL DEFAULT 0,
     dry_run_counts    jsonb,
     result_counts     jsonb,
     error             text,
