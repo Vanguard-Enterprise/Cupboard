@@ -6,6 +6,9 @@
 //! Auto-links involving the source are dropped (they recompute from signals on the next
 //! sighting). Manual links (per-tenant private assertions that never recompute) are
 //! repointed onto the target for every tenant, preserving `player_a < player_b`.
+//! Phase 7 completed the walk with the tables added after this module first shipped:
+//! player_notes, player_flags, and the BM sync rows that address players by local_id
+//! (bm_sync_map with a uniqueness dedup, bm_sync_conflicts).
 
 use crate::error::AppError;
 use serde_json::json;
@@ -149,6 +152,53 @@ pub async fn merge_players(
         .execute(&mut *tx)
         .await?;
 
+    // Notes + flags (Phase 4) hang off player_id with no per-player uniqueness: plain
+    // repoint, or the merged player's staff notes and flags would orphan on the
+    // tombstoned row, invisible to every profile view.
+    let notes = sqlx::query("UPDATE player_notes SET player_id = $2 WHERE player_id = $1")
+        .bind(from)
+        .bind(into)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let flags = sqlx::query("UPDATE player_flags SET player_id = $2 WHERE player_id = $1")
+        .bind(from)
+        .bind(into)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    // BM sync bookkeeping addresses players by local_id. bm_sync_map is UNIQUE
+    // (tenant_id, entity_type, local_id), so where the target already holds a player
+    // mapping in a tenant the source's row is dropped (superseded linkage; counts
+    // survive in the merge_log snapshot), otherwise it repoints. bm_sync_conflicts is
+    // a review log with no uniqueness, so a plain repoint suffices. bm_outbox is
+    // ban-only (local_id is a ban id, and ban ids don't change on merge): nothing to do.
+    sqlx::query(
+        "DELETE FROM bm_sync_map s WHERE s.entity_type = 'player' AND s.local_id = $1 \
+         AND EXISTS (SELECT 1 FROM bm_sync_map t WHERE t.tenant_id = s.tenant_id \
+             AND t.entity_type = 'player' AND t.local_id = $2)",
+    )
+    .bind(from)
+    .bind(into)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE bm_sync_map SET local_id = $2 WHERE entity_type = 'player' AND local_id = $1",
+    )
+    .bind(from)
+    .bind(into)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE bm_sync_conflicts SET local_id = $2 \
+         WHERE entity_type = 'player' AND local_id = $1",
+    )
+    .bind(from)
+    .bind(into)
+    .execute(&mut *tx)
+    .await?;
+
     // Links recompute from signals — drop the source's.
     let links_dropped =
         sqlx::query("DELETE FROM player_links WHERE player_a = $1 OR player_b = $1")
@@ -196,6 +246,7 @@ pub async fn merge_players(
     let snapshot = json!({
         "identifiers": identifiers, "signals": signals, "names": names,
         "sessions": sessions, "bans": bans, "links_dropped": links_dropped,
+        "notes": notes, "flags": flags,
     });
 
     sqlx::query(
@@ -334,5 +385,181 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(logs, 1);
+    }
+
+    // Regression for the Phase 7 recon finding: merge predated migration 0012 and the
+    // BM tables, so notes/flags/bm rows silently stayed on the tombstoned player.
+    #[tokio::test]
+    async fn merge_repoints_notes_flags_and_bm_rows() {
+        let Some(pool) = setup().await else {
+            eprintln!("SKIP merge_repoints_notes_flags_and_bm_rows: unset");
+            return;
+        };
+        let pepper = b"merge-pepper-2";
+        let tenant1 = Uuid::new_v4();
+        let tenant2 = Uuid::new_v4();
+        let server = Uuid::new_v4();
+        let steam_a = format!("76563{}", Utc::now().timestamp_nanos_opt().unwrap());
+        let steam_b = format!("76564{}", Utc::now().timestamp_nanos_opt().unwrap());
+
+        let ev = |sid: &str| RosterEvent {
+            server_id: ServerId(server),
+            tenant_id: TenantId(tenant1),
+            observed_at: Utc::now(),
+            players: vec![ObservedPlayer {
+                steam_id: sid.into(),
+                owner_steam_id: None,
+                name: "n".into(),
+                ip: Some("203.0.113.10".into()),
+                eac_id: None,
+                connected_seconds: 5,
+            }],
+        };
+        crate::domain::ingest::ingest_roster(&pool, pepper, &ev(&steam_a))
+            .await
+            .unwrap();
+        crate::domain::ingest::ingest_roster(&pool, pepper, &ev(&steam_b))
+            .await
+            .unwrap();
+        let id_of = |sid: &str| {
+            let pool = pool.clone();
+            let hash = cupboard_crypto::hmac_sha256(sid.as_bytes(), pepper).to_vec();
+            async move {
+                sqlx::query_scalar::<_, Uuid>(
+                    "SELECT player_id FROM player_identifiers WHERE value_hash = $1",
+                )
+                .bind(hash)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let a = id_of(&steam_a).await;
+        let b = id_of(&steam_b).await;
+
+        // A note + a flag on the source (B).
+        sqlx::query(
+            "INSERT INTO player_notes (tenant_id, player_id, body) VALUES ($1, $2, 'watch')",
+        )
+        .bind(tenant1)
+        .bind(b)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO player_flags (tenant_id, player_id, label) VALUES ($1, $2, 'vip')",
+        )
+        .bind(tenant1)
+        .bind(b)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // bm_sync_map: tenant1 has mappings for BOTH players (dedup path: B's row must
+        // drop, A's must survive); tenant2 maps only B (repoint path).
+        for (t, p, ext) in [
+            (tenant1, a, "bm-a"),
+            (tenant1, b, "bm-b"),
+            (tenant2, b, "bm-b2"),
+        ] {
+            sqlx::query(
+                "INSERT INTO bm_sync_map (tenant_id, entity_type, external_id, local_id) \
+                 VALUES ($1, 'player', $2, $3)",
+            )
+            .bind(t)
+            .bind(ext)
+            .bind(p)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // A conflict-log row addressing the source player.
+        sqlx::query(
+            "INSERT INTO bm_sync_conflicts (tenant_id, entity_type, external_id, local_id, direction) \
+             VALUES ($1, 'player', 'bm-b', $2, 'inbound')",
+        )
+        .bind(tenant1)
+        .bind(b)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        merge_players(&pool, b, a, None, Some("dup"))
+            .await
+            .expect("merge");
+
+        let count = |q: &'static str, bind_tenant: Uuid, bind_player: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(q)
+                    .bind(bind_tenant)
+                    .bind(bind_player)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        // Notes + flags moved to A; nothing left on B.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM player_notes WHERE tenant_id = $1 AND player_id = $2",
+                tenant1,
+                a
+            )
+            .await,
+            1,
+            "note repointed to the surviving player"
+        );
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM player_flags WHERE tenant_id = $1 AND player_id = $2",
+                tenant1,
+                a
+            )
+            .await,
+            1,
+            "flag repointed to the surviving player"
+        );
+        let orphaned: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM player_notes WHERE player_id = $1 UNION ALL \
+             SELECT count(*) FROM player_flags WHERE player_id = $1 \
+             ORDER BY 1 DESC LIMIT 1",
+        )
+        .bind(b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(orphaned, 0, "nothing left on the tombstoned player");
+
+        // tenant1: A's original mapping survived, B's dropped (uniqueness dedup).
+        let t1_maps: Vec<(String, Uuid)> = sqlx::query_as(
+            "SELECT external_id, local_id FROM bm_sync_map \
+             WHERE tenant_id = $1 AND entity_type = 'player'",
+        )
+        .bind(tenant1)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            t1_maps,
+            vec![("bm-a".to_string(), a)],
+            "target mapping wins in tenant1"
+        );
+        // tenant2: B's mapping repointed to A.
+        assert_eq!(
+            count("SELECT count(*) FROM bm_sync_map WHERE tenant_id = $1 AND entity_type = 'player' AND local_id = $2", tenant2, a).await,
+            1,
+            "sole mapping repointed in tenant2"
+        );
+        // Conflict log follows the surviving player.
+        assert_eq!(
+            count(
+                "SELECT count(*) FROM bm_sync_conflicts WHERE tenant_id = $1 AND local_id = $2",
+                tenant1,
+                a
+            )
+            .await,
+            1,
+            "conflict row repointed"
+        );
     }
 }

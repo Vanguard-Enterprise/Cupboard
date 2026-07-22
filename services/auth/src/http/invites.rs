@@ -53,8 +53,11 @@ pub async fn create(
         state.config.public_base_url.trim_end_matches('/'),
         new.token
     );
-    // Email delivery is stubbed in Phase 1 — surface the link so it can be shared.
-    tracing::info!(invite_id = %new.invite.id, email = %new.invite.email, %accept_url, "staff invite created (email delivery stubbed)");
+    // Email delivery is stubbed in Phase 1; the link is returned in the response for
+    // the creator to share. Neither the email nor the URL may be logged: the URL
+    // embeds the raw invite token (a live org-access credential) and logs sit in Loki
+    // for their full retention window.
+    tracing::info!(invite_id = %new.invite.id, "staff invite created (email delivery stubbed)");
 
     audit::record(
         &state.owner_pool,
