@@ -5,9 +5,13 @@
 > shape that worked for Phases 2-6. Inputs: the 2026-07-21 scouting briefs (player-PII
 > inventory, internal-surface matrix, v-deployments infra state), `docs/phase6-closeout.md`,
 > ARCHITECTURE decisions #14/#16 (surrogate player id, compliance schema hygiene).
-> **Status (2026-07-21): DRAFT.** Adversarially reviewed (17 findings, all folded
-> in); open items are collected in "Decisions needed from Frank" - everything else
-> is ready to implement.
+> **Status (2026-07-22): FINAL.** Adversarially reviewed (17 findings folded in);
+> Frank's resolutions recorded 2026-07-22: **Cilium** (#1), **Linkerd** (#2),
+> Stripe live-mode objects are Frank's task at cutover-prep time (#6). Retention
+> defaults (#3) and the DSAR surface recommendation (#4) proceed as proposed
+> (adjustable without blocking). The ONE still-open item is #5 (production base
+> domain + placement), not needed before PR8. Implementation started 2026-07-22
+> (PR1 slice 1: the recon bug fixes).
 
 ## Definition of Done (from ROADMAP)
 
@@ -70,6 +74,13 @@ mTLS, prod manifests). PR order interleaves them so the privacy track, which has
 Frank prerequisites, is never blocked behind infra decisions.
 
 ## Decisions needed from Frank
+
+> Resolutions (2026-07-22): #1 **Cilium, APPROVED**. #2 **Linkerd, APPROVED**
+> ("works for me"), with the Server/AuthorizationPolicy default-deny deliverable
+> and the token planes retained as second factor, as recommended. #6 **Frank will
+> create the live-mode Stripe objects when it is time** (cutover prep, PR8); the
+> Tax recommendation stands for that moment. #3/#4 proceed on the proposed
+> defaults. #5 (prod base domain + placement) REMAINS OPEN; blocking only for PR8.
 
 1. **CNI choice: recommend Cilium.** Talos + Cilium is the well-documented pairing;
    Cilium brings policy **audit mode** (log-only verdicts, the safe way to stage
