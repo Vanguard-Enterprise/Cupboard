@@ -107,29 +107,65 @@
   verified against the live deployment. Evidence, runbook, degradation matrix, and the
   deferred list: `docs/phase6-closeout.md`.
 
-## Phase 7 — Launch hardening  · size **L**
+## Phase 7 - Compliance, security hardening & cutover readiness  · size **M/L**
 
-**Goal:** production-ready at launch scale (500 servers / 100–300 tenants / 30–100k players).
+**Goal:** legally and structurally safe to operate, with a prod cutover ready to execute
+on demand. (Rescoped 2026-07-21: capacity scale-up, load test, and demand-gated items
+moved to Phase 8.)
 
-- **Cluster capacity scale-up** (the pre-launch capacity add); load test the firehose.
-- **Identity store isolation** — split Identity onto its own CNPG cluster if write volume needs it.
-- **GDPR tooling** — per-player export, erasure + retention/purge worker (schema hygiene already in place).
-- **Security review** (`/security-review`), Mimir cardinality pass, runbooks/alerts, prod cutover.
-- **Network segmentation backlog** (deferred from Phase 2 — the workload layer is already
-  hardened: restricted PodSecurity enforced on all cupboard namespaces, ClusterIP-only
-  backends, envelope-encrypted creds, internal-token auth on `/internal/*`):
+- **Privacy compliance tooling (GDPR + US):** per-player data export, erasure worker,
+  retention/purge worker (schema hygiene already in place from Phase 2). Coverage must
+  satisfy both GDPR (access/erasure/retention) and US state privacy law
+  (CCPA/CPRA-class: right to know, right to delete, disclosure honesty; no
+  sale/sharing of player data means the opt-out surface is a documented no-op).
+- **Security hardening, ASAP:** full `/security-review` pass, Mimir cardinality pass,
+  runbooks + alerts.
+- **Network segmentation** (deferred from Phase 2; workload layer already hardened):
   - **Adopt a policy-capable CNI first.** The cluster runs **flannel**, which does *not*
-    enforce `NetworkPolicy` (objects apply but are silent no-ops) — introduce Calico
+    enforce `NetworkPolicy` (objects apply but are silent no-ops) - introduce Calico
     (Canal: flannel + Calico policy) or Cilium before any of the below can take effect.
   - **NetworkPolicies:** default-deny ingress/egress per cupboard namespace, then explicit
-    allows — gateway→{auth,fleet,identity}, collector→{fleet,identity,redis} + broad
+    allows - gateway→{auth,fleet,identity}, collector→{fleet,identity,redis} + broad
     egress for outbound RCON, {fleet,identity,auth}→CNPG `cupboard-db`,
     identity/collector→`cupboard-redis`, all→kube-dns + `alloy-receiver` (OTLP). Mind
     kubelet health-probe traffic when writing default-deny ingress.
-  - **mTLS between services** — replace the shared `INTERNAL_API_TOKEN` on the cross-service
+  - **mTLS between services** - replace the shared `INTERNAL_API_TOKEN` on the cross-service
     `/internal/*` endpoints with mutual TLS (SPIFFE/cert-manager or a mesh).
-- **DoD:** load test passes at target scale; security review clean; network policies enforced
-  (on a policy-capable CNI); prod environment live.
+- **Prod cutover readiness** (prepared now, executed only on operator signal):
+  production Stripe products/prices + Tax/VAT posture (all current price IDs are
+  TEST-mode), prod environment manifests + production base domain, and the two Phase 5
+  leftovers (CERT_ISSUER staging→prod flip; Phase 5 DoD #4 browser click-through).
+- **DoD:** export/erasure/retention proven on a real player across all stores; security
+  review clean; network policies enforced on a policy-capable CNI with mTLS on
+  `/internal/*`; a documented, rehearsed cutover runbook with prod manifests ready to
+  apply on signal.
+
+## Phase 8 - Scale-up & post-launch maturation  · size **L**
+
+**Goal:** capacity for launch scale, plus the demand-gated and post-launch items
+deliberately deferred out of Phase 7. (Created 2026-07-21.)
+
+- **Cluster capacity scale-up** + load test the firehose at target scale
+  (500 servers / 100–300 tenants / 30–100k players).
+- **Identity store isolation** - split Identity onto its own CNPG cluster when write
+  volume requires it.
+- **Public internet exposure of `/api/v1` + OpenAPI docs** - new external IngressRoute or
+  path-scoped route on a public host; prerequisites: per-IP/global cap in front of the
+  auth exchange (unique-garbage keys each cost an uncached auth round trip) and the
+  WAF/DDoS posture decision.
+- **Discord message-content intent verification** (required past 100 guilds).
+- **Infra carried items:** apex custom domains (CNAME-on-dynamic-IP), Cloudflare WAF on
+  custom-domain hosts, object store for uploads, second cupboard-web Deployment split,
+  identity storefront player-stats endpoint.
+- **Product carried items:** usage metering beyond rate limiting + per-key quotas;
+  GraphQL; ticket attachments/uploads; service-fulfillment tooling + catalog expansion
+  (migration assistance first); Discord-side ban actioning + notification breadth;
+  sliding-window limiter + rate-limit headers on non-v1 routes; transactional outbox for
+  ticket sync; API-key IP allowlists, resource-scoped keys, auto-rotation; per-user
+  `/ticket open` cooldown; `XGROUP DELCONSUMER` hygiene for dead bot consumer names.
+- **DoD:** load test passes at target scale; public API reachable from the internet
+  behind the decided WAF posture; the carried-item backlog burned down or explicitly
+  re-deferred with reasons.
 
 ---
 
