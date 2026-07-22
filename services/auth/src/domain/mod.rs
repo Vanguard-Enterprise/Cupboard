@@ -8,6 +8,7 @@ pub mod orgs;
 pub mod password;
 pub mod plans;
 pub mod players;
+pub mod privacy;
 pub mod rbac;
 pub mod sessions;
 pub mod users;

@@ -6,6 +6,7 @@ mod evasion;
 mod integrations;
 mod internal;
 mod players;
+mod privacy;
 mod reports;
 
 use crate::error::AppError;
@@ -80,6 +81,21 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(internal::active_bans),
         )
         .route("/internal/bans/{id}", get(internal::get_ban))
+        // Privacy walkers for the auth coordinator (Phase 7 decision F): a SEPARATE
+        // token plane (PRIVACY_TOKEN); the shared internal token does not work here.
+        // POSTs so raw identifiers ride the body, never a traced URI. The guard is a
+        // route_layer on the nest (the tenant bot-surface precedent), so auth runs
+        // before body deserialization and covers every route under the prefix.
+        .nest(
+            "/internal/privacy",
+            Router::new()
+                .route("/export", axum::routing::post(privacy::export))
+                .route("/erase", axum::routing::post(privacy::erase))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    privacy::check_privacy_token,
+                )),
+        )
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
         .with_state(state)

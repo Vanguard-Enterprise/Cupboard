@@ -47,6 +47,16 @@ pub struct Config {
     /// primitive, so only tenant and auth hold this one. `None` disables the route
     /// (fail closed).
     pub plan_write_token: Option<String>,
+    /// DISTINCT secret auth presents to identity's and tenant's `/internal/privacy/*`
+    /// walker endpoints (Phase 7 decision F). Deliberately NOT the widely-shared
+    /// `INTERNAL_API_TOKEN`: a cross-tenant erasure/export primitive gets its own,
+    /// narrowly-held token. `None` disables the privacy fan-out (fail closed).
+    pub privacy_token: Option<String>,
+    /// Identity service base URL for the privacy fan-out. Defaults to identity's dev
+    /// port (the gateway/tenant 8083 convention). The tenant-service counterpart for
+    /// the fan-out reuses [`PlayerAuthConfig::tenant_internal_url`]'s env var
+    /// (`TENANT_INTERNAL_URL`).
+    pub identity_internal_url: String,
     /// Base URL of the public dashboard, for building invite/OAuth links.
     pub public_base_url: String,
 
@@ -161,6 +171,12 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty()),
             plan_write_token: env::var("PLAN_WRITE_TOKEN").ok().filter(|s| !s.is_empty()),
+            privacy_token: env::var("PRIVACY_TOKEN").ok().filter(|s| !s.is_empty()),
+            identity_internal_url: env::var("IDENTITY_INTERNAL_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.trim_end_matches('/').to_string())
+                .unwrap_or_else(|| "http://127.0.0.1:8083".into()),
             public_base_url: env::var("PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000".into()),
 

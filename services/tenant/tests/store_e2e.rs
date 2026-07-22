@@ -78,6 +78,7 @@ fn test_state(owner: PgPool, app: PgPool, paynow_base: String) -> AppState {
         tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: None,
         bot_api_token: None,
+        privacy_token: None,
         player_jwt_public_key_pem: None,
         public_webhook_base: None,
         edge_hostname: None,

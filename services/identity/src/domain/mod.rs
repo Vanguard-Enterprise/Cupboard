@@ -9,4 +9,5 @@ pub mod ingest;
 pub mod links;
 pub mod merge;
 pub mod players;
+pub mod privacy;
 pub mod reports;

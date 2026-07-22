@@ -73,6 +73,7 @@ async fn setup(token: Option<&str>) -> Option<AppState> {
         redis_url: String::new(),
         consumer_name: "identity-test".into(),
         internal_api_token: token.map(String::from),
+        privacy_token: None,
         fleet_internal_url: None,
         identity_master_key: None,
         bm_api_base: String::new(),

@@ -4,6 +4,7 @@ mod billing;
 mod domains;
 mod internal;
 mod player;
+mod privacy;
 pub mod public;
 mod sites;
 mod store;
@@ -169,6 +170,19 @@ pub fn router(state: AppState) -> Router {
                 .route_layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     tickets::require_bot_token,
+                )),
+        )
+        // Privacy walkers (Phase 7 decisions A/F): called only by the auth-owned
+        // coordinator, guarded by the DISTINCT PRIVACY_TOKEN plane (never the shared
+        // or bot tokens). Structural route_layer, the bot-surface precedent.
+        .nest(
+            "/internal/privacy",
+            Router::new()
+                .route("/export", axum::routing::post(privacy::export))
+                .route("/erase", axum::routing::post(privacy::erase))
+                .route_layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    privacy::check_privacy_token,
                 )),
         )
         // `route_layer` so metrics see the matched-path template (bounded cardinality).

@@ -68,6 +68,8 @@ fn test_state(owner: PgPool) -> AppState {
         token_pepper: PEPPER.into(),
         internal_api_token: None,
         plan_write_token: None,
+        privacy_token: None,
+        identity_internal_url: "http://127.0.0.1:8083".into(),
         public_base_url: "http://localhost:3000".into(),
         discord: None,
         cookie_signing_key: None,

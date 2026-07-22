@@ -48,6 +48,8 @@ pub enum Permission {
     IntegrationsManage,
     /// Create, list, and revoke the organization's public API keys.
     ApiManage,
+    /// Export or erase a player's personal data (tenant-scoped GDPR actions).
+    PlayersErase,
 }
 
 impl Permission {
@@ -71,6 +73,7 @@ impl Permission {
         Permission::BillingManage,
         Permission::IntegrationsManage,
         Permission::ApiManage,
+        Permission::PlayersErase,
     ];
 
     /// The stable wire/string identifier (`"bans.create"`).
@@ -93,6 +96,7 @@ impl Permission {
             Permission::BillingManage => "billing.manage",
             Permission::IntegrationsManage => "integrations.manage",
             Permission::ApiManage => "api.manage",
+            Permission::PlayersErase => "players.erase",
         }
     }
 
@@ -104,7 +108,9 @@ impl Permission {
             Permission::StaffManage => "staff",
             Permission::RolesManage => "roles",
             Permission::BansView | Permission::BansCreate | Permission::BansRevoke => "bans",
-            Permission::PlayersView | Permission::PlayersViewPii => "players",
+            Permission::PlayersView | Permission::PlayersViewPii | Permission::PlayersErase => {
+                "players"
+            }
             Permission::ServersView | Permission::ServersRestart | Permission::ServersManage => {
                 "servers"
             }
@@ -139,6 +145,7 @@ impl Permission {
                 "Connect external services like BattleMetrics and manage import/sync"
             }
             Permission::ApiManage => "Create, list, and revoke the organization's API keys",
+            Permission::PlayersErase => "Export or erase a player's personal data (GDPR)",
         }
     }
 
@@ -196,6 +203,7 @@ pub const DEFAULT_ROLE_TEMPLATES: &[RoleTemplate] = &[
             Permission::BillingManage,
             Permission::IntegrationsManage,
             Permission::ApiManage,
+            Permission::PlayersErase,
         ],
     },
     RoleTemplate {

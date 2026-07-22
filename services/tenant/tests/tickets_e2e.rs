@@ -166,6 +166,7 @@ async fn state(owner: PgPool, app: PgPool, identity_base: &str) -> AppState {
         tebex_plugin_base: "http://tebex.test".into(),
         internal_api_token: Some(INTERNAL_TOKEN.into()),
         bot_api_token: Some(BOT_TOKEN.into()),
+        privacy_token: None,
         player_jwt_public_key_pem: Some(PL_PUB.into()),
         public_webhook_base: None,
         edge_hostname: None,

@@ -59,6 +59,12 @@ pub struct Config {
     /// surface). `None` disables those endpoints (fail closed).
     pub bot_api_token: Option<String>,
 
+    /// DISTINCT token guarding the `/internal/privacy/*` walker endpoints (Phase 7
+    /// decision F), held only by the auth-side privacy coordinator. A destructive,
+    /// cross-tenant primitive never rides the widely-shared `INTERNAL_API_TOKEN` or
+    /// the bot's token. `None` disables the surface (fail closed, 503).
+    pub privacy_token: Option<String>,
+
     /// Ed25519 PUBLIC key (PEM) for verifying PLAYER access tokens (checkout +
     /// entitlement reads). Disjoint from the operator key. `None` disables the
     /// `/player/*` surface (503).
@@ -187,6 +193,7 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty()),
             bot_api_token: env::var("BOT_API_TOKEN").ok().filter(|s| !s.is_empty()),
+            privacy_token: env::var("PRIVACY_TOKEN").ok().filter(|s| !s.is_empty()),
             player_jwt_public_key_pem: env::var("PLAYER_JWT_PUBLIC_KEY_PEM")
                 .ok()
                 .filter(|s| !s.is_empty()),

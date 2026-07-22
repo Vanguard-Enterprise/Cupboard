@@ -32,6 +32,12 @@ pub struct Config {
     /// v-deployments sets the same value on both services (one cluster-internal token).
     pub internal_api_token: Option<String>,
 
+    /// Scoped token for the privacy walkers (`/internal/privacy/*`), held only by the
+    /// auth coordinator (Phase 7 decision F). Deliberately NOT the widely-shared
+    /// `INTERNAL_API_TOKEN`: a destructive cross-tenant primitive rides its own plane.
+    /// `None` disables those endpoints (fail closed, 503).
+    pub privacy_token: Option<String>,
+
     /// Fleet's cluster-internal base URL (`FLEET_INTERNAL_URL`, e.g.
     /// `http://cupboard-fleet:8080`), where the BM import registers discovered servers.
     /// `None` (or a missing `internal_api_token`) makes the import's servers phase skip
@@ -109,6 +115,7 @@ impl Config {
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            privacy_token: env::var("PRIVACY_TOKEN").ok().filter(|s| !s.is_empty()),
             fleet_internal_url: env::var("FLEET_INTERNAL_URL")
                 .ok()
                 .filter(|s| !s.is_empty()),
