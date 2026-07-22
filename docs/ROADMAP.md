@@ -102,6 +102,10 @@
 - **Cupboard billing:** **Stripe Billing** — subscription tiers + one-off services; plan gating + rate-limit tiers.
 - **Public API:** per-tenant **scoped keys** + plan-tiered rate limits; OpenAPI (utoipa) via Gateway.
 - **DoD:** a player opens a ticket from web + Discord (synced); a tenant subscribes to a paid plan; an API key makes a scoped, rate-limited call.
+- **Status (2026-07-21): CLOSED.** Merged via PR #9 (7 logical commits, each adversarially
+  reviewed) + v-deployments PR #29; deployed to use1 staging and all three DoD criteria
+  verified against the live deployment. Evidence, runbook, degradation matrix, and the
+  deferred list: `docs/phase6-closeout.md`.
 
 ## Phase 7 — Launch hardening  · size **L**
 

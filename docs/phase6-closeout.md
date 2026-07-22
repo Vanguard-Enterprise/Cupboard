@@ -1,19 +1,56 @@
 # Phase 6 closeout: Support + billing + public API
 
-Status as of 2026-07-21. Phase 6 is **code-complete**: all 6 logical PRs are on branch
-`phase6` (draft PR #9), each followed by an adversarial code review whose findings were
-fixed and regression-tested before the commit. The **live Definition-of-Done run is
-pending** a small set of operator-side prerequisites (two scoped internal tokens in
-OpenBao, a Discord bot-token rotation, the merge, and one manual Application CR apply).
-This document is the go-live runbook + the verified degradation matrix + the security
-model + the exact remaining work.
+Status as of 2026-07-21: **CLOSED. Phase 6 is live on use1 staging and all three DoD
+criteria are verified against the running deployment** (see "Live verification" below).
+All 6 logical PRs shipped via PR #9 (merge commit `8f3b891`), each followed by an
+adversarial code review whose findings were fixed and regression-tested before the
+commit. This document is the record of what shipped, the live verification evidence,
+the degradation matrix, the security model, and the deferred work.
 
 Commit trail on `phase6`: `5268cc0` plan, `0246615` PR1 (API keys), `5c966b3` + `8e9c45f`
 PR2 (billing: subscriptions then one-off services), `cb2e311` PR3 (web tickets), `4f60655`
 PR4 (bot foundation), `23266b0` PR5 (two-way sync), `cc7b0ae` PR6 (public API breadth).
-Companion manifests live on the v-deployments `phase6` branch (PR #29: gateway/tenant/auth
-secret wiring, Stripe price IDs, the `cupboard-bot` overlay + Application CR); they are not
-merged and must go live together with the Phase 6 images.
+Companion manifests shipped via the v-deployments PR #29 (gateway/tenant/auth secret
+wiring, Stripe price IDs, the `cupboard-bot` overlay + Application CR), merged together
+with the Phase 6 images.
+
+## Live verification (2026-07-21, use1 staging)
+
+Go-live executed per the runbook below: `plan_write_token` + `bot_api_token` patched into
+`kv/cupboard/staging/internal` (version 2, `api_token` preserved), the `cupboard-bot`
+Application CR applied manually (Synced/Healthy, ExternalSecrets SecretSynced, pod
+Running), and auth/tenant/gateway rollout-restarted to pick up the completed secrets
+(their pods had started before the token patch, so envFrom was stale; the images were
+already the Phase 6 merge digests).
+
+- **DoD #1 VERIFIED**: `/cupboard setup` bound the test guild (bot log `guild bound`,
+  guild `1521507229176434688`, tickets channel recorded), and a Discord reply relayed
+  into a web ticket (`discord message relayed`, ticket `019f86c4-...`,
+  `author_kind=player`, `deduped:false`), completing the two-way loop against live
+  Discord.
+- **DoD #2 VERIFIED**: a test-mode subscription checkout created the org-stamped
+  subscription; a live plan change (Team to Enterprise via the Stripe API) fired
+  `customer.subscription.updated` through `/webhooks/stripe` (tenant log
+  `stripe webhook processed` then `plan mirror pushed ... plan=enterprise
+  status=active`), and the gating tier flipped live (see DoD #3 headers). One noted gap:
+  the ADDITIVE one-off `custom_design` purchase click-through was NOT run live (no
+  payment-mode Checkout session exists in the test account); that path remains
+  stub-verified only (`service_checkout_and_purchase_lifecycle`,
+  `purchases_backstop_lands_sessions_the_webhook_missed`) and is a 2-minute browser
+  click whenever wanted. The DoD criterion itself (subscribe + gating reflects it) is
+  fully met.
+- **DoD #3 VERIFIED**: a real dashboard-minted API key called `GET /api/v1/bans` through
+  the live gateway: 200 with the enveloped JSON and `X-RateLimit-Limit: 1000` /
+  `X-RateLimit-Remaining: 999`, proving the exchange mint, the plan claim (Enterprise
+  tier), and the limiter chain end to end. Credential planes spot-checked live: the
+  bot-token route answers 401 without the token; a garbage `cb_` key gets the enveloped
+  401 via a real exchange round-trip; `/api/v1/openapi.json` serves all six paths. The
+  429 boundary and fail-open behavior remain covered by the automated gateway suite
+  (`free_tier_limit_enforced_exactly_at_the_boundary`,
+  `limiter_fails_open_when_redis_is_unreachable`).
+
+Post-verification note: the API key used for the DoD #3 check transited a chat transcript
+and should be revoked and re-minted.
 
 Verification baseline (final workspace gate, on CI-parity containers): 302 Rust tests
 green, clippy + fmt clean; bot 103 vitest green; web `tsc` + `build` clean. Phase 6 adds
