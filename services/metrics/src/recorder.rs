@@ -71,10 +71,9 @@ impl Instruments {
     }
 
     fn record(&self, ev: &PerfEvent) {
-        let base = [
-            KeyValue::new("tenant_id", ev.tenant_id.to_string()),
-            KeyValue::new("server_id", ev.server_id.to_string()),
-        ];
+        // tenant_id dropped for cardinality: functionally determined by server_id, so
+        // it adds no series value; recover tenant grouping via a query-time join.
+        let base = [KeyValue::new("server_id", ev.server_id.to_string())];
         self.fps.record(ev.fps, &base);
         self.entities.record(ev.entities, &base);
         self.players.record(ev.players, &base);

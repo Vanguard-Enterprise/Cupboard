@@ -12,8 +12,9 @@ opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
 tracing-opentelemetry.workspace = true
-# For the shared HTTP-metrics middleware reused by every service.
+# For the shared HTTP-metrics middleware and trace layer reused by every service.
 axum.workspace = true
+tower-http.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

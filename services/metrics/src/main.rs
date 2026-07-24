@@ -1,14 +1,14 @@
 //! Cupboard Metrics — the perf pipeline (Phase 3 PR6; ARCHITECTURE Decision 5).
 //!
 //! Consumes `cupboard:perf` samples from the bus and re-emits them as OTel metrics with
-//! `tenant_id`/`server_id` attributes → alloy-receiver → **Mimir**, where they become
-//! the perf dashboards' time series. The recommendation engine (PromQL over Mimir) and
-//! the dashboard query proxy land in PR7 — this service is deliberately DB-free until
-//! then.
+//! a `server_id` attribute → alloy-receiver → **Mimir**, where they become the perf
+//! dashboards' time series. The recommendation engine (PromQL over Mimir) and the
+//! dashboard query proxy land in PR7 — this service is deliberately DB-free until then.
 //!
 //! Cardinality discipline (ARCHITECTURE "Mimir cardinality"): attributes are bounded —
-//! tenant × server for the server gauges, plus a top-N `plugin` label (the Collector
-//! truncates hook lists to [`cupboard_domain::push::MAX_HOOK_TIMINGS`]) for hook time.
+//! `server_id` for the server gauges (tenant_id is dropped; it is functionally
+//! determined by server_id), plus a top-N `plugin` label (the Collector truncates hook
+//! lists to [`cupboard_domain::push::MAX_HOOK_TIMINGS`]) for hook time.
 
 mod config;
 mod http;
@@ -28,8 +28,6 @@ use config::Config;
 use cupboard_auth_core::Keys;
 use cupboard_bus::Bus;
 use serde_json::json;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::Level;
 use window::WindowStore;
 
 #[derive(Clone)]
@@ -75,9 +73,7 @@ async fn main() -> anyhow::Result<()> {
             keys: Arc::new(keys),
         }))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
-        .layer(
-            TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)),
-        );
+        .layer(cupboard_telemetry::http::http_trace_layer());
 
     let addr: SocketAddr = config.bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

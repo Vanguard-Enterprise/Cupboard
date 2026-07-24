@@ -2,7 +2,7 @@
 
 use std::env;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     /// Health-probe HTTP server bind address.
     pub bind_addr: String,

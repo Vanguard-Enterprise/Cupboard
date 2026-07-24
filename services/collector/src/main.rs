@@ -15,8 +15,6 @@ use cupboard_collector::ingest::{self, IngestState, RateLimiter};
 use cupboard_collector::manager;
 use cupboard_collector::registry::TokenRegistry;
 use serde_json::json;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::Level;
 
 /// Push request bodies are capped hard; the plugin batches small and often.
 const PUSH_BODY_LIMIT: usize = 1024 * 1024;
@@ -85,9 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let app = health
         .merge(ingest::router(ingest_state).layer(DefaultBodyLimit::max(PUSH_BODY_LIMIT)))
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
-        .layer(
-            TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)),
-        );
+        .layer(cupboard_telemetry::http::http_trace_layer());
 
     let addr: SocketAddr = config.bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

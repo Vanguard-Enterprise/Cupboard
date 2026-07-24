@@ -39,6 +39,8 @@ pub enum A2sError {
     Timeout,
     #[error("could not resolve host {0}")]
     Resolve(String),
+    #[error("refusing to query blocked address for host {0}")]
+    BlockedAddress(String),
     #[error("malformed a2s response: {0}")]
     Parse(String),
     #[error("unexpected a2s response type 0x{0:02x}")]
@@ -66,11 +68,15 @@ pub struct ServerInfo {
 /// Query one server's A2S_INFO. `timeout` bounds each UDP wait (not the whole exchange;
 /// worst case is `MAX_CHALLENGE_RETRIES + 1` waits).
 pub async fn query_info(host: &str, port: u16, timeout: Duration) -> Result<ServerInfo, A2sError> {
-    // Resolve first so the local bind can match the peer's address family.
-    let peer = tokio::net::lookup_host((host, port))
-        .await?
-        .next()
+    // Resolve first so the local bind can match the peer's address family, and run the
+    // SSRF guard over every resolved address before sending a single packet.
+    let addrs = crate::guard::resolve(host, port).await?;
+    let peer = *addrs
+        .first()
         .ok_or_else(|| A2sError::Resolve(host.to_string()))?;
+    if addrs.iter().any(|a| crate::guard::is_blocked_addr(a.ip())) {
+        return Err(A2sError::BlockedAddress(host.to_string()));
+    }
     let bind_addr = if peer.is_ipv6() {
         "[::]:0"
     } else {
@@ -306,6 +312,17 @@ mod tests {
             // Every prefix must fail cleanly or parse (the EDF block is optional).
             let _ = parse_info(&payload[..len]);
         }
+    }
+
+    #[tokio::test]
+    async fn query_info_rejects_blocked_literal_without_sending() {
+        let err = query_info("127.0.0.1", 28015, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, A2sError::BlockedAddress(_)),
+            "loopback must be refused as BlockedAddress, got {err:?}"
+        );
     }
 
     #[test]

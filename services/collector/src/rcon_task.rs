@@ -242,7 +242,8 @@ async fn enforce_bans(
         let cmd = format!("kick \"{steam_id}\" \"{reason}\"");
         client.send_command(&cmd).await?;
         kicked = true;
-        tracing::info!(server = %config.name, steam_id = %steam_id, "kicked banned player");
+        // SteamID64 is PII (HMAC-hashed at rest); never log it raw.
+        tracing::info!(server = %config.name, server_id = %config.id, "kicked banned player");
     }
     Ok(kicked)
 }

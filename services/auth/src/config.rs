@@ -5,7 +5,7 @@ use std::env;
 
 /// Discord OAuth credentials. Present only when all three vars are set; otherwise the
 /// Discord login routes return 503 and email/password still works.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DiscordConfig {
     pub client_id: String,
     pub client_secret: String,
@@ -14,7 +14,7 @@ pub struct DiscordConfig {
     pub redirect_uri: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub bind_addr: String,
     /// Owner-role connection — migrations + cross-tenant/system operations (RLS-exempt).

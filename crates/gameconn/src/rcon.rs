@@ -12,6 +12,7 @@
 //! request/response [`RconClient::command`] path skips those, so a poll only ever
 //! returns the frame it asked for.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -37,6 +38,8 @@ pub enum GameconnError {
     Timeout(i32),
     #[error("could not parse rcon payload: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("refusing to dial blocked address for host {0}")]
+    BlockedAddress(String),
 }
 
 /// A frame we send to the server.
@@ -178,7 +181,30 @@ impl RconClient {
     /// password is percent-encoded into the path so values with URL-reserved characters
     /// (space, `/`, `#`, `?`, `%`, …) still produce a valid URL.
     pub async fn connect(host: &str, port: u16, password: &str) -> Result<Self, GameconnError> {
-        let url = format!("ws://{host}:{port}/{}", encode_path_segment(password));
+        // SSRF guard: resolve the host and refuse if any resolved address is in a blocked
+        // (cluster-internal) range, then dial the validated IP directly. Connecting by the
+        // resolved IP (rather than the hostname) closes the DNS-rebind TOCTOU window that a
+        // re-resolving ws client would otherwise leave open; for Rust WebRcon the handshake
+        // Host header is not vhosted, so an IP literal is fine.
+        let addrs = crate::guard::resolve(host, port)
+            .await
+            .map_err(|e| GameconnError::Connect(e.to_string()))?;
+        let target = addrs
+            .first()
+            .copied()
+            .ok_or_else(|| GameconnError::Connect(format!("could not resolve {host}")))?;
+        if addrs.iter().any(|a| crate::guard::is_blocked_addr(a.ip())) {
+            return Err(GameconnError::BlockedAddress(host.to_string()));
+        }
+        let host_str = match target.ip() {
+            IpAddr::V4(v4) => v4.to_string(),
+            IpAddr::V6(v6) => format!("[{v6}]"),
+        };
+        let url = format!(
+            "ws://{host_str}:{}/{}",
+            target.port(),
+            encode_path_segment(password)
+        );
         let (ws, _resp) = connect_async(&url)
             .await
             .map_err(|e| GameconnError::Connect(e.to_string()))?;
@@ -426,6 +452,18 @@ mod tests {
     fn encodes_url_reserved_chars_in_password() {
         assert_eq!(encode_path_segment("changeme123"), "changeme123");
         assert_eq!(encode_path_segment("a b/c#d%e"), "a%20b%2Fc%23d%25e");
+    }
+
+    #[tokio::test]
+    async fn connect_rejects_blocked_literals_without_dialing() {
+        for host in ["127.0.0.1", "10.0.0.5"] {
+            // `RconClient` is not `Debug`, so match rather than `unwrap_err`.
+            match RconClient::connect(host, 28016, "pw").await {
+                Err(GameconnError::BlockedAddress(_)) => {}
+                Err(other) => panic!("host {host} must be BlockedAddress, got {other:?}"),
+                Ok(_) => panic!("host {host} must not connect"),
+            }
+        }
     }
 
     #[test]

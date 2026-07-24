@@ -17,6 +17,7 @@
 
 pub mod a2s;
 pub mod console;
+pub mod guard;
 pub mod rcon;
 
 pub use a2s::{A2sError, ServerInfo};

@@ -15,6 +15,7 @@ cupboard-telemetry.workspace = true
 cupboard-db.workspace = true
 cupboard-crypto.workspace = true
 cupboard-auth-core.workspace = true
+cupboard-gameconn.workspace = true
 
 tokio.workspace = true
 axum.workspace = true

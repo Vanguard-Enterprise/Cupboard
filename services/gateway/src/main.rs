@@ -23,8 +23,6 @@ use serde_json::json;
 use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::Level;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -309,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
         // INFO-level spans so the default `info` filter keeps them and they
         // export as traces (DefaultMakeSpan is DEBUG, which the filter drops).
-        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
+        .layer(cupboard_telemetry::http::http_trace_layer())
         .with_state(state);
 
     let addr: SocketAddr = config.bind_addr.parse()?;

@@ -97,6 +97,13 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
+    // Operator/player JWT boundary (Phase 7 decision K): tenant only verifies, so the two
+    // token populations are kept apart by disjoint public keys. Refuse to boot if they
+    // overlap, which would let player tokens verify on operator routes (and vice versa).
+    if let Some(player_pub) = &config.player_jwt_public_key_pem {
+        assert_keys_distinct(&config.jwt_public_key_pem, player_pub)?;
+    }
+
     let state = AppState {
         owner_pool,
         app_pool,
@@ -181,6 +188,20 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Refuse to boot if the operator and player JWT PUBLIC keys are identical. That
+/// disjointness is the trust boundary between the two token populations, so equal keys
+/// would let player tokens verify as operator tokens (and vice versa).
+fn assert_keys_distinct(op_pub: &str, player_pub: &str) -> anyhow::Result<()> {
+    if op_pub.trim() == player_pub.trim() {
+        anyhow::bail!(
+            "operator and player JWT PUBLIC keys are identical; they MUST be disjoint \
+             keypairs (the operator/player token trust boundary). Check JWT_PUBLIC_KEY_PEM \
+             vs PLAYER_JWT_PUBLIC_KEY_PEM."
+        );
+    }
+    Ok(())
+}
+
 /// Resolves on SIGTERM (Kubernetes) or Ctrl-C, letting in-flight requests drain.
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -204,4 +225,21 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     tracing::info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assert_keys_distinct;
+
+    #[test]
+    fn distinct_keys_pass() {
+        assert!(assert_keys_distinct("op-pub-key", "player-pub-key").is_ok());
+    }
+
+    #[test]
+    fn identical_keys_refuse_boot() {
+        assert!(assert_keys_distinct("same-key", "same-key").is_err());
+        // Surrounding whitespace must not defeat the check.
+        assert!(assert_keys_distinct("same-key\n", "  same-key").is_err());
+    }
 }

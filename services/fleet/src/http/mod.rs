@@ -13,8 +13,6 @@ use axum::{Json, Router};
 use cupboard_auth_core::Claims;
 use cupboard_domain::{OrgId, Permission};
 use serde_json::json;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::Level;
 
 /// Assemble the fleet service router.
 pub fn router(state: AppState) -> Router {
@@ -50,7 +48,7 @@ pub fn router(state: AppState) -> Router {
         )
         // `route_layer` so metrics see the matched-path template (bounded cardinality).
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
-        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
+        .layer(cupboard_telemetry::http::http_trace_layer())
         .with_state(state)
 }
 
@@ -77,6 +75,20 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<serde_json::
                 Json(json!({"status": "not_ready", "reason": "database"})),
             )
         }
+    }
+}
+
+/// SSRF boundary guard for a tenant-supplied `rcon_host`. Rejects a host that resolves to
+/// a blocked (cluster-internal) address with an operator-facing 400, so operators get an
+/// immediate error instead of a silent perpetual connect failure. On resolution FAILURE
+/// (hosts may be DNS names that are transiently unresolvable) the write is allowed through;
+/// the dial-time guard in `cupboard_gameconn` remains the backstop.
+pub(crate) async fn reject_blocked_rcon_host(host: &str, port: u16) -> Result<(), AppError> {
+    match cupboard_gameconn::guard::resolves_to_blocked(host, port).await {
+        Ok(true) => Err(AppError::BadRequest(format!(
+            "rcon_host '{host}' resolves to a blocked private/loopback/link-local address"
+        ))),
+        Ok(false) | Err(_) => Ok(()),
     }
 }
 

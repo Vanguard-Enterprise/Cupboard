@@ -3,7 +3,7 @@
 
 use std::env;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub bind_addr: String,
     pub database_url: String,

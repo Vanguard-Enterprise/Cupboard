@@ -2,7 +2,7 @@
 
 use std::env;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub bind_addr: String,
     /// Owner-role connection — migrations + the ingestion consumer's writes (RLS-exempt;

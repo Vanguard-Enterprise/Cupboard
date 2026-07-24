@@ -575,6 +575,7 @@ dependencies = [
  "cupboard-crypto",
  "cupboard-db",
  "cupboard-domain",
+ "cupboard-gameconn",
  "cupboard-telemetry",
  "hex",
  "http-body-util",
@@ -673,7 +674,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tower-http",
  "tracing",
  "uuid",
 ]
@@ -687,6 +687,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "tokio",
+ "tower-http",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

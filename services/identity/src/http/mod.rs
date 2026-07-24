@@ -19,8 +19,6 @@ use axum::{Json, Router};
 use cupboard_auth_core::Claims;
 use cupboard_domain::{OrgId, Permission};
 use serde_json::json;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::Level;
 
 /// Assemble the identity service router (read path; ingestion runs as a background task).
 pub fn router(state: AppState) -> Router {
@@ -97,7 +95,7 @@ pub fn router(state: AppState) -> Router {
                 )),
         )
         .route_layer(axum::middleware::from_fn(cupboard_telemetry::http::track))
-        .layer(TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().level(Level::INFO)))
+        .layer(cupboard_telemetry::http::http_trace_layer())
         .with_state(state)
 }
 

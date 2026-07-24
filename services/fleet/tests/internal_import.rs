@@ -178,7 +178,7 @@ async fn upsert_is_idempotent_and_scoped_per_tenant() {
         "tenant_id": tenant_a,
         "external_id": external_id,
         "name": "Rust Server One",
-        "rcon_host": "203.0.113.20",
+        "rcon_host": "8.8.8.8",
     });
     let res = app
         .clone()
@@ -193,7 +193,7 @@ async fn upsert_is_idempotent_and_scoped_per_tenant() {
         "tenant_id": tenant_a,
         "external_id": external_id,
         "name": "Rust Server One (Renamed)",
-        "rcon_host": "203.0.113.20",
+        "rcon_host": "8.8.8.8",
     });
     let res = app
         .clone()
@@ -230,7 +230,7 @@ async fn upsert_is_idempotent_and_scoped_per_tenant() {
         "tenant_id": tenant_b,
         "external_id": external_id,
         "name": "Rust Server One",
-        "rcon_host": "203.0.113.20",
+        "rcon_host": "8.8.8.8",
     });
     let res = app
         .oneshot(import_request(third, Some(INTERNAL_TOKEN)))
@@ -262,7 +262,7 @@ async fn reimport_does_not_clobber_enabled_or_rcon_credentials() {
         "tenant_id": tenant,
         "external_id": external_id,
         "name": "Before Tenant Configures",
-        "rcon_host": "203.0.113.30",
+        "rcon_host": "8.8.4.4",
     });
     let res = app
         .clone()
@@ -293,7 +293,7 @@ async fn reimport_does_not_clobber_enabled_or_rcon_credentials() {
         "tenant_id": tenant,
         "external_id": external_id,
         "name": "BM Name After Config",
-        "rcon_host": "203.0.113.31",
+        "rcon_host": "9.9.9.9",
     });
     let res = app
         .oneshot(import_request(second, Some(INTERNAL_TOKEN)))
@@ -386,5 +386,35 @@ async fn rejects_invalid_input() {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST, "case: {case}");
+    }
+}
+
+#[tokio::test]
+async fn rejects_rcon_host_in_blocked_range() {
+    // SSRF boundary: a tenant must not register a server whose rcon_host is a
+    // cluster-internal literal (loopback / private / cloud metadata / CGNAT).
+    let Some(state) = setup(Some(INTERNAL_TOKEN)).await else {
+        eprintln!("SKIP rejects_rcon_host_in_blocked_range: TEST_DATABASE_URL unset");
+        return;
+    };
+    let app = router(state);
+
+    for host in ["127.0.0.1", "10.0.0.5", "169.254.169.254", "100.64.0.1"] {
+        let body = serde_json::json!({
+            "tenant_id": Uuid::new_v4(),
+            "external_id": format!("bm-ssrf-{host}"),
+            "name": "SSRF Attempt",
+            "rcon_host": host,
+        });
+        let res = app
+            .clone()
+            .oneshot(import_request(body, Some(INTERNAL_TOKEN)))
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "blocked rcon_host {host} must be rejected"
+        );
     }
 }

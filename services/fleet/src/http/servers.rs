@@ -109,6 +109,7 @@ pub async fn create(
     if let Some(qp) = req.query_port {
         check_port(qp, "query_port")?;
     }
+    crate::http::reject_blocked_rcon_host(rcon_host, req.rcon_port as u16).await?;
 
     let server = servers::create(
         &state.app_pool,
@@ -168,6 +169,14 @@ pub async fn update(
     }
     if let Some(qp) = req.query_port {
         check_port(qp, "query_port")?;
+    }
+    if let Some(host) = &req.rcon_host {
+        let host = host.trim();
+        if !host.is_empty() {
+            // Port is irrelevant to the block decision; use rcon_port when given.
+            let port = req.rcon_port.unwrap_or(28016) as u16;
+            crate::http::reject_blocked_rcon_host(host, port).await?;
+        }
     }
 
     servers::update(

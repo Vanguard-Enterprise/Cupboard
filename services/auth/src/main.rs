@@ -64,6 +64,21 @@ async fn main() -> anyhow::Result<()> {
         }
         None => None,
     };
+
+    // Operator/player JWT boundary (Phase 7 decision K): the two token populations are
+    // separated solely by disjoint Ed25519 keypairs. A misconfig that reused a key would
+    // let one population's tokens verify as the other, so refuse to boot on any overlap.
+    if let Some(p) = &config.player {
+        assert_keys_distinct(&config.jwt_public_key_pem, &p.jwt_public_key_pem)?;
+        if config.jwt_private_key_pem.trim() == p.jwt_private_key_pem.trim() {
+            anyhow::bail!(
+                "operator and player JWT PRIVATE keys are identical; they MUST be disjoint \
+                 keypairs (the operator/player token trust boundary). Check \
+                 JWT_PRIVATE_KEY_PEM vs PLAYER_JWT_PRIVATE_KEY_PEM."
+            );
+        }
+    }
+
     let cookie_key = build_cookie_key(&config)?;
     let http_client = reqwest::Client::builder()
         .build()
@@ -147,6 +162,20 @@ fn build_cookie_key(config: &Config) -> anyhow::Result<Option<Key>> {
     }
 }
 
+/// Refuse to boot if the operator and player JWT PUBLIC keys are identical. That
+/// disjointness is the trust boundary between the two token populations, so equal keys
+/// would let player tokens verify as operator tokens (and vice versa).
+fn assert_keys_distinct(op_pub: &str, player_pub: &str) -> anyhow::Result<()> {
+    if op_pub.trim() == player_pub.trim() {
+        anyhow::bail!(
+            "operator and player JWT PUBLIC keys are identical; they MUST be disjoint \
+             keypairs (the operator/player token trust boundary). Check JWT_PUBLIC_KEY_PEM \
+             vs PLAYER_JWT_PUBLIC_KEY_PEM."
+        );
+    }
+    Ok(())
+}
+
 /// Resolves on SIGTERM (Kubernetes) or Ctrl-C, letting in-flight requests drain.
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -170,4 +199,21 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     tracing::info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assert_keys_distinct;
+
+    #[test]
+    fn distinct_keys_pass() {
+        assert!(assert_keys_distinct("op-pub-key", "player-pub-key").is_ok());
+    }
+
+    #[test]
+    fn identical_keys_refuse_boot() {
+        assert!(assert_keys_distinct("same-key", "same-key").is_err());
+        // Surrounding whitespace must not defeat the check.
+        assert!(assert_keys_distinct("same-key\n", "  same-key").is_err());
+    }
 }
