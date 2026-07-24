@@ -16,6 +16,7 @@ because there is no cupboard-specific notification policy yet.
 | [certificates.md](certificates.md) | Custom-domain TLS certs in `cupboard-web` |
 | [api-and-limiter.md](api-and-limiter.md) | Gateway 5xx rate, rate-limiter fail-open |
 | [billing.md](billing.md) | Stripe webhook ingestion on tenant |
+| [workers.md](workers.md) | Retention purge loops (auth, identity, tenant) + privacy coordinator (auth) stall |
 
 ## Conventions
 
@@ -56,7 +57,6 @@ app-code follow-up, out of PR4 scope. Add the metric, then add the rule.
 | Item | Where | Metric to add |
 |---|---|---|
 | Ticket-stream consumer lag / PEL age | bot | Redis-stream consumer-group lag gauge, for example `cupboard_ticket_stream_pending{group,stream}` and `cupboard_ticket_stream_pel_age_seconds` emitted by the bot consumer loop |
-| Privacy / retention worker stall | auth (coordinator + retention loops), identity, tenant | last-successful-tick gauge, for example `cupboard_privacy_worker_last_success_timestamp_seconds` and per-table purge counters `cupboard_retention_purged_rows_total{schema,table}`; alert on `time() - last_success > 2 * interval` |
 | Stripe reconcile stall | tenant | reconcile-loop last-success gauge, for example `cupboard_billing_reconcile_last_success_timestamp_seconds` (distinct from the live webhook-5xx signal, which is wired) |
 | CNPG backup failed | cupboard-db | needs `barmanObjectStore` + `ScheduledBackup` on the cluster (not configured in staging); then mirror `CNPGBackupFailed` from rules-cnpg |
 | Rustlike perf gauges (`cupboard_server_*`) | collector/metrics ingest | present in code but absent from Mimir until a plugin reports; not an alerting target, informational only |

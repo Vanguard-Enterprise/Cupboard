@@ -29,6 +29,8 @@ anyhow.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+# Worker last-success gauge (privacy coordinator + retention loop, decision L).
+opentelemetry.workspace = true
 
 # Auth-specific
 argon2.workspace = true

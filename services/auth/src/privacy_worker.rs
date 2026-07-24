@@ -27,10 +27,12 @@ use crate::domain::privacy_walk::{self, Scope, Subject};
 use chrono::Utc;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use opentelemetry::metrics::ObservableGauge;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::io::Write as _;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::Instrument as _;
 use uuid::Uuid;
@@ -71,10 +73,41 @@ pub async fn run(owner_pool: PgPool, http: reqwest::Client, config: Arc<Config>)
                     .await;
             })
         };
-        if let Err(e) = tick.await {
-            tracing::error!(error = %e, "privacy worker tick crashed; the loop continues");
+        // A tick that returns (no panic) is a completed drain pass; stamp the
+        // last-success gauge so a stalled/dead loop is detectable (decision L).
+        match tick.await {
+            Ok(()) => record_privacy_success(),
+            Err(e) => {
+                tracing::error!(error = %e, "privacy worker tick crashed; the loop continues")
+            }
         }
     }
+}
+
+/// Stamp the last successful privacy-coordinator drain pass as unix seconds on an OTel
+/// observable gauge (`cupboard_privacy_worker_last_success_seconds` in Mimir), so an
+/// alert can flag a stalled/dead worker with `time() - <metric>`. Observable (not
+/// synchronous) so the callback re-observes the stored value every export cycle and
+/// the series stays present between ticks. Zero extra labels (decision L cardinality
+/// budget); the metric only ever appears when the worker runs (PRIVACY_TOKEN set), so
+/// it is simply absent otherwise (noData -> OK). The global meter is a no-op when
+/// telemetry is logs-only.
+fn record_privacy_success() {
+    static LAST_SUCCESS: AtomicI64 = AtomicI64::new(0);
+    static GAUGE: OnceLock<ObservableGauge<i64>> = OnceLock::new();
+    GAUGE.get_or_init(|| {
+        opentelemetry::global::meter("cupboard.auth")
+            .i64_observable_gauge("cupboard.privacy_worker.last_success_seconds")
+            .with_description("Unix time (s) of the last successful privacy-coordinator drain pass")
+            .with_callback(|observer| {
+                let last = LAST_SUCCESS.load(Ordering::Relaxed);
+                if last > 0 {
+                    observer.observe(last, &[]);
+                }
+            })
+            .build()
+    });
+    LAST_SUCCESS.store(Utc::now().timestamp(), Ordering::Relaxed);
 }
 
 /// One worker tick: reclaim stale running jobs, then drain the queue. Public so
