@@ -44,7 +44,7 @@ export default async function PlayersPage() {
         </p>
       ) : (
         <div className="overflow-hidden rounded border border-neutral-800">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
                 <th className="px-3 py-2">#</th>

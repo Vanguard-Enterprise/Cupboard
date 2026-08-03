@@ -59,7 +59,7 @@ export default async function BansPage() {
           <p className="text-sm text-neutral-500">No bans yet.</p>
         ) : (
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
                   <th className="px-3 py-2">Subject</th>
@@ -88,7 +88,7 @@ export default async function BansPage() {
                       {new Date(b.issued_at).toLocaleString()}
                     </td>
                     {canRevoke && (
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-end">
                         {b.status === "active" && (
                           <form action={revokeBanAction}>
                             <input type="hidden" name="ban_id" value={b.id} />

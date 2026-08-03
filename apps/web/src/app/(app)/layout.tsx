@@ -18,7 +18,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-60 flex-col gap-4 border-r border-neutral-800 p-4">
+      <aside className="flex w-60 flex-col gap-4 border-e border-neutral-800 p-4">
         <div className="text-lg font-semibold">Cupboard</div>
         <TenantSwitcher orgs={orgs} current={session.org} />
         <nav className="flex flex-col gap-1 text-sm">

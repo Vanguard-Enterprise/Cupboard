@@ -124,11 +124,11 @@ function LineChart({
       <details className="mt-2">
         <summary className="cursor-pointer text-xs text-neutral-500">View as table</summary>
         <div className="mt-2 max-h-40 overflow-y-auto">
-          <table className="w-full text-left text-xs text-neutral-400">
+          <table className="w-full text-start text-xs text-neutral-400">
             <tbody>
               {points.map((p, i) => (
                 <tr key={i}>
-                  <td className="pr-4">{time(p.at)}</td>
+                  <td className="pe-4">{time(p.at)}</td>
                   <td className="tabular-nums">{format(p.v)}</td>
                 </tr>
               ))}

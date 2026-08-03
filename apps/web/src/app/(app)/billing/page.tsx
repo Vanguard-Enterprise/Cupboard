@@ -139,7 +139,7 @@ function PlanCard({ sub }: { sub: Subscription }) {
         </div>
         {sub.status !== "none" && (
           <span
-            className={`ml-auto rounded px-2 py-0.5 text-xs ${STATUS_STYLES[sub.status] ?? "bg-neutral-800 text-neutral-400"}`}
+            className={`ms-auto rounded px-2 py-0.5 text-xs ${STATUS_STYLES[sub.status] ?? "bg-neutral-800 text-neutral-400"}`}
           >
             {sub.status.replace("_", " ")}
           </span>
@@ -175,7 +175,7 @@ function ServiceCard({ service }: { service: ServiceItem }) {
     <div className="flex w-full max-w-xl flex-col gap-3 rounded border border-neutral-800 px-4 py-3">
       <div className="flex items-baseline gap-3">
         <div className="text-lg font-semibold">{service.name}</div>
-        <div className="ml-auto text-sm text-neutral-400">
+        <div className="ms-auto text-sm text-neutral-400">
           {formatAmount(service.price_amount, service.currency)} one-time
         </div>
       </div>
@@ -207,7 +207,7 @@ function PurchaseHistory({
   const names = new Map(services.map((s) => [s.key, s.name]));
   return (
     <div className="overflow-hidden rounded border border-neutral-800">
-      <table className="w-full text-left text-sm">
+      <table className="w-full text-start text-sm">
         <thead className="bg-neutral-900 text-neutral-400">
           <tr>
             <th className="px-3 py-2">Service</th>

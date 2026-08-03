@@ -25,7 +25,7 @@ export function TicketControls({
       <div className="flex flex-wrap items-center gap-6">
         <form action={statusAction} className="flex items-center gap-1">
           <input type="hidden" name="ticket_id" value={ticketId} />
-          <span className="mr-1 text-xs text-neutral-500">Status</span>
+          <span className="me-1 text-xs text-neutral-500">Status</span>
           {TICKET_STATUSES.map((s) => (
             <button
               key={s}

@@ -50,7 +50,7 @@ export default async function EvasionPage() {
         <p className="text-sm text-neutral-500">No evasion alerts.</p>
       ) : (
         <div className="overflow-hidden rounded border border-neutral-800">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
                 <th className="px-3 py-2">Suspect</th>
@@ -86,7 +86,7 @@ export default async function EvasionPage() {
                     {new Date(a.detected_at).toLocaleString()}
                   </td>
                   {canAct && (
-                    <td className="px-3 py-2 text-right">
+                    <td className="px-3 py-2 text-end">
                       {a.status === "open" && (
                         <div className="flex justify-end gap-3">
                           <form action={actionEvasionAction}>

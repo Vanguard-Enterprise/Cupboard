@@ -71,7 +71,7 @@ function CountsTable({ counts }: { counts: PrivacyCounts }) {
   }
   return (
     <div className="overflow-hidden rounded border border-neutral-800">
-      <table className="w-full text-left text-xs">
+      <table className="w-full text-start text-xs">
         <thead className="bg-neutral-900 text-neutral-400">
           <tr>
             <th className="px-3 py-1.5">Service</th>
@@ -175,7 +175,7 @@ export default async function PrivacyPage({
           <p className="text-sm text-neutral-500">No privacy jobs yet.</p>
         ) : (
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
                   <th className="px-3 py-2">Kind</th>

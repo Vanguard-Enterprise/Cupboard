@@ -110,7 +110,7 @@ export default async function BattlemetricsConflictsPage() {
         <p className="text-sm text-neutral-500">No sync conflicts. Everything is aligned.</p>
       ) : (
         <div className="overflow-hidden rounded border border-neutral-800">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
                 <th className="px-3 py-2">When</th>

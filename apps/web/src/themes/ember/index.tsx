@@ -42,7 +42,7 @@ function Shell({ site, config, children }: ThemeProps & { children: ReactNode })
             </div>
           )}
           <span className="text-lg font-semibold tracking-tight">{name}</span>
-          <nav className="ml-auto flex items-center gap-5 text-sm text-[var(--sf-fg)]/80">
+          <nav className="ms-auto flex items-center gap-5 text-sm text-[var(--sf-fg)]/80">
             {links.map((l) => (
               <a
                 key={`${l.label}-${l.url}`}
