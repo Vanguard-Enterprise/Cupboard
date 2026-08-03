@@ -53,7 +53,7 @@ function FilterRow({
     `rounded px-2 py-0.5 ${active ? "bg-neutral-800 text-neutral-100" : "text-neutral-400 hover:text-neutral-200"}`;
   return (
     <div className="flex items-center gap-1 text-xs">
-      <span className="mr-1 text-neutral-500">{label}</span>
+      <span className="me-1 text-neutral-500">{label}</span>
       <Link href={href()} className={cls(!current)}>
         All
       </Link>
@@ -120,7 +120,7 @@ export default async function TicketsPage({
           <p className="text-sm text-neutral-500">No tickets.</p>
         ) : (
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
                   <th className="px-3 py-2">Subject</th>
@@ -141,7 +141,7 @@ export default async function TicketsPage({
                         {t.subject}
                       </Link>
                       {t.category && (
-                        <span className="ml-2 text-xs text-neutral-500">{t.category}</span>
+                        <span className="ms-2 text-xs text-neutral-500">{t.category}</span>
                       )}
                     </td>
                     <td className="px-3 py-2">
@@ -217,7 +217,7 @@ export default async function TicketsPage({
                 </p>
                 {/* TODO: once a NEXT_PUBLIC_DISCORD_CLIENT_ID is available in the web
                     env, replace step 1 with a prebuilt bot invite link. */}
-                <ol className="list-decimal space-y-1 pl-5 text-neutral-400">
+                <ol className="list-decimal space-y-1 ps-5 text-neutral-400">
                   <li>Invite the Cupboard bot to your Discord server.</li>
                   <li>Generate a setup code below.</li>
                   <li>

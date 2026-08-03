@@ -60,7 +60,7 @@ export function WebhookSetup({
                 {copied ? "Copied" : "Copy"}
               </button>
             </div>
-            <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-neutral-500">
+            <ol className="mt-3 list-decimal space-y-1 ps-5 text-xs text-neutral-500">
               <li>
                 In your Tebex creator panel, add this URL as a webhook endpoint subscribed to
                 payment events.

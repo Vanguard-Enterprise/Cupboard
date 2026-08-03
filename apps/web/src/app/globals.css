@@ -24,6 +24,14 @@
   --border: #ffffff16;
   --input: #ffffff20;
   --ring: #9b88ff;
+  --sidebar: #0d1016;
+  --sidebar-foreground: #f6f7fb;
+  --sidebar-primary: #7657ff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1b1f29;
+  --sidebar-accent-foreground: #f6f7fb;
+  --sidebar-border: #ffffff16;
+  --sidebar-ring: #9b88ff;
   --radius: 0.625rem;
 }
 
@@ -46,6 +54,14 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);

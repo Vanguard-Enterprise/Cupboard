@@ -64,7 +64,7 @@ export default async function ApiKeysPage() {
           <p className="text-sm text-neutral-500">No API keys yet.</p>
         ) : (
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
                   <th className="px-3 py-2">Name</th>
@@ -116,7 +116,7 @@ export default async function ApiKeysPage() {
                           {status}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="px-3 py-2 text-end">
                         {!key.revoked_at && (
                           <form action={revokeApiKeyAction}>
                             <input type="hidden" name="key_id" value={key.id} />

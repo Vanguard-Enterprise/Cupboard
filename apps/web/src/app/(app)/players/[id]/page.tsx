@@ -117,7 +117,7 @@ export default async function PlayerProfilePage({
             </>
           )}
           {profile.reports_against.length > 0 && (
-            <span className="ml-2 rounded bg-red-950 px-2 py-0.5 text-xs text-red-300">
+            <span className="ms-2 rounded bg-red-950 px-2 py-0.5 text-xs text-red-300">
               {profile.reports_against.length} report(s)
             </span>
           )}
@@ -143,7 +143,7 @@ export default async function PlayerProfilePage({
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-300">Identifiers</h2>
         <div className="overflow-hidden rounded border border-neutral-800">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
                 <th className="px-3 py-2">Type</th>
@@ -169,7 +169,7 @@ export default async function PlayerProfilePage({
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-300">Recent sessions</h2>
         <div className="overflow-hidden rounded border border-neutral-800">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
                 <th className="px-3 py-2">Name</th>
@@ -202,7 +202,7 @@ export default async function PlayerProfilePage({
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-neutral-300">Linked players (possible alts)</h2>
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <thead className="bg-neutral-900 text-neutral-400">
                 <tr>
                   <th className="px-3 py-2">Player</th>
@@ -246,7 +246,7 @@ export default async function PlayerProfilePage({
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-neutral-300">Reports against this player</h2>
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <tbody>
                 {profile.reports_against.map((r) => (
                   <tr key={r.id} className="border-t border-neutral-800 first:border-t-0 align-top">
@@ -275,7 +275,7 @@ export default async function PlayerProfilePage({
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-neutral-300">Recent chat</h2>
           <div className="overflow-hidden rounded border border-neutral-800">
-            <table className="w-full text-left text-sm">
+            <table className="w-full text-start text-sm">
               <tbody>
                 {chat.map((m) => (
                   <tr key={m.id} className="border-t border-neutral-800 first:border-t-0 align-top">

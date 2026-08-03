@@ -40,7 +40,7 @@ export default function PrivacyDisclosurePage() {
       </p>
 
       <Section title="What we collect">
-        <ul className="list-disc space-y-1.5 pl-5">
+        <ul className="list-disc space-y-1.5 ps-5">
           <li>
             <strong>Identifiers</strong>: your Steam ID, and your Discord ID if you link
             Discord, plus the display names and avatars those accounts expose.
@@ -73,7 +73,7 @@ export default function PrivacyDisclosurePage() {
       </Section>
 
       <Section title="Why we can use it (lawful bases)">
-        <ul className="list-disc space-y-1.5 pl-5">
+        <ul className="list-disc space-y-1.5 ps-5">
           <li>
             <strong>Contract</strong>: running your account, delivering store purchases,
             and answering your support tickets.
@@ -95,7 +95,7 @@ export default function PrivacyDisclosurePage() {
           Raw data ages out on fixed schedules; these run automatically, not on request.
         </p>
         <div className="overflow-hidden rounded-xl border border-[var(--sf-border)]">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-[var(--sf-card)] text-[var(--sf-muted)]">
               <tr>
                 <th className="px-4 py-2 font-medium">Data</th>
@@ -125,7 +125,7 @@ export default function PrivacyDisclosurePage() {
           Wherever you live, you can get a copy of your data and you can ask us to delete
           it, and both are self-serve:
         </p>
-        <ul className="list-disc space-y-1.5 pl-5">
+        <ul className="list-disc space-y-1.5 ps-5">
           <li>
             <strong>Download my data</strong> and <strong>Delete my data</strong> live on
             your{" "}
@@ -152,7 +152,7 @@ export default function PrivacyDisclosurePage() {
 
       <Section title="What deletion keeps, and why">
         <p>When you delete your data, almost everything goes. Two things remain:</p>
-        <ul className="list-disc space-y-1.5 pl-5">
+        <ul className="list-disc space-y-1.5 ps-5">
           <li>
             <strong>Ban enforcement fingerprints.</strong> If you were banned, we keep a
             one-way hash of the banned identifier. It cannot be turned back into who you

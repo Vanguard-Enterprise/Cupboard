@@ -210,7 +210,7 @@ function MessageRow({ message }: { message: Message }) {
           <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-neutral-400">internal</span>
         )}
         {message.origin !== "web" && <span>via {message.origin}</span>}
-        <span className="ml-auto">{new Date(message.created_at).toLocaleString()}</span>
+        <span className="ms-auto">{new Date(message.created_at).toLocaleString()}</span>
       </div>
       <p className={`mt-1 whitespace-pre-wrap break-words ${message.internal ? "text-neutral-400" : ""}`}>
         {message.body}

@@ -46,7 +46,7 @@ export default async function StaffPage() {
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-neutral-300">Members</h2>
         <div className="overflow-hidden rounded border border-neutral-800">
-          <table className="w-full text-left text-sm">
+          <table className="w-full text-start text-sm">
             <thead className="bg-neutral-900 text-neutral-400">
               <tr>
                 <th className="px-3 py-2">Name</th>

@@ -66,7 +66,7 @@ function Step({
           {complete ? "✓" : n}
         </span>
         <h2 className="text-base font-medium text-neutral-100">{title}</h2>
-        <span className="ml-auto text-xs">
+        <span className="ms-auto text-xs">
           {complete && (
             <span className="rounded bg-green-900 px-2 py-0.5 text-green-300">Complete</span>
           )}
@@ -199,7 +199,7 @@ export default async function BattlemetricsPage() {
           />
           {banLists.length > 0 ? (
             <div className="overflow-hidden rounded border border-neutral-800">
-              <table className="w-full text-left text-sm">
+              <table className="w-full text-start text-sm">
                 <thead className="bg-neutral-900 text-neutral-400">
                   <tr>
                     <th className="px-3 py-2">Name</th>
