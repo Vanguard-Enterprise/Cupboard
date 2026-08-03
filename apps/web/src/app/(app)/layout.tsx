@@ -4,6 +4,7 @@ import { getSession, listOrgs } from "@/lib/api";
 import { logoutAction } from "@/lib/actions";
 import { can, Permission } from "@/lib/permissions";
 import { appPath } from "@/lib/paths";
+import { DirectionToggle } from "@/components/direction-toggle";
 import { TenantSwitcher } from "./tenant-switcher";
 
 // Protected shell. Requires a session; routes the user to onboarding when they have no
@@ -105,6 +106,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </Link>
           )}
         </nav>
+        <div className="mt-auto">
+          <DirectionToggle />
+        </div>
         <form action={logoutAction} className="mt-auto">
           <button className="text-sm text-neutral-400 hover:text-neutral-100">Sign out</button>
         </form>
