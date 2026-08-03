@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { useActionState } from "react";
 import { loginAction } from "@/lib/actions";
 
@@ -8,6 +9,15 @@ const DISCORD_START = `${process.env.NEXT_PUBLIC_GATEWAY_URL ?? ""}/auth/discord
 
 export default function LoginPage() {
   const [state, action, pending] = useActionState(loginAction, {});
+
+  // A full navigation is intentional here. The session cookies are written by the
+  // Server Action response; navigating only after the client receives that response
+  // guarantees the protected layout sees them and avoids an intermittent App Router
+  // 404 during the action's redirect flight.
+  useEffect(() => {
+    if (state.redirectTo) window.location.assign(state.redirectTo);
+  }, [state.redirectTo]);
+
   return (
     <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 p-6">
       <h1 className="text-2xl font-semibold">Sign in to Cupboard</h1>
