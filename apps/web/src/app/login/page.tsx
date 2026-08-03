@@ -5,7 +5,7 @@ import { useEffect } from "react";
 import { useActionState } from "react";
 import { loginAction } from "@/lib/actions";
 
-const DISCORD_START = `${process.env.NEXT_PUBLIC_GATEWAY_URL ?? ""}/auth/discord/start`;
+const DISCORD_START = "/api/auth/discord/start";
 
 export default function LoginPage() {
   const [state, action, pending] = useActionState(loginAction, {});

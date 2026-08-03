@@ -6,6 +6,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { DEFAULT_THEME_ID } from "@/themes/catalog";
+import { appPath } from "@/lib/paths";
 import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
 
 export type FormState = { error?: string; redirectTo?: string };
@@ -24,9 +25,9 @@ async function readError(res: Response): Promise<string> {
 async function postAuthTarget(tokens: Tokens): Promise<string> {
   await setSession(tokens, null);
   const orgs = await listOrgs();
-  if (orgs.length === 0) return "/onboarding";
+  if (orgs.length === 0) return appPath("/onboarding");
   await scopeToOrg(orgs[0].id);
-  return "/dashboard";
+  return appPath("/dashboard");
 }
 
 async function scopeToOrg(orgId: string): Promise<void> {
@@ -77,14 +78,14 @@ export async function createOrgAction(_prev: FormState, form: FormData): Promise
   if (!res.ok) return { error: await readError(res) };
   const org = await res.json();
   await scopeToOrg(org.id);
-  redirect("/dashboard");
+  redirect(appPath("/dashboard"));
   return {};
 }
 
 export async function switchOrgAction(form: FormData): Promise<void> {
   const orgId = form.get("org_id");
   if (typeof orgId === "string") await scopeToOrg(orgId);
-  redirect("/dashboard");
+  redirect(appPath("/dashboard"));
 }
 
 export async function acceptInviteAction(_prev: FormState, form: FormData): Promise<FormState> {
@@ -102,7 +103,7 @@ export async function acceptInviteAction(_prev: FormState, form: FormData): Prom
   // Accept returns an org-scoped session already.
   const tokens = (await res.json()) as Tokens;
   await setSession(tokens, null);
-  redirect("/dashboard");
+  redirect(appPath("/dashboard"));
   return {};
 }
 
@@ -877,7 +878,7 @@ export async function createPrivacyJobAction(
     body: JSON.stringify(body),
   });
   if (!res.ok) return { error: await readError(res) };
-  redirect(`/privacy?flag=${kind}_started`);
+  redirect(appPath(`/privacy?flag=${kind}_started`));
   return {};
 }
 
@@ -907,5 +908,5 @@ export async function logoutAction(): Promise<void> {
     }).catch(() => {});
   }
   await clearSession();
-  redirect("/login");
+  redirect(appPath("/login"));
 }
