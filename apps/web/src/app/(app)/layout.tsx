@@ -3,14 +3,15 @@ import { redirect } from "next/navigation";
 import { getSession, listOrgs } from "@/lib/api";
 import { logoutAction } from "@/lib/actions";
 import { can, Permission } from "@/lib/permissions";
+import { appPath } from "@/lib/paths";
 import { TenantSwitcher } from "./tenant-switcher";
 
 // Protected shell. Requires a session; routes the user to onboarding when they have no
 // active org. Nav links are RBAC-gated (the backend also enforces every action).
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect("/login");
-  if (!session.org) redirect("/onboarding");
+  if (!session) redirect(appPath("/login"));
+  if (!session.org) redirect(appPath("/onboarding"));
   const orgs = await listOrgs();
   const perms = session.permissions;
 
