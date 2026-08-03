@@ -8,7 +8,7 @@ import { revalidatePath } from "next/cache";
 import { DEFAULT_THEME_ID } from "@/themes/catalog";
 import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
 
-export type FormState = { error?: string };
+export type FormState = { error?: string; redirectTo?: string };
 
 async function readError(res: Response): Promise<string> {
   try {
@@ -21,12 +21,12 @@ async function readError(res: Response): Promise<string> {
 
 /** After authenticating, scope the session to an org (the only one, or the first) and go
  * to the dashboard; with no orgs yet, go to onboarding. */
-async function postAuthRedirect(tokens: Tokens): Promise<never> {
+async function postAuthTarget(tokens: Tokens): Promise<string> {
   await setSession(tokens, null);
   const orgs = await listOrgs();
-  if (orgs.length === 0) redirect("/onboarding");
+  if (orgs.length === 0) return "/onboarding";
   await scopeToOrg(orgs[0].id);
-  redirect("/dashboard");
+  return "/dashboard";
 }
 
 async function scopeToOrg(orgId: string): Promise<void> {
@@ -50,8 +50,7 @@ export async function loginAction(_prev: FormState, form: FormData): Promise<For
     cache: "no-store",
   });
   if (!res.ok) return { error: await readError(res) };
-  await postAuthRedirect((await res.json()) as Tokens);
-  return {};
+  return { redirectTo: await postAuthTarget((await res.json()) as Tokens) };
 }
 
 export async function signupAction(_prev: FormState, form: FormData): Promise<FormState> {
@@ -66,8 +65,7 @@ export async function signupAction(_prev: FormState, form: FormData): Promise<Fo
     cache: "no-store",
   });
   if (!res.ok) return { error: await readError(res) };
-  await postAuthRedirect((await res.json()) as Tokens);
-  return {};
+  redirect(await postAuthTarget((await res.json()) as Tokens));
 }
 
 export async function createOrgAction(_prev: FormState, form: FormData): Promise<FormState> {
