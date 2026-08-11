@@ -12,6 +12,7 @@
 
 # Logs
 *.log
+/.dev-stack/
 
 # Rust build artifacts
 /target

@@ -17,3 +17,19 @@
 - The shared shadcn `Card` has a default flex gap between its children. When a
   `CardHeader` sits directly above `CardContent` containing a table or other flush
   surface, use `className="gap-0"` on that card to avoid an unintended blank strip.
+
+# Local development stack
+
+- When the user asks to start, spin up, restart, or check the local Cupboard stack, use
+  `./scripts/dev-stack.sh start`, `restart`, or `status` from the repository root. Do
+  not assemble an ad-hoc set of background commands.
+- The launcher keeps PostgreSQL and Redis in Podman, runs every Rust service through
+  `cargo watch`, runs the dashboard with Next.js development mode, and runs the
+  marketing server with Node watch mode. It binds all HTTP services to `0.0.0.0` and
+  prints the detected LAN/NetBird URLs after startup.
+- The Discord bot joins the hot-reload stack when `DISCORD_BOT_TOKEN` is present in
+  `.dev-stack/stack.env`; otherwise the launcher reports that it was skipped. Never
+  print or commit that private environment file.
+- Use `./scripts/dev-stack.sh logs <component>` for diagnostics and
+  `./scripts/dev-stack.sh stop` to stop application watchers. Use `down` only when the
+  user also wants the PostgreSQL and Redis containers stopped; data volumes are kept.
