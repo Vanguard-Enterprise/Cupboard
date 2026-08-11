@@ -14,3 +14,6 @@
 - All new layouts and interactions must work in both `dir="ltr"` and `dir="rtl"`. Prefer
   logical spacing/alignment utilities (`ms`, `me`, `ps`, `pe`, `start`, `end`) and keep
   the direction provider intact.
+- The shared shadcn `Card` has a default flex gap between its children. When a
+  `CardHeader` sits directly above `CardContent` containing a table or other flush
+  surface, use `className="gap-0"` on that card to avoid an unintended blank strip.
