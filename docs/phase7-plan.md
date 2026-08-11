@@ -1,5 +1,14 @@
 # Cupboard Phase 7 - Implementation Plan (Compliance, security hardening & cutover readiness)
 
+> **Live closeout audit (2026-08-03):** DoD 1–3 pass on `use1`; DoD 4 is not ready,
+> so the phase remains open. Cilium, enforced policies, and strict Linkerd mTLS are
+> already deployed (PR5–PR7 plan language below is historical). Evidence and remaining
+> gates: `docs/phase7-closeout.md`.
+>
+> **Operator hold (2026-08-03):** production placement is `use1`. PR8 production
+> environment and cutover work waits for Cupboard's EIN, acquired domain, and live
+> Stripe setup; staging testing and development continue meanwhile.
+
 > Turns ROADMAP Phase 7 (rescoped 2026-07-21: capacity scale-up, load test, and
 > demand-gated items moved to Phase 8) into a sequenced, de-risked build. Follows the
 > shape that worked for Phases 2-6. Inputs: the 2026-07-21 scouting briefs (player-PII

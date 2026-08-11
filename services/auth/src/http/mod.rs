@@ -45,9 +45,15 @@ pub fn router(state: AppState) -> Router {
         )
         // Members + role assignment
         .route("/auth/members", get(members::list))
+        .route(
+            "/auth/members/{id}",
+            patch(members::update).delete(members::remove),
+        )
         .route("/auth/members/{id}/roles", put(members::set_roles))
         // Staff invites (accept is public — no token yet)
         .route("/auth/invites", post(invites::create).get(invites::list))
+        .route("/auth/invites/{id}", patch(invites::update))
+        .route("/auth/invites/{id}/cancel", post(invites::cancel))
         .route("/auth/invites/accept", post(invites::accept))
         // Public API keys (management requires `api.manage`)
         .route("/auth/api-keys", get(api_keys::list).post(api_keys::create))

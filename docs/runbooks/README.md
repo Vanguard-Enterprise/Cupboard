@@ -58,7 +58,7 @@ app-code follow-up, out of PR4 scope. Add the metric, then add the rule.
 |---|---|---|
 | Ticket-stream consumer lag / PEL age | bot | Redis-stream consumer-group lag gauge, for example `cupboard_ticket_stream_pending{group,stream}` and `cupboard_ticket_stream_pel_age_seconds` emitted by the bot consumer loop |
 | Stripe reconcile stall | tenant | reconcile-loop last-success gauge, for example `cupboard_billing_reconcile_last_success_timestamp_seconds` (distinct from the live webhook-5xx signal, which is wired) |
-| CNPG backup failed | cupboard-db | needs `barmanObjectStore` + `ScheduledBackup` on the cluster (not configured in staging); then mirror `CNPGBackupFailed` from rules-cnpg |
+| CNPG backup failed | cupboard-db | Longhorn volume backups exist and have passed an isolated restore, but CNPG-native `barmanObjectStore` + `ScheduledBackup`/PITR are not configured; add them, test PITR, then mirror `CNPGBackupFailed` from rules-cnpg |
 | Rustlike perf gauges (`cupboard_server_*`) | collector/metrics ingest | present in code but absent from Mimir until a plugin reports; not an alerting target, informational only |
 
 Note on `CupboardRateLimiterFailOpen`: the counter `gateway_ratelimit_fail_open`

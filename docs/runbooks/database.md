@@ -1,8 +1,12 @@
 # Database runbook
 
 CNPG cluster `cupboard` in namespace `cupboard-db`. Staging is a single instance
-(`instances: 1`) on the memory-bound use1 cluster, no S3 backup configured. All
-cupboard services connect through the `cupboard-pooled-rw` pooler to the primary.
+(`instances: 1`) on the memory-bound use1 cluster. CNPG-native object-store backup
+and PITR are not configured. The underlying Longhorn PVC is covered by hourly S3
+volume backups; a 2026-08-03 isolated restore booted PostgreSQL, read all 70 application
+tables, and completed a logical dump scan (`docs/phase7-closeout.md`). Treat that as
+crash-consistent disaster recovery, not a substitute for CNPG base backups + WAL/PITR.
+All cupboard services connect through the `cupboard-pooled-rw` pooler to the primary.
 
 Degradation matrix: `docs/phase6-closeout.md` (Phase 6 capabilities under "CNPG down")
 and `docs/phase7-plan.md` (privacy loops under "CNPG down").

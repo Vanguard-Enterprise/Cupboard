@@ -21,8 +21,8 @@ type ServerRow = { server_id: string; latest: Sample };
 type Detail = { latest: Sample | null; series: Sample[]; recommendations: Recommendation[] };
 type Server = { id: string; name: string };
 
-// Series color: the validated dark-surface blue (dataviz reference palette, slot 1).
-const SERIES = "#3987e5";
+// Ordinary performance data stays neutral; semantic color is reserved for severity badges.
+const SERIES = "var(--foreground)";
 
 const SEVERITY_STYLES: Record<Recommendation["severity"], string> = {
   critical: "bg-red-950 text-red-300",

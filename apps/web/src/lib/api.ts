@@ -12,6 +12,21 @@ export function gatewayBase(): string {
   return process.env.GATEWAY_URL ?? "http://localhost:18080";
 }
 
+/** Fetch the local gateway without turning an offline dev dependency into an SSR crash. */
+export async function gatewayFetch(path: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(gatewayBase() + path, init);
+  } catch {
+    return new Response(
+      JSON.stringify({
+        error: "gateway_unavailable",
+        message: "The Cupboard API is unavailable. Start the local gateway or set GATEWAY_URL.",
+      }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+  }
+}
+
 export type Session = {
   user: { id: string; email: string | null; display_name: string };
   org: string | null;
@@ -59,13 +74,13 @@ function withAuth(init: RequestInit | undefined, token: string | undefined): Req
 /** Authenticated server-side fetch to the gateway, with a single silent refresh on 401. */
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const access = await cookieValue(ACCESS);
-  const res = await fetch(gatewayBase() + path, withAuth(init, access));
+  const res = await gatewayFetch(path, withAuth(init, access));
   if (res.status !== 401) return res;
 
   const refresh = await cookieValue(REFRESH);
   if (!refresh) return res;
   const org = await cookieValue(ORG);
-  const refreshed = await fetch(gatewayBase() + "/auth/token", {
+  const refreshed = await gatewayFetch("/auth/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ refresh_token: refresh, org_id: org ?? null }),
@@ -83,7 +98,7 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
   } catch {
     // Rendering context; the refreshed token is still used for the current request.
   }
-  return fetch(gatewayBase() + path, withAuth(init, tokens.access_token));
+  return gatewayFetch(path, withAuth(init, tokens.access_token));
 }
 
 /** The current session (user + active org + permissions), or null if unauthenticated. */

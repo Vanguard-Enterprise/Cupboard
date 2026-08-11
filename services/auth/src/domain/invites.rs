@@ -18,6 +18,8 @@ pub struct Invite {
     pub email: String,
     pub status: String,
     pub expires_at: DateTime<Utc>,
+    pub role_ids: Vec<Uuid>,
+    pub roles: Vec<String>,
 }
 
 /// A freshly-created invite plus the raw accept token (shown once, embedded in the link).
@@ -64,7 +66,8 @@ pub async fn create_invite(
 
     let invite = sqlx::query_as::<_, Invite>(
         "INSERT INTO invites (organization_id, email, token_hash, invited_by, expires_at) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id, email, status, expires_at",
+         VALUES ($1, $2, $3, $4, $5) \
+         RETURNING id, email, status, expires_at, ARRAY[]::uuid[] AS role_ids, ARRAY[]::text[] AS roles",
     )
     .bind(tenant.0)
     .bind(email)
@@ -93,13 +96,90 @@ pub async fn create_invite(
 pub async fn list_pending(app_pool: &PgPool, tenant: TenantId) -> Result<Vec<Invite>, AppError> {
     let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
     let invites = sqlx::query_as::<_, Invite>(
-        "SELECT id, email, status, expires_at FROM invites \
-         WHERE status = 'pending' ORDER BY created_at DESC",
+        "SELECT i.id, i.email, i.status, i.expires_at, \
+                COALESCE(array_agg(ir.role_id ORDER BY ir.role_id) FILTER (WHERE ir.role_id IS NOT NULL), '{}') AS role_ids, \
+                COALESCE(array_agg(r.name ORDER BY ir.role_id) FILTER (WHERE r.name IS NOT NULL), '{}') AS roles \
+         FROM invites i \
+         LEFT JOIN invite_roles ir ON ir.invite_id = i.id \
+         LEFT JOIN roles r ON r.id = ir.role_id \
+         WHERE i.status = 'pending' \
+         GROUP BY i.id ORDER BY i.created_at DESC",
     )
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(invites)
+}
+
+/// Replace the roles attached to a pending invite. Tenant RLS validates that the
+/// invite and every selected role belong to the active organization.
+pub async fn set_invite_roles(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    invite_id: Uuid,
+    role_ids: &[Uuid],
+) -> Result<(), AppError> {
+    let mut unique: Vec<Uuid> = role_ids.to_vec();
+    unique.sort();
+    unique.dedup();
+
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let pending: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM invites WHERE id = $1 AND status = 'pending'")
+            .bind(invite_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if pending.is_none() {
+        return Err(AppError::NotFound("pending invite not found".into()));
+    }
+
+    if !unique.is_empty() {
+        let found: i64 = sqlx::query_scalar("SELECT count(*) FROM roles WHERE id = ANY($1)")
+            .bind(&unique)
+            .fetch_one(&mut *tx)
+            .await?;
+        if found as usize != unique.len() {
+            return Err(AppError::BadRequest(
+                "one or more roles do not exist in this organization".into(),
+            ));
+        }
+    }
+
+    sqlx::query("DELETE FROM invite_roles WHERE invite_id = $1")
+        .bind(invite_id)
+        .execute(&mut *tx)
+        .await?;
+    for role_id in &unique {
+        sqlx::query(
+            "INSERT INTO invite_roles (organization_id, invite_id, role_id) VALUES ($1, $2, $3)",
+        )
+        .bind(tenant.0)
+        .bind(invite_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Revoke a pending invite so its accept token can no longer be used.
+pub async fn revoke_invite(
+    app_pool: &PgPool,
+    tenant: TenantId,
+    invite_id: Uuid,
+) -> Result<(), AppError> {
+    let mut tx = cupboard_db::begin_tenant_tx(app_pool, tenant).await?;
+    let result =
+        sqlx::query("UPDATE invites SET status = 'revoked' WHERE id = $1 AND status = 'pending'")
+            .bind(invite_id)
+            .execute(&mut *tx)
+            .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("pending invite not found".into()));
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// The result of accepting an invite: the (possibly newly-created) user and the org they
