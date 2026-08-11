@@ -38,7 +38,7 @@ function classifyHost(rawHost: string): { admin: boolean; host: string } {
   return { admin: admins.has(full) || admins.has(bare), host: bare };
 }
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { admin, host } = classifyHost(req.headers.get("host") ?? "");
   const { pathname } = req.nextUrl;
 

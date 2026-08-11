@@ -109,6 +109,12 @@
 
 ## Phase 7 - Compliance, security hardening & cutover readiness  · size **M/L**
 
+**Status (2026-08-03):** live closeout audit completed. Privacy/security/network DoD
+items 1–3 pass; production cutover readiness (DoD 4) remains open. See
+`docs/phase7-closeout.md`.
+Production placement is `use1`; production environment work is intentionally held
+until Cupboard has its EIN, domain, and live Stripe setup.
+
 **Goal:** legally and structurally safe to operate, with a prod cutover ready to execute
 on demand. (Rescoped 2026-07-21: capacity scale-up, load test, and demand-gated items
 moved to Phase 8.)

@@ -46,3 +46,55 @@ pub async fn set_roles(
     .await;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[derive(Deserialize)]
+pub struct UpdateMemberRequest {
+    pub nickname: Option<String>,
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Path(membership_id): Path<Uuid>,
+    Json(req): Json<UpdateMemberRequest>,
+) -> Result<StatusCode, AppError> {
+    let org = claims.require(Permission::StaffManage)?;
+    members::set_member_nickname(
+        &state.app_pool,
+        org.into(),
+        membership_id,
+        req.nickname.as_deref(),
+    )
+    .await?;
+    audit::record(
+        &state.owner_pool,
+        Some(org.0),
+        Some(claims.0.sub.0),
+        "member.nickname.set",
+        Some("membership"),
+        Some(membership_id),
+        None,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn remove(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Path(membership_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let org = claims.require(Permission::StaffManage)?;
+    members::remove_member(&state.app_pool, org.into(), membership_id, claims.0.sub.0).await?;
+    audit::record(
+        &state.owner_pool,
+        Some(org.0),
+        Some(claims.0.sub.0),
+        "member.removed",
+        Some("membership"),
+        Some(membership_id),
+        None,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}

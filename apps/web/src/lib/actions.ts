@@ -7,7 +7,15 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { DEFAULT_THEME_ID } from "@/themes/catalog";
 import { appPath } from "@/lib/paths";
-import { apiFetch, clearSession, gatewayBase, listOrgs, setSession, type Tokens } from "./api";
+import {
+  apiFetch,
+  clearSession,
+  gatewayBase,
+  gatewayFetch,
+  listOrgs,
+  setSession,
+  type Tokens,
+} from "./api";
 
 export type FormState = { error?: string; redirectTo?: string };
 
@@ -34,7 +42,7 @@ async function scopeToOrg(orgId: string): Promise<void> {
   // Re-mint an org-scoped access token from the refresh token.
   const jar = await import("next/headers").then((m) => m.cookies());
   const refresh = (await jar).get("cb_refresh")?.value;
-  const res = await fetch(gatewayBase() + "/auth/token", {
+  const res = await gatewayFetch("/auth/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ refresh_token: refresh, org_id: orgId }),
@@ -44,7 +52,7 @@ async function scopeToOrg(orgId: string): Promise<void> {
 }
 
 export async function loginAction(_prev: FormState, form: FormData): Promise<FormState> {
-  const res = await fetch(gatewayBase() + "/auth/login", {
+  const res = await gatewayFetch("/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
@@ -55,7 +63,7 @@ export async function loginAction(_prev: FormState, form: FormData): Promise<For
 }
 
 export async function signupAction(_prev: FormState, form: FormData): Promise<FormState> {
-  const res = await fetch(gatewayBase() + "/auth/signup", {
+  const res = await gatewayFetch("/auth/signup", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -89,7 +97,7 @@ export async function switchOrgAction(form: FormData): Promise<void> {
 }
 
 export async function acceptInviteAction(_prev: FormState, form: FormData): Promise<FormState> {
-  const res = await fetch(gatewayBase() + "/auth/invites/accept", {
+  const res = await gatewayFetch("/auth/invites/accept", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -115,7 +123,7 @@ export async function createInviteAction(
 ): Promise<InviteState> {
   const roleId = form.get("role_id");
   const body: Record<string, unknown> = { email: form.get("email") };
-  if (typeof roleId === "string" && roleId) body.role_ids = [roleId];
+  if (typeof roleId === "string" && roleId && roleId !== "none") body.role_ids = [roleId];
   const res = await apiFetch("/auth/invites", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -123,7 +131,153 @@ export async function createInviteAction(
   });
   if (!res.ok) return { error: await readError(res) };
   const created = await res.json();
+  revalidatePath("/staff");
   return { acceptUrl: created.accept_url };
+}
+
+export async function updateInviteRolesAction(
+  _prev: InviteState,
+  form: FormData,
+): Promise<InviteState> {
+  const inviteId = form.get("invite_id");
+  const roleId = form.get("role_id");
+  if (typeof inviteId !== "string" || !inviteId) return { error: "Invite id is required." };
+  const roleIds = typeof roleId === "string" && roleId && roleId !== "none" ? [roleId] : [];
+  const res = await apiFetch(`/auth/invites/${inviteId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ role_ids: roleIds }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/staff");
+  return {};
+}
+
+export async function cancelInviteAction(
+  _prev: InviteState,
+  form: FormData,
+): Promise<InviteState> {
+  const inviteIds = form
+    .getAll("invite_id")
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  if (inviteIds.length === 0) return { error: "Select at least one invite." };
+  for (const inviteId of inviteIds) {
+    const res = await apiFetch(`/auth/invites/${inviteId}/cancel`, { method: "POST" });
+    if (!res.ok) return { error: await readError(res) };
+  }
+  revalidatePath("/staff");
+  return {};
+}
+
+export type MemberActionState = { error?: string; ok?: boolean };
+
+export type RoleActionState = { error?: string; ok?: boolean };
+
+/** Create a custom organization role from a selected permission set. */
+export async function createRoleAction(
+  _prev: RoleActionState,
+  form: FormData,
+): Promise<RoleActionState> {
+  const name = form.get("name");
+  if (typeof name !== "string" || !name.trim()) return { error: "Role name is required." };
+  const permissions = form
+    .getAll("permission")
+    .filter((value): value is string => typeof value === "string");
+  const res = await apiFetch("/auth/roles", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: name.trim(), permissions }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/roles");
+  revalidatePath("/staff");
+  return { ok: true };
+}
+
+/** Update an editable organization role. The backend rejects protected roles. */
+export async function updateRoleAction(
+  _prev: RoleActionState,
+  form: FormData,
+): Promise<RoleActionState> {
+  const roleId = form.get("role_id");
+  const name = form.get("name");
+  if (typeof roleId !== "string" || !roleId) return { error: "Role id is required." };
+  if (typeof name !== "string" || !name.trim()) return { error: "Role name is required." };
+  const permissions = form
+    .getAll("permission")
+    .filter((value): value is string => typeof value === "string");
+  const res = await apiFetch(`/auth/roles/${roleId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: name.trim(), permissions }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/roles");
+  revalidatePath("/staff");
+  return { ok: true };
+}
+
+/** Delete an editable role. Role assignments are removed by the backend transaction. */
+export async function deleteRoleAction(
+  _prev: RoleActionState,
+  form: FormData,
+): Promise<RoleActionState> {
+  const roleId = form.get("role_id");
+  if (typeof roleId !== "string" || !roleId) return { error: "Role id is required." };
+  const res = await apiFetch(`/auth/roles/${roleId}`, { method: "DELETE" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/roles");
+  revalidatePath("/staff");
+  return { ok: true };
+}
+
+/** Replace a member's organization roles. */
+export async function updateMemberRolesAction(
+  _prev: MemberActionState,
+  form: FormData,
+): Promise<MemberActionState> {
+  const membershipId = form.get("membership_id");
+  if (typeof membershipId !== "string" || !membershipId) return { error: "Member id is required." };
+  const roleIds = form.getAll("role_id").filter((value): value is string => typeof value === "string");
+  const res = await apiFetch(`/auth/members/${membershipId}/roles`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ role_ids: roleIds }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/staff");
+  return { ok: true };
+}
+
+/** Set a member's organization-specific nickname. */
+export async function updateMemberNicknameAction(
+  _prev: MemberActionState,
+  form: FormData,
+): Promise<MemberActionState> {
+  const membershipId = form.get("membership_id");
+  if (typeof membershipId !== "string" || !membershipId) return { error: "Member id is required." };
+  const nickname = form.get("nickname");
+  const res = await apiFetch(`/auth/members/${membershipId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ nickname: typeof nickname === "string" ? nickname : null }),
+  });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/staff");
+  return { ok: true };
+}
+
+/** Soft-remove a member from the active organization. */
+export async function removeMemberAction(
+  _prev: MemberActionState,
+  form: FormData,
+): Promise<MemberActionState> {
+  const membershipId = form.get("membership_id");
+  if (typeof membershipId !== "string" || !membershipId) return { error: "Member id is required." };
+  const res = await apiFetch(`/auth/members/${membershipId}`, { method: "DELETE" });
+  if (!res.ok) return { error: await readError(res) };
+  revalidatePath("/staff");
+  return { ok: true };
 }
 
 export type ServerFormState = { error?: string; ok?: boolean };
@@ -152,7 +306,7 @@ export async function createServerAction(
   });
   if (!res.ok) return { error: await readError(res) };
   revalidatePath("/servers");
-  return { ok: true };
+  redirect(appPath("/servers"));
 }
 
 /** Remove a server connection. */

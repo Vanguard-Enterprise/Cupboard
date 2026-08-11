@@ -98,7 +98,7 @@ function JobDetails({ job }: { job: PrivacyJob }) {
     return (
       <div className="flex flex-col gap-2">
         <p className="text-xs text-neutral-400">
-          Dry-run complete. These rows will be erased or anonymized in this org's records
+          Dry-run complete. These rows will be erased or anonymized in this org&apos;s records
           (hashes are kept, so any ban still enforces):
         </p>
         <CountsTable counts={job.dry_run_counts ?? {}} />

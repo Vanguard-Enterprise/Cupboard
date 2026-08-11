@@ -6,7 +6,7 @@ use crate::error::AppError;
 use crate::http::auth::{issue_session_for_org, TokenResponse};
 use crate::http::AuthClaims;
 use crate::state::AppState;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use cupboard_domain::Permission;
@@ -87,6 +87,53 @@ pub async fn list(
     Ok(Json(
         invites::list_pending(&state.app_pool, org.into()).await?,
     ))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateInviteRequest {
+    #[serde(default)]
+    pub role_ids: Vec<Uuid>,
+}
+
+pub async fn update(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Path(invite_id): Path<Uuid>,
+    Json(req): Json<UpdateInviteRequest>,
+) -> Result<StatusCode, AppError> {
+    let org = claims.require(Permission::StaffManage)?;
+    invites::set_invite_roles(&state.app_pool, org.into(), invite_id, &req.role_ids).await?;
+    audit::record(
+        &state.owner_pool,
+        Some(org.0),
+        Some(claims.0.sub.0),
+        "invite.roles.set",
+        Some("invite"),
+        Some(invite_id),
+        None,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn cancel(
+    State(state): State<AppState>,
+    claims: AuthClaims,
+    Path(invite_id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let org = claims.require(Permission::StaffManage)?;
+    invites::revoke_invite(&state.app_pool, org.into(), invite_id).await?;
+    audit::record(
+        &state.owner_pool,
+        Some(org.0),
+        Some(claims.0.sub.0),
+        "invite.revoke",
+        Some("invite"),
+        Some(invite_id),
+        None,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

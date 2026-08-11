@@ -2,6 +2,7 @@
 // theme Shell (--sf-* variables). Requires a player session; unauthenticated visitors are
 // sent to login. Shows the player's Steam identity and a sign-out form.
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getPlayer } from "@/lib/player";
 import { linkDiscord, logoutPlayer } from "@/lib/player-actions";
 import { fetchPlayerEntitlements, type Entitlement } from "@/lib/entitlements";
@@ -186,9 +187,9 @@ export default async function AccountPage({
           {openTickets > 0
             ? `${openTickets} open ticket${openTickets === 1 ? "" : "s"}. `
             : "No open tickets. "}
-          <a href="/tickets" className="text-[var(--sf-primary)] hover:underline">
+          <Link href="/tickets" className="text-[var(--sf-primary)] hover:underline">
             {openTickets > 0 ? "View tickets" : "Get support"}
-          </a>
+          </Link>
         </p>
       </section>
 

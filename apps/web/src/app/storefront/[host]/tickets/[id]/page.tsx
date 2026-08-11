@@ -2,6 +2,7 @@
 // player's own tickets and never returns internal staff notes. Themed via the layout's
 // Shell (--sf-* variables) like account/.
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { getPlayer } from "@/lib/player";
 import { fetchPlayerTicket, type PlayerTicketMessage } from "@/lib/tickets";
 import { PlayerReplyForm } from "./reply-form";
@@ -33,9 +34,9 @@ export default async function PlayerTicketPage({
       <div className="mx-auto max-w-md py-12">
         <p className="text-sm text-[var(--sf-muted)]">
           Ticket not found.{" "}
-          <a href="/tickets" className="text-[var(--sf-primary)] hover:underline">
+          <Link href="/tickets" className="text-[var(--sf-primary)] hover:underline">
             Back to tickets
-          </a>
+          </Link>
         </p>
       </div>
     );
@@ -45,9 +46,9 @@ export default async function PlayerTicketPage({
 
   return (
     <div className="mx-auto max-w-md py-12">
-      <a href="/tickets" className="text-sm text-[var(--sf-primary)] hover:underline">
+      <Link href="/tickets" className="text-sm text-[var(--sf-primary)] hover:underline">
         ← Tickets
-      </a>
+      </Link>
       <div className="mt-3 flex items-start justify-between gap-3">
         <h1 className="min-w-0 break-words text-2xl font-bold tracking-tight">
           {ticket.subject}

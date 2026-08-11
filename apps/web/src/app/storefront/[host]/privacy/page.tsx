@@ -3,6 +3,7 @@
 // what is collected, why, for how long, what your rights are and how to use them, what
 // erasure keeps and why, and the US (CCPA/CPRA) no-sale statement. Server-rendered inside
 // the theme Shell; every color reads the --sf-* variables like the other storefront pages.
+import Link from "next/link";
 
 const RETENTION_ROWS: { what: string; window: string }[] = [
   { what: "Raw IP addresses and per-session names from game sessions, plus connection signals", window: "90 days" },
@@ -202,9 +203,9 @@ export default function PrivacyDisclosurePage() {
       <Section title="Questions">
         <p>
           Open a{" "}
-          <a href="/tickets" className="text-[var(--sf-primary)] hover:underline">
+          <Link href="/tickets" className="text-[var(--sf-primary)] hover:underline">
             support ticket
-          </a>{" "}
+          </Link>{" "}
           and we will help.
         </p>
       </Section>

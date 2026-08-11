@@ -1,42 +1,29 @@
 "use client";
 
 import { useActionState } from "react";
+import { KeyRoundIcon, LoaderCircleIcon, RotateCwIcon, XIcon } from "lucide-react";
 import { issueIngestTokenAction, revokeIngestTokenAction } from "@/lib/actions";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
-// Per-server push-ingest token controls. Issuing rotates; the plaintext is shown exactly
-// once (only its hash is stored server-side), so it renders inline for copy-paste into
-// the plugin config.
 export function IngestToken({ serverId, hasToken }: { serverId: string; hasToken: boolean }) {
   const [state, action, pending] = useActionState(issueIngestTokenAction, {});
+  const tokenExists = hasToken || Boolean(state.token);
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
+    <div className="flex min-w-48 flex-col items-start gap-2">
+      <div className="flex flex-wrap items-center gap-1">
         <form action={action}>
           <input type="hidden" name="server_id" value={serverId} />
-          <button
-            disabled={pending}
-            className="text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-50"
-          >
-            {hasToken || state.token ? "Rotate token" : "Issue token"}
-          </button>
+          <Button type="submit" variant="outline" size="xs" disabled={pending}>
+            {pending ? <LoaderCircleIcon className="animate-spin" data-icon="inline-start" /> : tokenExists ? <RotateCwIcon data-icon="inline-start" /> : <KeyRoundIcon data-icon="inline-start" />}
+            {pending ? "Working…" : tokenExists ? "Rotate" : "Issue token"}
+          </Button>
         </form>
-        {(hasToken || state.token) && (
-          <form action={revokeIngestTokenAction}>
-            <input type="hidden" name="server_id" value={serverId} />
-            <button className="text-xs text-red-400 hover:text-red-300">Revoke</button>
-          </form>
-        )}
+        {tokenExists && <form action={revokeIngestTokenAction}><input type="hidden" name="server_id" value={serverId} /><Button type="submit" variant="ghost" size="icon-xs" aria-label="Revoke ingest token"><XIcon /></Button></form>}
       </div>
-      {state.token && (
-        <code
-          className="max-w-64 break-all rounded bg-neutral-900 px-2 py-1 text-xs text-green-300"
-          title="Copy this into the plugin config — it won't be shown again"
-        >
-          {state.token}
-        </code>
-      )}
-      {state.error && <span className="text-xs text-red-400">{state.error}</span>}
+      {state.token && <Alert className="max-w-72 border-emerald-500/20 bg-emerald-500/5 py-2"><AlertDescription className="break-all font-mono text-xs text-emerald-400">{state.token}</AlertDescription></Alert>}
+      {state.error && <p className="text-xs text-destructive">{state.error}</p>}
     </div>
   );
 }
