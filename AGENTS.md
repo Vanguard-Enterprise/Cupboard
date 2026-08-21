@@ -27,6 +27,12 @@
   `cargo watch`, runs the dashboard with Next.js development mode, and runs the
   marketing server with Node watch mode. It binds all HTTP services to `0.0.0.0` and
   prints the detected LAN/NetBird URLs after startup.
+- When reporting the started stack to the user, use the machine's NetBird IPv4 address
+  (typically in `100.64.0.0/10`) with the service ports, for example
+  `http://<netbird-ip>:13000/` for the dashboard and `http://<netbird-ip>:18080/` for
+  the gateway. Do not report `127.0.0.1`, LAN/private interface addresses, container
+  addresses, or other direct IPs as the primary URLs. If no NetBird address is
+  available, say that explicitly instead of substituting a direct IP.
 - The Discord bot joins the hot-reload stack when `DISCORD_BOT_TOKEN` is present in
   `.dev-stack/stack.env`; otherwise the launcher reports that it was skipped. Never
   print or commit that private environment file.

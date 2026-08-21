@@ -16,8 +16,11 @@ START_TIMEOUT="${CUPBOARD_START_TIMEOUT:-180}"
 
 POSTGRES_CONTAINER="cupboard-dev-postgres"
 REDIS_CONTAINER="cupboard-dev-redis"
+OTEL_CONTAINER="cupboard-dev-otel"
 POSTGRES_IMAGE="${CUPBOARD_POSTGRES_IMAGE:-docker.io/library/postgres:18}"
 REDIS_IMAGE="${CUPBOARD_REDIS_IMAGE:-docker.io/library/redis:7}"
+OTEL_IMAGE="${CUPBOARD_DEV_OTEL_IMAGE:-docker.io/otel/opentelemetry-collector:0.123.0}"
+OTEL_GRPC_PORT="${CUPBOARD_DEV_OTEL_PORT:-4317}"
 
 RUST_SERVICES=(auth fleet identity tenant collector metrics gateway)
 declare -A SERVICE_PORTS=(
@@ -54,7 +57,9 @@ Commands:
 
 Environment overrides:
   CUPBOARD_DEV_PUBLIC_HOST, CUPBOARD_WEB_PORT, CUPBOARD_MARKETING_PORT,
-  CUPBOARD_POSTGRES_PORT, CUPBOARD_REDIS_PORT, CUPBOARD_START_TIMEOUT.
+  CUPBOARD_POSTGRES_PORT, CUPBOARD_REDIS_PORT, CUPBOARD_DEV_OTEL_PORT,
+  CUPBOARD_DEV_OTEL_ENDPOINT, CUPBOARD_DEV_OTEL_IMAGE, CUPBOARD_DEV_OTEL_CPUS,
+  CUPBOARD_DEV_OTEL_MEMORY, CUPBOARD_START_TIMEOUT.
 EOF
 }
 
@@ -206,6 +211,7 @@ load_environment() {
   export PLAYER_AUTH_CALLBACK_BASE_URL="${CUPBOARD_DEV_PLAYER_CALLBACK_BASE_URL:-$PUBLIC_BASE_URL}"
   export WEB_SERVICE_PORT="$WEB_PORT"
   export NEXT_PUBLIC_BASE_PATH=""
+  export CUPBOARD_DEV_OTEL_ENDPOINT="${CUPBOARD_DEV_OTEL_ENDPOINT:-http://127.0.0.1:$OTEL_GRPC_PORT}"
 
   origin_list="http://localhost:$WEB_PORT,http://127.0.0.1:$WEB_PORT"
   admin_hosts="localhost,localhost:$WEB_PORT,127.0.0.1,127.0.0.1:$WEB_PORT"
@@ -248,6 +254,21 @@ ensure_infrastructure() {
       "$REDIS_IMAGE" redis-server --appendonly yes >/dev/null
   fi
 
+  if container_exists "$OTEL_CONTAINER"; then
+    podman cp "$ROOT_DIR/scripts/otelcol-dev.yaml" "$OTEL_CONTAINER:/etc/otelcol/config.yaml" >/dev/null
+    podman start "$OTEL_CONTAINER" >/dev/null
+  else
+    log "creating lightweight local OTLP collector"
+    podman create \
+      --name "$OTEL_CONTAINER" \
+      --cpus "${CUPBOARD_DEV_OTEL_CPUS:-0.25}" \
+      --memory "${CUPBOARD_DEV_OTEL_MEMORY:-128m}" \
+      -p "127.0.0.1:$OTEL_GRPC_PORT:4317" \
+      "$OTEL_IMAGE" --config /etc/otelcol/config.yaml >/dev/null
+    podman cp "$ROOT_DIR/scripts/otelcol-dev.yaml" "$OTEL_CONTAINER:/etc/otelcol/config.yaml" >/dev/null
+    podman start "$OTEL_CONTAINER" >/dev/null
+  fi
+
   local deadline=$((SECONDS + 60))
   until podman exec "$POSTGRES_CONTAINER" pg_isready -q 2>/dev/null; do
     (( SECONDS < deadline )) || die "PostgreSQL did not become ready"
@@ -255,6 +276,10 @@ ensure_infrastructure() {
   done
   until podman exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null | grep -qx PONG; do
     (( SECONDS < deadline )) || die "Redis did not become ready"
+    sleep 1
+  done
+  until podman inspect "$OTEL_CONTAINER" --format '{{.State.Running}}' 2>/dev/null | grep -qx true; do
+    (( SECONDS < deadline )) || die "local OTLP collector did not become ready"
     sleep 1
   done
 }
@@ -356,10 +381,18 @@ ensure_node_dependencies() {
 
 start_rust_services() {
   local service port
+  local -a service_env
   for service in "${RUST_SERVICES[@]}"; do
     port="${SERVICE_PORTS[$service]}"
+    service_env=(env BIND_ADDR="0.0.0.0:$port" CONSUMER_NAME="local-$service")
+    if [[ "$service" == metrics ]]; then
+      service_env+=(
+        OTEL_EXPORTER_OTLP_ENDPOINT="$CUPBOARD_DEV_OTEL_ENDPOINT"
+        OTEL_TRACES_EXPORTER=none
+      )
+    fi
     start_component "$service" "$ROOT_DIR" \
-      env BIND_ADDR="0.0.0.0:$port" CONSUMER_NAME="local-$service" \
+      "${service_env[@]}" \
       cargo watch --quiet \
         --watch Cargo.toml --watch Cargo.lock --watch crates --watch "services/$service" \
         --exec "run -p cupboard-$service"
@@ -510,6 +543,7 @@ status_stack() {
 
   printf '  %-14s %s\n' postgres "$(container_exists "$POSTGRES_CONTAINER" 2>/dev/null && podman inspect -f '{{.State.Status}}' "$POSTGRES_CONTAINER" 2>/dev/null || printf stopped)"
   printf '  %-14s %s\n' redis "$(container_exists "$REDIS_CONTAINER" 2>/dev/null && podman inspect -f '{{.State.Status}}' "$REDIS_CONTAINER" 2>/dev/null || printf stopped)"
+  printf '  %-14s %s\n' otel "$(container_exists "$OTEL_CONTAINER" 2>/dev/null && podman inspect -f '{{.State.Status}}' "$OTEL_CONTAINER" 2>/dev/null || printf stopped)"
 
   primary="$(primary_host)"
   primary="${primary:-127.0.0.1}"
@@ -541,6 +575,7 @@ down_stack() {
   stop_stack
   container_exists "$POSTGRES_CONTAINER" && podman stop "$POSTGRES_CONTAINER" >/dev/null
   container_exists "$REDIS_CONTAINER" && podman stop "$REDIS_CONTAINER" >/dev/null
+  container_exists "$OTEL_CONTAINER" && podman stop "$OTEL_CONTAINER" >/dev/null
   log "application processes and development containers are stopped; data volumes were preserved"
 }
 

@@ -82,15 +82,23 @@ pub fn init(service_name: &'static str, otlp_endpoint: Option<&str>) -> OtelGuar
 
             let resource = build_resource(service_name);
 
-            let span_exporter = opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(endpoint)
-                .build()
-                .expect("build OTLP span exporter");
-            let tracer_provider = SdkTracerProvider::builder()
-                .with_resource(resource.clone())
-                .with_batch_exporter(span_exporter)
-                .build();
+            // Local development can opt into metrics-only export (the dev
+            // collector intentionally has no trace pipeline). Keep the tracer
+            // provider alive for context propagation, but avoid a batch worker
+            // and rejected trace exports when OTEL_TRACES_EXPORTER=none.
+            let traces_enabled = std::env::var("OTEL_TRACES_EXPORTER")
+                .map(|value| !value.eq_ignore_ascii_case("none"))
+                .unwrap_or(true);
+            let mut tracer_builder = SdkTracerProvider::builder().with_resource(resource.clone());
+            if traces_enabled {
+                let span_exporter = opentelemetry_otlp::SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(endpoint)
+                    .build()
+                    .expect("build OTLP span exporter");
+                tracer_builder = tracer_builder.with_batch_exporter(span_exporter);
+            }
+            let tracer_provider = tracer_builder.build();
 
             let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
@@ -116,7 +124,8 @@ pub fn init(service_name: &'static str, otlp_endpoint: Option<&str>) -> OtelGuar
             tracing::info!(
                 service = service_name,
                 otlp_endpoint = endpoint,
-                "telemetry initialized (logs + traces + metrics)"
+                traces_enabled,
+                "telemetry initialized (logs + metrics; traces optional)"
             );
             OtelGuard {
                 tracer_provider: Some(tracer_provider),

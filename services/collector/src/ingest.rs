@@ -26,12 +26,13 @@ use chrono::{DateTime, Utc};
 use cupboard_bus::Bus;
 use cupboard_domain::push::{
     PushAction, PushBatch, PushCommand, PushEvent, PushResponse, MAX_EVENTS_PER_BATCH,
-    MAX_HOOK_TIMINGS, PUSH_SCHEMA_VERSION,
+    MAX_HOOK_TIMINGS, MAX_NETWORK_UPDATE_ENTRIES, MAX_PLAYER_METRICS, MAX_TIMING_ENTRIES,
+    PUSH_SCHEMA_VERSION,
 };
 use cupboard_domain::{
-    ChatEvent, EventSource, ObservedPlayer, PerfEvent, ReportEvent, RosterEvent, ServerId,
-    SessionEdge, SessionEvent, TenantId, CHAT_STREAM, PERF_STREAM, REPORT_STREAM, ROSTER_STREAM,
-    SESSION_STREAM,
+    ChatEvent, EventSource, NamedTiming, ObservedPlayer, PerfEvent, ReportEvent, RosterEvent,
+    ServerId, SessionEdge, SessionEvent, TenantId, CHAT_STREAM, PERF_STREAM, REPORT_STREAM,
+    ROSTER_STREAM, SESSION_STREAM,
 };
 use serde_json::json;
 
@@ -377,20 +378,46 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
         PushEvent::Perf {
             at: _, // perf uses the collector receive clock (see below), not the server's
             fps,
+            fps_avg,
             entities,
             players,
             memory_mb,
+            managed_memory_mb,
             gc_gen0,
             gc_gen1,
             gc_gen2,
+            memory_collections,
+            memory_allocations,
+            gc_triggered,
+            task_load_balancer,
+            task_invoke_handler,
+            task_workshop_skins_queue,
+            network_bytes_received,
+            network_bytes_sent,
+            network_packet_loss,
+            players_joining,
+            players_queued,
+            frame_ms,
             frame_ms_avg,
             frame_ms_max,
             mut hooks,
+            mut timings,
+            mut network_updates,
+            mut player_metrics,
         } => {
             // Bound the per-plugin label set (Mimir cardinality): keep the top-N by
             // cumulative cost, drop the tail.
             hooks.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
             hooks.truncate(MAX_HOOK_TIMINGS);
+            trim_timings(&mut timings.invoke_execution);
+            trim_timings(&mut timings.server_update);
+            trim_timings(&mut timings.rpc_calls);
+            trim_timings(&mut timings.work_queue);
+            trim_timings(&mut timings.console_commands);
+            trim_timings(&mut timings.timewarnings);
+            network_updates.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+            network_updates.truncate(MAX_NETWORK_UPDATE_ENTRIES);
+            player_metrics.truncate(MAX_PLAYER_METRICS);
             // Perf uses the collector's receive clock (like chat), NOT the server's
             // `at`: the metrics service's stale-reporting rule and dashboard x-axis key
             // off this, and a server clock lagging within the 10-min skew budget would
@@ -401,15 +428,32 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
                 tenant_id,
                 at: now,
                 fps,
+                fps_avg,
                 entities,
                 players,
                 memory_mb,
+                managed_memory_mb,
                 gc_gen0,
                 gc_gen1,
                 gc_gen2,
+                memory_collections,
+                memory_allocations,
+                gc_triggered,
+                task_load_balancer,
+                task_invoke_handler,
+                task_workshop_skins_queue,
+                network_bytes_received,
+                network_bytes_sent,
+                network_packet_loss,
+                players_joining,
+                players_queued,
+                frame_ms,
                 frame_ms_avg,
                 frame_ms_max,
                 hooks,
+                timings,
+                network_updates,
+                player_metrics,
             }))
         }
         PushEvent::CommandResult { command_id, ok, .. } => {
@@ -418,6 +462,11 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
         }
         PushEvent::Unknown => Translated::Unknown,
     }
+}
+
+fn trim_timings(entries: &mut Vec<NamedTiming>) {
+    entries.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
+    entries.truncate(MAX_TIMING_ENTRIES);
 }
 
 /// Clamp a plugin-reported timestamp to "now" when it strays past the skew budget.

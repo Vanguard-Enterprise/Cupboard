@@ -1,0 +1,26 @@
+# Minimal local OTLP sink for the Cupboard development stack.
+#
+# This intentionally keeps no storage and forwards no data outside the machine.
+# Metrics are accepted so the metrics service exercises the same OTLP path used
+# in-cluster; the debug exporter is deliberately low-volume and non-persistent.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
