@@ -18,7 +18,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::rules;
-use crate::window::{Sample, WindowStore};
+use crate::window::WindowStore;
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -80,7 +80,14 @@ async fn server_detail(
         .series(tenant, id, crate::window::RETENTION.num_minutes())
         .unwrap_or_default();
     let recommendations = rules::evaluate(&full, Utc::now());
-    let latest: Option<&Sample> = full.last();
+    let latest = state.window.latest(tenant, id).map(|mut latest| {
+        // Player telemetry contains Steam IDs and, when reported, IP addresses. The
+        // performance permission grants access to metrics, not to player PII.
+        if !claims.0.has_permission(Permission::PlayersViewPii) {
+            latest.details.player_metrics.clear();
+        }
+        latest
+    });
     Json(json!({
         "latest": latest,
         "series": series,

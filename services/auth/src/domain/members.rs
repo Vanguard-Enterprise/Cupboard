@@ -101,6 +101,12 @@ pub async fn remove_member(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("member not found".into()));
     }
+    // A removed membership may be reactivated by a later invite. Do not leave its
+    // previous role assignments behind for that reinvite to inherit.
+    sqlx::query("DELETE FROM membership_roles WHERE membership_id = $1")
+        .bind(membership_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }

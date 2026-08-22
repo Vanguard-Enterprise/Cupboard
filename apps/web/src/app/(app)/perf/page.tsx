@@ -57,7 +57,9 @@ type Sample = {
   players_joining?: number | null;
   players_queued?: number | null;
   hooks: HookTiming[];
-  timings?: PerfTimings;
+};
+type LatestSample = Sample & {
+  timings: PerfTimings;
   network_updates: NetworkUpdate[];
   player_metrics: PlayerPerf[];
 };
@@ -70,7 +72,7 @@ type Recommendation = {
 };
 
 type ServerRow = { server_id: string; latest: Sample };
-type Detail = { latest: Sample | null; series: Sample[]; recommendations: Recommendation[] };
+type Detail = { latest: LatestSample | null; series: Sample[]; recommendations: Recommendation[] };
 type Server = { id: string; name: string };
 
 // Ordinary performance data stays neutral; semantic color is reserved for severity badges.
@@ -180,10 +182,8 @@ function TimingTable({ title, rows }: { title: string; rows: NamedTiming[] }) {
   );
 }
 
-function LatestDiagnostics({ sample }: { sample: Sample }) {
-  const timings = sample.timings ?? {
-    invoke_execution: [], server_update: [], rpc_calls: [], work_queue: [], console_commands: [], timewarnings: [],
-  };
+function LatestDiagnostics({ sample }: { sample: LatestSample }) {
+  const timings = sample.timings;
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-2">

@@ -275,11 +275,13 @@ export function SidebarLeft({
     { id: "acme-corp", name: "Acme Corp.", plan: "Startup" },
     { id: "evil", name: "Evil Corp.", plan: "Free" },
   ],
+  activeOrgId,
   permissions = [],
   user = { name: "Cupboard user", email: "", avatar: "" },
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   teams?: { id: string; name: string; plan: string }[]
+  activeOrgId?: string | null
   permissions?: string[]
   user?: { name: string; email: string; avatar: string }
 }) {
@@ -300,7 +302,7 @@ export function SidebarLeft({
   return (
     <Sidebar className="border-e-0 bg-sidebar" {...props}>
       <SidebarHeader className="gap-3 border-b border-sidebar-border p-3">
-        <TeamSwitcher teams={teams} />
+        <TeamSwitcher key={activeOrgId ?? "no-active-org"} teams={teams} activeOrgId={activeOrgId} />
         <SidebarSearch items={visiblePages.filter((item) => item.url !== "#")} />
       </SidebarHeader>
       <SidebarContent className="px-2 py-2">

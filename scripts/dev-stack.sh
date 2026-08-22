@@ -78,17 +78,10 @@ primary_host() {
     return
   fi
 
-  local address
-  while read -r address; do
-    [[ -z "$address" || "$address" == *:* ]] && continue
-    case "$address" in
-      127.*|169.254.*|172.16.*|172.17.*|172.18.*|172.19.*|172.2?.*|172.30.*|172.31.*) continue ;;
-    esac
-    printf '%s\n' "$address"
-    return
-  done < <(hostname -I 2>/dev/null | tr ' ' '\n')
-
-  hostname -I 2>/dev/null | tr ' ' '\n' | awk 'NF && $0 !~ /:/ && $0 !~ /^127\./ { print; exit }'
+  # NetBird assigns addresses from 100.64.0.0/10. Do not silently advertise a
+  # LAN, container, loopback, or link-local address when the mesh is unavailable.
+  hostname -I 2>/dev/null | tr ' ' '\n' | awk -F. \
+    'NF == 4 && $1 == 100 && $2 >= 64 && $2 <= 127 { print; exit }'
 }
 
 all_ipv4_hosts() {
@@ -151,7 +144,7 @@ generate_environment() {
   player_private="$(openssl genpkey -algorithm ED25519 2>/dev/null)"
   player_public="$(printf '%s\n' "$player_private" | openssl pkey -pubout 2>/dev/null)"
   public_host="$(primary_host)"
-  public_host="${public_host:-127.0.0.1}"
+  public_host="${public_host:-localhost}"
   tmp="$ENV_FILE.tmp"
 
   {
@@ -193,7 +186,7 @@ load_environment() {
 
   local public_host origin_list admin_hosts host
   public_host="$(primary_host)"
-  public_host="${public_host:-127.0.0.1}"
+  public_host="${public_host:-localhost}"
 
   export ENVIRONMENT="development"
   export AUTH_SERVICE_URL="http://127.0.0.1:${SERVICE_PORTS[auth]}"
@@ -531,7 +524,7 @@ status_process() {
 
 status_stack() {
   prepare_state
-  local service host primary
+  local service primary
   printf '\nCupboard development stack\n'
   for service in "${RUST_SERVICES[@]}"; do
     status_process "$service" "http://127.0.0.1:${SERVICE_PORTS[$service]}/readyz"
@@ -546,16 +539,17 @@ status_stack() {
   printf '  %-14s %s\n' otel "$(container_exists "$OTEL_CONTAINER" 2>/dev/null && podman inspect -f '{{.State.Status}}' "$OTEL_CONTAINER" 2>/dev/null || printf stopped)"
 
   primary="$(primary_host)"
-  primary="${primary:-127.0.0.1}"
   printf '\nPrimary network URLs\n'
-  printf '  Dashboard:  http://%s:%s/\n' "$primary" "$WEB_PORT"
-  printf '  Marketing:  http://%s:%s/\n' "$primary" "$MARKETING_PORT"
-  printf '  Gateway:    http://%s:%s/\n' "$primary" "${SERVICE_PORTS[gateway]}"
-  printf '  API docs:   http://%s:%s/api/v1/docs\n' "$primary" "${SERVICE_PORTS[gateway]}"
+  if [[ -n "$primary" ]]; then
+    printf '  Dashboard:  http://%s:%s/\n' "$primary" "$WEB_PORT"
+    printf '  Marketing:  http://%s:%s/\n' "$primary" "$MARKETING_PORT"
+    printf '  Gateway:    http://%s:%s/\n' "$primary" "${SERVICE_PORTS[gateway]}"
+    printf '  API docs:   http://%s:%s/api/v1/docs\n' "$primary" "${SERVICE_PORTS[gateway]}"
+  else
+    printf '  NetBird URLs unavailable (no 100.64.0.0/10 address detected)\n'
+  fi
   printf '\nAll HTTP services bind to 0.0.0.0. Logs: %s\n' "$LOG_DIR"
-  printf 'Other detected IPv4 hosts:'
-  while read -r host; do printf ' %s' "$host"; done < <(all_ipv4_hosts)
-  printf '\n\n'
+  printf '\n'
 }
 
 follow_logs() {

@@ -21,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <SidebarProvider>
       <SidebarLeft
         teams={orgs.map((org) => ({ id: org.id, name: org.name, plan: "Cupboard" }))}
+        activeOrgId={session.org}
         permissions={session.permissions}
         user={{
           name: session.user.display_name,

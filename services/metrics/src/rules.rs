@@ -151,11 +151,14 @@ pub fn evaluate(samples: &[Sample], now: DateTime<Utc>) -> Vec<Recommendation> {
         }
     }
 
-    if latest.memory_mb > MEMORY_WARNING_MB {
+    // `memory_mb` is the process working set; prefer the managed heap for this rule
+    // and retain the legacy fallback for events that predate that field.
+    let managed_memory_mb = latest.managed_memory_mb.unwrap_or(latest.memory_mb);
+    if managed_memory_mb > MEMORY_WARNING_MB {
         out.push(Recommendation {
             rule: "high-memory",
             severity: Severity::Warning,
-            title: format!("High managed memory ({:.1} GB)", latest.memory_mb / 1024.0),
+            title: format!("High managed memory ({:.1} GB)", managed_memory_mb / 1024.0),
             detail: "The managed heap is unusually large; a leaking plugin is the common \
                      cause. A scheduled restart relieves it short-term."
                 .into(),
@@ -225,9 +228,6 @@ mod tests {
             players_joining: None,
             players_queued: None,
             hooks: Vec::new(),
-            timings: Default::default(),
-            network_updates: Vec::new(),
-            player_metrics: Vec::new(),
         }
     }
 
@@ -297,6 +297,22 @@ mod tests {
         assert!(rules.contains(&"gc-pressure"));
         assert!(rules.contains(&"high-memory"));
         assert!(rules.contains(&"expensive-plugin"));
+    }
+
+    #[test]
+    fn high_memory_prefers_managed_heap_and_falls_back_for_legacy_samples() {
+        let now = Utc::now();
+        let mut sample = sample(1, 200.0, now);
+        sample.memory_mb = 8_000.0;
+        sample.managed_memory_mb = Some(100.0);
+        assert!(!evaluate(&[sample.clone()], now)
+            .iter()
+            .any(|rule| rule.rule == "high-memory"));
+
+        sample.managed_memory_mb = None;
+        assert!(evaluate(&[sample], now)
+            .iter()
+            .any(|rule| rule.rule == "high-memory"));
     }
 
     #[test]
