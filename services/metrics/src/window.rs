@@ -17,7 +17,9 @@ use uuid::Uuid;
 /// How much history the window keeps.
 pub const RETENTION: Duration = Duration::minutes(120);
 
-/// One retained sample (the chart/rules subset of a [`PerfEvent`]).
+/// One retained sample (the chart/rules subset of a [`PerfEvent`]). Large breakdowns
+/// live only in [`ServerWindow::latest_details`] so a two-hour window does not retain
+/// the same payload hundreds of times.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Sample {
     pub at: DateTime<Utc>,
@@ -45,14 +47,38 @@ pub struct Sample {
     pub players_joining: Option<i64>,
     pub players_queued: Option<i64>,
     pub hooks: Vec<cupboard_domain::HookTiming>,
+}
+
+/// The detailed breakdown for the most recent sample. These values are still available
+/// to the dashboard, but are intentionally not copied into every retained sample.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct PerfDetails {
     pub timings: PerfTimings,
     pub network_updates: Vec<NetworkUpdate>,
     pub player_metrics: Vec<PlayerPerf>,
 }
 
+/// A latest sample plus its detailed breakdowns, flattened to preserve the dashboard API.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LatestSample {
+    #[serde(flatten)]
+    pub sample: Sample,
+    #[serde(flatten)]
+    pub details: PerfDetails,
+}
+
+/// A tenant-scoped, internally consistent read of one server's recent window.
+#[derive(Debug, Clone)]
+pub struct WindowSnapshot {
+    pub latest: LatestSample,
+    pub series: Vec<Sample>,
+    pub full: Vec<Sample>,
+}
+
 struct ServerWindow {
     tenant_id: Uuid,
     samples: VecDeque<Sample>,
+    latest_details: PerfDetails,
 }
 
 /// Cheaply cloneable shared store.
@@ -90,16 +116,19 @@ impl WindowStore {
             players_joining: ev.players_joining,
             players_queued: ev.players_queued,
             hooks: ev.hooks.to_vec(),
-            timings: ev.timings.clone(),
-            network_updates: ev.network_updates.clone(),
-            player_metrics: ev.player_metrics.clone(),
         };
         let mut inner = self.inner.write().expect("window store poisoned");
         let window = inner.entry(ev.server_id.0).or_insert_with(|| ServerWindow {
             tenant_id: ev.tenant_id.0,
             samples: VecDeque::new(),
+            latest_details: PerfDetails::default(),
         });
         window.tenant_id = ev.tenant_id.0; // ownership follows the (authenticated) event
+        window.latest_details = PerfDetails {
+            timings: ev.timings.clone(),
+            network_updates: ev.network_updates.clone(),
+            player_metrics: ev.player_metrics.clone(),
+        };
         window.samples.push_back(sample);
         let cutoff = Utc::now() - RETENTION;
         while window.samples.front().is_some_and(|s| s.at < cutoff) {
@@ -117,6 +146,46 @@ impl WindowStore {
             .collect();
         rows.sort_by_key(|(_, s)| std::cmp::Reverse(s.at));
         rows
+    }
+
+    /// One server's latest sample and detailed breakdowns, tenant-scoped.
+    pub fn latest(&self, tenant: Uuid, server: Uuid) -> Option<LatestSample> {
+        let inner = self.inner.read().expect("window store poisoned");
+        let window = inner.get(&server).filter(|w| w.tenant_id == tenant)?;
+        Some(LatestSample {
+            sample: window.samples.back()?.clone(),
+            details: window.latest_details.clone(),
+        })
+    }
+
+    /// Read the latest sample, requested chart range, and full rule window under one
+    /// lock so a concurrent insert cannot mix different points in one API response.
+    pub fn snapshot(&self, tenant: Uuid, server: Uuid, minutes: i64) -> Option<WindowSnapshot> {
+        let inner = self.inner.read().expect("window store poisoned");
+        let window = inner.get(&server).filter(|w| w.tenant_id == tenant)?;
+        let now = Utc::now();
+        let full_cutoff = now - RETENTION;
+        let full: Vec<Sample> = window
+            .samples
+            .iter()
+            .filter(|sample| sample.at >= full_cutoff)
+            .cloned()
+            .collect();
+        let series_cutoff = now - Duration::minutes(minutes.clamp(5, 120));
+        let series = full
+            .iter()
+            .filter(|sample| sample.at >= series_cutoff)
+            .cloned()
+            .collect();
+        let latest = LatestSample {
+            sample: window.samples.back()?.clone(),
+            details: window.latest_details.clone(),
+        };
+        Some(WindowSnapshot {
+            latest,
+            series,
+            full,
+        })
     }
 
     /// One server's samples from the last `minutes`, oldest first. `None` when the
@@ -204,5 +273,37 @@ mod tests {
         let latest = store.latest_for_tenant(t1);
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0].1.fps, 210.0);
+
+        let snapshot = store.snapshot(t1, s1, 60).expect("own server snapshot");
+        assert_eq!(snapshot.full.len(), 2);
+        assert_eq!(snapshot.series.len(), 2);
+        assert_eq!(snapshot.latest.sample.fps, 210.0);
+    }
+
+    #[test]
+    fn latest_details_are_not_repeated_in_history() {
+        let store = WindowStore::default();
+        let server = Uuid::new_v4();
+        let tenant = Uuid::new_v4();
+        let now = Utc::now();
+        let mut first = event(server, tenant, now - Duration::minutes(1), 200.0);
+        first.player_metrics = vec![PlayerPerf {
+            steam_id: "76561198000000042".into(),
+            ip: Some("192.0.2.1".into()),
+            ping_ms: Some(40),
+            packet_loss: None,
+            client_fps: None,
+            client_memory_mb: None,
+        }];
+        store.insert(&first);
+        store.insert(&event(server, tenant, now, 210.0));
+
+        let series = store
+            .series(tenant, server, 60)
+            .expect("own server visible");
+        let latest = store.latest(tenant, server).expect("latest sample visible");
+        assert_eq!(series.len(), 2);
+        assert_eq!(latest.sample.fps, 210.0);
+        assert!(latest.details.player_metrics.is_empty());
     }
 }

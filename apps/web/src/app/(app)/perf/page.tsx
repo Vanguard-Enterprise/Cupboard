@@ -23,7 +23,7 @@ type PerfTimings = {
 };
 type NetworkUpdate = { message_type: string; count: number; bytes: number };
 type PlayerPerf = {
-  steam_id: string;
+  steam_id?: string | null;
   ip?: string | null;
   ping_ms?: number | null;
   packet_loss?: number | null;
@@ -57,7 +57,9 @@ type Sample = {
   players_joining?: number | null;
   players_queued?: number | null;
   hooks: HookTiming[];
-  timings?: PerfTimings;
+};
+type LatestSample = Sample & {
+  timings: PerfTimings;
   network_updates: NetworkUpdate[];
   player_metrics: PlayerPerf[];
 };
@@ -70,7 +72,7 @@ type Recommendation = {
 };
 
 type ServerRow = { server_id: string; latest: Sample };
-type Detail = { latest: Sample | null; series: Sample[]; recommendations: Recommendation[] };
+type Detail = { latest: LatestSample | null; series: Sample[]; recommendations: Recommendation[] };
 type Server = { id: string; name: string };
 
 // Ordinary performance data stays neutral; semantic color is reserved for severity badges.
@@ -180,10 +182,8 @@ function TimingTable({ title, rows }: { title: string; rows: NamedTiming[] }) {
   );
 }
 
-function LatestDiagnostics({ sample }: { sample: Sample }) {
-  const timings = sample.timings ?? {
-    invoke_execution: [], server_update: [], rpc_calls: [], work_queue: [], console_commands: [], timewarnings: [],
-  };
+function LatestDiagnostics({ sample }: { sample: LatestSample }) {
+  const timings = sample.timings;
   return (
     <div className="flex flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-2">
@@ -258,7 +258,7 @@ function LatestDiagnostics({ sample }: { sample: Sample }) {
           {sample.player_metrics.length === 0 ? <p className="p-4 text-sm text-muted-foreground">No player telemetry reported.</p> : (
             <Table>
               <TableHeader><TableRow><TableHead>Steam ID</TableHead><TableHead>IP</TableHead><TableHead className="text-end">Client FPS</TableHead><TableHead className="text-end">Memory MB</TableHead><TableHead className="text-end">Ping ms</TableHead><TableHead className="text-end">Packet loss</TableHead></TableRow></TableHeader>
-              <TableBody>{sample.player_metrics.map((row) => <TableRow key={row.steam_id}><TableCell className="font-mono text-xs">{row.steam_id}</TableCell><TableCell className="font-mono text-xs">{row.ip ?? "—"}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_fps)}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_memory_mb)}</TableCell><TableCell className="text-end tabular-nums">{display(row.ping_ms)}</TableCell><TableCell className="text-end tabular-nums">{display(row.packet_loss)}</TableCell></TableRow>)}</TableBody>
+              <TableBody>{sample.player_metrics.map((row, index) => <TableRow key={`${row.steam_id ?? "redacted"}-${index}`}><TableCell className="font-mono text-xs">{row.steam_id ?? "Redacted"}</TableCell><TableCell className="font-mono text-xs">{row.ip ?? "—"}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_fps)}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_memory_mb)}</TableCell><TableCell className="text-end tabular-nums">{display(row.ping_ms)}</TableCell><TableCell className="text-end tabular-nums">{display(row.packet_loss)}</TableCell></TableRow>)}</TableBody>
             </Table>
           )}
         </CardContent>

@@ -22,14 +22,18 @@ import { TerminalIcon, AudioLinesIcon } from "lucide-react"
 
 export function TeamSwitcher({
   teams,
+  activeOrgId,
 }: {
   teams: {
     id: string
     name: string
     plan: string
   }[]
+  activeOrgId?: string | null
 }) {
-  const [activeTeam, setActiveTeam] = React.useState(teams[0])
+  const [activeTeam, setActiveTeam] = React.useState(
+    () => teams.find((team) => team.id === activeOrgId) ?? teams[0],
+  )
 
   if (!activeTeam) {
     return null

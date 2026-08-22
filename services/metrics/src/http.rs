@@ -13,12 +13,12 @@ use chrono::Utc;
 use cupboard_auth_core::{Claims, Keys};
 use cupboard_domain::Permission;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::rules;
-use crate::window::{Sample, WindowStore};
+use crate::window::{LatestSample, WindowStore};
 
 #[derive(Clone)]
 pub struct ApiState {
@@ -67,7 +67,7 @@ async fn server_detail(
         Err(resp) => return resp,
     };
     let minutes = params.minutes.unwrap_or(60);
-    let Some(series) = state.window.series(tenant, id, minutes) else {
+    let Some(snapshot) = state.window.snapshot(tenant, id, minutes) else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "no perf data for this server" })),
@@ -75,18 +75,37 @@ async fn server_detail(
             .into_response();
     };
     // Rules always look at the widest retained window, not just the charted range.
-    let full = state
-        .window
-        .series(tenant, id, crate::window::RETENTION.num_minutes())
-        .unwrap_or_default();
-    let recommendations = rules::evaluate(&full, Utc::now());
-    let latest: Option<&Sample> = full.last();
+    let recommendations = rules::evaluate(&snapshot.full, Utc::now());
+    let latest = serialize_latest(
+        snapshot.latest,
+        claims.0.has_permission(Permission::PlayersViewPii),
+    );
     Json(json!({
         "latest": latest,
-        "series": series,
+        "series": snapshot.series,
         "recommendations": recommendations,
     }))
     .into_response()
+}
+
+/// Keep useful client measurements available to operators while preventing raw Steam IDs
+/// and IP addresses from crossing the API boundary without the explicit PII permission.
+fn serialize_latest(latest: LatestSample, include_pii: bool) -> Value {
+    let mut value = serde_json::to_value(latest).expect("latest perf sample is serializable");
+    if !include_pii {
+        if let Some(players) = value
+            .get_mut("player_metrics")
+            .and_then(Value::as_array_mut)
+        {
+            for player in players {
+                if let Some(player) = player.as_object_mut() {
+                    player.insert("steam_id".into(), Value::Null);
+                    player.insert("ip".into(), Value::Null);
+                }
+            }
+        }
+    }
+    value
 }
 
 /// Verifies the `Authorization: Bearer <jwt>` access token and yields its claims
