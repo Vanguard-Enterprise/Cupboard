@@ -143,11 +143,11 @@ pub enum PushEvent {
         #[serde(default)]
         hooks: Vec<crate::HookTiming>,
         #[serde(default)]
-        timings: crate::PerfTimings,
+        timings: Box<crate::PerfTimings>,
         #[serde(default)]
-        network_updates: Vec<crate::NetworkUpdate>,
+        network_updates: Box<Vec<crate::NetworkUpdate>>,
         #[serde(default)]
-        player_metrics: Vec<crate::PlayerPerf>,
+        player_metrics: Box<Vec<crate::PlayerPerf>>,
     },
     /// The plugin's acknowledgement of an executed (or failed) inbound command.
     CommandResult {

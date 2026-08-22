@@ -89,7 +89,7 @@ impl WindowStore {
             network_packet_loss: ev.network_packet_loss,
             players_joining: ev.players_joining,
             players_queued: ev.players_queued,
-            hooks: ev.hooks.iter().cloned().collect(),
+            hooks: ev.hooks.to_vec(),
             timings: ev.timings.clone(),
             network_updates: ev.network_updates.clone(),
             player_metrics: ev.player_metrics.clone(),

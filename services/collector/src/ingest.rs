@@ -415,7 +415,7 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
             trim_timings(&mut timings.work_queue);
             trim_timings(&mut timings.console_commands);
             trim_timings(&mut timings.timewarnings);
-            network_updates.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+            network_updates.sort_by_key(|update| std::cmp::Reverse(update.bytes));
             network_updates.truncate(MAX_NETWORK_UPDATE_ENTRIES);
             player_metrics.truncate(MAX_PLAYER_METRICS);
             // Perf uses the collector's receive clock (like chat), NOT the server's
@@ -451,9 +451,9 @@ fn translate(who: &PushIdentity, event: PushEvent, now: DateTime<Utc>) -> Transl
                 frame_ms_avg,
                 frame_ms_max,
                 hooks,
-                timings,
-                network_updates,
-                player_metrics,
+                timings: *timings,
+                network_updates: *network_updates,
+                player_metrics: *player_metrics,
             }))
         }
         PushEvent::CommandResult { command_id, ok, .. } => {
