@@ -67,6 +67,14 @@ pub struct LatestSample {
     pub details: PerfDetails,
 }
 
+/// A tenant-scoped, internally consistent read of one server's recent window.
+#[derive(Debug, Clone)]
+pub struct WindowSnapshot {
+    pub latest: LatestSample,
+    pub series: Vec<Sample>,
+    pub full: Vec<Sample>,
+}
+
 struct ServerWindow {
     tenant_id: Uuid,
     samples: VecDeque<Sample>,
@@ -147,6 +155,36 @@ impl WindowStore {
         Some(LatestSample {
             sample: window.samples.back()?.clone(),
             details: window.latest_details.clone(),
+        })
+    }
+
+    /// Read the latest sample, requested chart range, and full rule window under one
+    /// lock so a concurrent insert cannot mix different points in one API response.
+    pub fn snapshot(&self, tenant: Uuid, server: Uuid, minutes: i64) -> Option<WindowSnapshot> {
+        let inner = self.inner.read().expect("window store poisoned");
+        let window = inner.get(&server).filter(|w| w.tenant_id == tenant)?;
+        let now = Utc::now();
+        let full_cutoff = now - RETENTION;
+        let full: Vec<Sample> = window
+            .samples
+            .iter()
+            .filter(|sample| sample.at >= full_cutoff)
+            .cloned()
+            .collect();
+        let series_cutoff = now - Duration::minutes(minutes.clamp(5, 120));
+        let series = full
+            .iter()
+            .filter(|sample| sample.at >= series_cutoff)
+            .cloned()
+            .collect();
+        let latest = LatestSample {
+            sample: window.samples.back()?.clone(),
+            details: window.latest_details.clone(),
+        };
+        Some(WindowSnapshot {
+            latest,
+            series,
+            full,
         })
     }
 
@@ -235,6 +273,11 @@ mod tests {
         let latest = store.latest_for_tenant(t1);
         assert_eq!(latest.len(), 1);
         assert_eq!(latest[0].1.fps, 210.0);
+
+        let snapshot = store.snapshot(t1, s1, 60).expect("own server snapshot");
+        assert_eq!(snapshot.full.len(), 2);
+        assert_eq!(snapshot.series.len(), 2);
+        assert_eq!(snapshot.latest.sample.fps, 210.0);
     }
 
     #[test]

@@ -23,7 +23,7 @@ type PerfTimings = {
 };
 type NetworkUpdate = { message_type: string; count: number; bytes: number };
 type PlayerPerf = {
-  steam_id: string;
+  steam_id?: string | null;
   ip?: string | null;
   ping_ms?: number | null;
   packet_loss?: number | null;
@@ -258,7 +258,7 @@ function LatestDiagnostics({ sample }: { sample: LatestSample }) {
           {sample.player_metrics.length === 0 ? <p className="p-4 text-sm text-muted-foreground">No player telemetry reported.</p> : (
             <Table>
               <TableHeader><TableRow><TableHead>Steam ID</TableHead><TableHead>IP</TableHead><TableHead className="text-end">Client FPS</TableHead><TableHead className="text-end">Memory MB</TableHead><TableHead className="text-end">Ping ms</TableHead><TableHead className="text-end">Packet loss</TableHead></TableRow></TableHeader>
-              <TableBody>{sample.player_metrics.map((row) => <TableRow key={row.steam_id}><TableCell className="font-mono text-xs">{row.steam_id}</TableCell><TableCell className="font-mono text-xs">{row.ip ?? "—"}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_fps)}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_memory_mb)}</TableCell><TableCell className="text-end tabular-nums">{display(row.ping_ms)}</TableCell><TableCell className="text-end tabular-nums">{display(row.packet_loss)}</TableCell></TableRow>)}</TableBody>
+              <TableBody>{sample.player_metrics.map((row, index) => <TableRow key={`${row.steam_id ?? "redacted"}-${index}`}><TableCell className="font-mono text-xs">{row.steam_id ?? "Redacted"}</TableCell><TableCell className="font-mono text-xs">{row.ip ?? "—"}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_fps)}</TableCell><TableCell className="text-end tabular-nums">{display(row.client_memory_mb)}</TableCell><TableCell className="text-end tabular-nums">{display(row.ping_ms)}</TableCell><TableCell className="text-end tabular-nums">{display(row.packet_loss)}</TableCell></TableRow>)}</TableBody>
             </Table>
           )}
         </CardContent>
