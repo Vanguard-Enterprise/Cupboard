@@ -1,5 +1,5 @@
-//! The push-ingestion contract: what the gameplay plugin (and later the perf mod) POSTs
-//! to `POST /ingest/v1/events`, authenticated by a per-server ingest token.
+//! The push-ingestion contract: what the gameplay plugin and perf mod POST to
+//! `POST /ingest/v1/events`, authenticated by a per-server ingest token.
 //!
 //! Versioned and forward-compatible by construction:
 //! - `schema` gates breaking envelope changes (the Collector rejects unknown majors);
@@ -22,6 +22,12 @@ pub const MAX_EVENTS_PER_BATCH: usize = 500;
 /// Per-plugin hook timings kept per perf sample (top-N by cost; the rest truncate).
 /// Bounds the `plugin` label's cardinality in Mimir.
 pub const MAX_HOOK_TIMINGS: usize = 20;
+/// Bounds named timing labels and network message labels in telemetry.
+pub const MAX_TIMING_ENTRIES: usize = 100;
+pub const MAX_NETWORK_UPDATE_ENTRIES: usize = 128;
+/// A high-pop server can legitimately have hundreds of players, but this prevents a
+/// malformed push from turning one sample into an unbounded payload.
+pub const MAX_PLAYER_METRICS: usize = 1000;
 
 /// One POST body: a batch of events from one server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,24 +97,57 @@ pub enum PushEvent {
         #[serde(default)]
         report_type: String,
     },
-    /// A server performance sample (plugin sampler or perf mod). Field semantics match
+    /// A server performance sample from the perf mod. Field semantics match
     /// [`crate::PerfEvent`]; hooks beyond [`MAX_HOOK_TIMINGS`] are truncated, not
     /// rejected (Mimir cardinality discipline).
     Perf {
         at: DateTime<Utc>,
         fps: f64,
+        #[serde(default)]
+        fps_avg: Option<f64>,
         entities: i64,
         players: i64,
         memory_mb: f64,
+        #[serde(default)]
+        managed_memory_mb: Option<f64>,
         gc_gen0: i64,
         gc_gen1: i64,
         gc_gen2: i64,
         #[serde(default)]
+        memory_collections: Option<i64>,
+        #[serde(default)]
+        memory_allocations: Option<i64>,
+        #[serde(default)]
+        gc_triggered: Option<i64>,
+        #[serde(default)]
+        task_load_balancer: Option<i64>,
+        #[serde(default)]
+        task_invoke_handler: Option<i64>,
+        #[serde(default)]
+        task_workshop_skins_queue: Option<i64>,
+        #[serde(default)]
+        network_bytes_received: Option<i64>,
+        #[serde(default)]
+        network_bytes_sent: Option<i64>,
+        #[serde(default)]
+        network_packet_loss: Option<i64>,
+        #[serde(default)]
+        players_joining: Option<i64>,
+        #[serde(default)]
+        players_queued: Option<i64>,
+        #[serde(default)]
+        frame_ms: Option<f64>,
         frame_ms_avg: Option<f64>,
         #[serde(default)]
         frame_ms_max: Option<f64>,
         #[serde(default)]
         hooks: Vec<crate::HookTiming>,
+        #[serde(default)]
+        timings: Box<crate::PerfTimings>,
+        #[serde(default)]
+        network_updates: Box<Vec<crate::NetworkUpdate>>,
+        #[serde(default)]
+        player_metrics: Box<Vec<crate::PlayerPerf>>,
     },
     /// The plugin's acknowledgement of an executed (or failed) inbound command.
     CommandResult {
@@ -201,5 +240,56 @@ mod tests {
         assert_eq!(json["id"], "c1");
         assert_eq!(json["action"], "kick");
         assert_eq!(json["steam_id"], "765");
+    }
+
+    #[test]
+    fn full_perf_event_deserializes_with_breakdowns() {
+        let batch: PushBatch = serde_json::from_value(serde_json::json!({
+            "schema": 1,
+            "events": [{
+                "type": "perf",
+                "at": "2026-08-12T12:00:00Z",
+                "fps": 220.0,
+                "fps_avg": 210.0,
+                "frame_ms": 4.5,
+                "frame_ms_avg": 4.8,
+                "frame_ms_max": 32.0,
+                "entities": 42000,
+                "players": 12,
+                "memory_mb": 8192.0,
+                "managed_memory_mb": 1800.0,
+                "gc_gen0": 100,
+                "gc_gen1": 20,
+                "gc_gen2": 2,
+                "memory_collections": 3,
+                "memory_allocations": 4,
+                "gc_triggered": 5,
+                "task_load_balancer": 1,
+                "task_invoke_handler": 2,
+                "task_workshop_skins_queue": 0,
+                "network_bytes_received": 1000,
+                "network_bytes_sent": 2000,
+                "network_packet_loss": 0,
+                "players_joining": 1,
+                "players_queued": 0,
+                "hooks": [{"plugin": "Example", "total_ms": 12.5}],
+                "timings": {"server_update": [{"name": "ServerMgr.Update", "total_ms": 8.0}]},
+                "network_updates": [{"message_type": "Entity", "count": 4, "bytes": 128}],
+                "player_metrics": [{"steam_id": "76561198000000042", "ping_ms": 38}]
+            }]
+        }))
+        .expect("full perf event should deserialize");
+        let PushEvent::Perf {
+            timings,
+            network_updates,
+            player_metrics,
+            ..
+        } = &batch.events[0]
+        else {
+            panic!("expected perf event");
+        };
+        assert_eq!(timings.server_update[0].name, "ServerMgr.Update");
+        assert_eq!(network_updates[0].bytes, 128);
+        assert_eq!(player_metrics[0].ping_ms, Some(38));
     }
 }

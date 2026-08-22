@@ -167,19 +167,20 @@ pub fn evaluate(samples: &[Sample], now: DateTime<Utc>) -> Vec<Recommendation> {
     if let (Some(first), Some(last)) = (recent.first(), recent.last()) {
         let wall_ms = (last.at - first.at).num_milliseconds() as f64;
         if wall_ms > 60_000.0 {
-            for (plugin, end_ms) in &last.hooks {
-                let Some((_, start_ms)) = first.hooks.iter().find(|(p, _)| p == plugin) else {
+            for hook in &last.hooks {
+                let Some(start) = first.hooks.iter().find(|h| h.plugin == hook.plugin) else {
                     continue;
                 };
-                let delta = end_ms - start_ms;
+                let delta = hook.total_ms - start.total_ms;
                 if delta > wall_ms * PLUGIN_COST_WARNING_RATIO {
                     out.push(Recommendation {
                         rule: "expensive-plugin",
                         severity: Severity::Warning,
-                        title: format!("Plugin '{plugin}' is expensive"),
+                        title: format!("Plugin '{}' is expensive", hook.plugin),
                         detail: format!(
-                            "'{plugin}' spent {:.1}s in hooks over the last {:.0} minutes \
+                            "'{}' spent {:.1}s in hooks over the last {:.0} minutes \
                              ({:.1}% of wall time). Profile it or look for an alternative.",
+                            hook.plugin,
                             delta / 1000.0,
                             wall_ms / 60_000.0,
                             100.0 * delta / wall_ms
@@ -201,11 +202,32 @@ mod tests {
         Sample {
             at: now - Duration::minutes(mins_ago),
             fps,
+            fps_avg: None,
+            frame_ms: None,
             entities: 50_000,
             players: 10,
             memory_mb: 2_000.0,
+            managed_memory_mb: None,
+            gc_gen0: 0,
+            gc_gen1: 0,
             gc_gen2: 0,
+            memory_collections: None,
+            memory_allocations: None,
+            gc_triggered: None,
+            frame_ms_avg: None,
+            frame_ms_max: None,
+            task_load_balancer: None,
+            task_invoke_handler: None,
+            task_workshop_skins_queue: None,
+            network_bytes_received: None,
+            network_bytes_sent: None,
+            network_packet_loss: None,
+            players_joining: None,
+            players_queued: None,
             hooks: Vec::new(),
+            timings: Default::default(),
+            network_updates: Vec::new(),
+            player_metrics: Vec::new(),
         }
     }
 
@@ -255,13 +277,19 @@ mod tests {
         let now = Utc::now();
         let mut a = sample(9, 200.0, now);
         a.gc_gen2 = 100;
-        a.hooks = vec![("LagMachine".into(), 0.0)];
+        a.hooks = vec![cupboard_domain::HookTiming {
+            plugin: "LagMachine".into(),
+            total_ms: 0.0,
+        }];
         let mut b = sample(1, 200.0, now);
         b.entities = 600_000;
         b.memory_mb = 8_000.0;
         b.gc_gen2 = 110;
         // 8 minutes wall ≈ 480s; 60s of hook time ≈ 12.5% > 5%.
-        b.hooks = vec![("LagMachine".into(), 60_000.0)];
+        b.hooks = vec![cupboard_domain::HookTiming {
+            plugin: "LagMachine".into(),
+            total_ms: 60_000.0,
+        }];
 
         let recs = evaluate(&[a, b], now);
         let rules: Vec<&str> = recs.iter().map(|r| r.rule).collect();

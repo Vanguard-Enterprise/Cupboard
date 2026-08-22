@@ -64,8 +64,8 @@
 
 **Goal:** full-fidelity data and performance monitoring with recommendations.
 
-- **cupboard-plugin** (Oxide/Carbon): push rich events (full identifiers incl. owner/EAC, chat, F7 reports, playtime/stats, toggleable combat logs); execute inbound actions (bans, entitlement grants). Per-server token auth.
-- **cupboard-perfmod** (Harmony): server/plugin perf telemetry.
+- **cupboard-plugin** (Oxide/Carbon): push rich gameplay events (full identifiers incl. owner/EAC, chat, F7 reports, playtime/stats, toggleable combat logs); execute inbound actions (bans, entitlement grants). Per-server token auth. No performance events.
+- **cupboard-perfmod** (Harmony): the sole server/plugin performance telemetry producer.
 - **Collector:** push ingestion gateway (auth, backpressure) alongside RCON pull.
   - *Carried from Phase 2 (RCON-path enrichments deferred to keep the slice thin):*
     **A2S server-info query** (map/hostname/live player count — `query_port` is already
@@ -73,7 +73,7 @@
     connect/disconnect events; Phase 2 ingestion is poll-only `playerlist`).
 - **Metrics & Analytics:** perf ingestion → **Mimir**; perf dashboards; **recommendation tips** (rule-based to start).
 - **apps/web:** perf dashboards, chat logs, richer profiles.
-- **DoD:** plugin-enabled server streams rich events + perf; recommendations surface; data degrades gracefully without the plugin.
+- **DoD:** plugin-enabled server streams rich events, the perf mod streams performance data, recommendations surface; data degrades gracefully without the plugin.
 
 ## Phase 4 — BattleMetrics migration  · size **L**
 

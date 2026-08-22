@@ -60,7 +60,7 @@ gracefully" checkable at the end.
 | **metrics** (new) | `cupboard:perf` consumer → OTel/Mimir; rule-based recommendation engine (PromQL); tips storage (RLS) + query API; PromQL proxy for web charts. |
 | **gateway** | Route `/ingest/*` → collector (public, token-authed by collector, no JWT); `/perf/*` → metrics (JWT + RLS context as usual). |
 | **apps/web** | Servers page: live A2S info. New: chat logs. Profiles: reports/playtime/identifier sources. New: perf dashboard + recommendations. |
-| **cupboard-plugin** (new repo) | Rich events out, commands in. |
+| **cupboard-plugin** (new repo) | Rich gameplay events out, commands in; performance is intentionally out of scope. |
 | **cupboard-perfmod** (new repo) | Harmony-only perf telemetry out. |
 
 ## Event contract (crates/domain)
@@ -72,7 +72,7 @@ Identity/Metrics (consumers). Streams:
 - `cupboard:sessions` — connect/disconnect edges (console stream **and** plugin).
 - `cupboard:chat` — chat messages (console stream **and** plugin; team chat plugin-only).
 - `cupboard:reports` — F7 reports (plugin-only).
-- `cupboard:perf` — perf samples (perf mod only).
+- `cupboard:perf` — perf samples (perf mod only; Rust.ServerMetrics-style server, network, timing, and player diagnostics).
 
 Push envelope: `{schema: 1, events: [{type, at, ...}]}`; unknown event types are
 accepted-and-dropped (forward compat) with a counter metric.
@@ -84,7 +84,7 @@ accepted-and-dropped (forward compat) with a counter metric.
 | **PR1** | **A2S server info** — `gameconn::a2s` (UDP, challenge flow) + Collector best-effort poll + fleet info columns/endpoint + web server cards | Phase 2 carry-over closed; map/hostname/player-count live without RCON. |
 | **PR2** | **RCON console stream** — gameconn subscription split (unsolicited frames) + chat/join/leave parsing; Collector tail → `cupboard:chat`/`cupboard:sessions`; Identity `chat_messages` + real-time session edges; web chat logs | Real-time baseline without the plugin — the degradation floor. |
 | **PR3** | **Push ingest gateway** — fleet ingest tokens; Collector `POST /ingest/v1/events` (auth, caps, 429 backpressure, MAXLEN); command-queue schema + piggyback delivery; gateway `/ingest/*`; synthetic-pusher load test | ⭐ The Phase 3 risk, de-risked before the plugin exists. |
-| **PR4** | **cupboard-plugin MVP** (new repo) — identifiers/chat/reports/heartbeat out; bounded buffer + retry; executes ban/kick commands | A real server streams rich events; a ban enforces without RCON. |
+| **PR4** | **cupboard-plugin MVP** (new repo) — identifiers/chat/reports/heartbeat out; bounded buffer + retry; executes ban/kick commands; no perf events | A real server streams rich events; a ban enforces without RCON. |
 | **PR5** | **Rich ingestion** — Identity consumes plugin events (EAC/owner identifiers, reports, playtime, source tagging + dedupe); web richer profiles | DoD #1 visible end-to-end. |
 | **PR6** | **Perf tier** — cupboard-perfmod (new repo, Harmony) + `services/metrics` consumer → OTel → Mimir | DoD #2 first half: perf lands in Mimir. |
 | **PR7** | **Recommendations + dashboards** — rule engine (PromQL) + tips API/UI + web perf charts; degradation-matrix verification (RCON-only / +plugin / +perfmod) | DoD #2 second half + DoD #3 closeout. |
@@ -121,7 +121,7 @@ Verified live on the test server (RCON+A2S+plugin) and synthetically for the res
 | Identifiers | steam + owner (roster) | ✅ | ✅ + EAC id | ✅ |
 | F7 reports | — | — | ✅ | ✅ |
 | Playtime | ✅ (session-derived) | ✅ | ✅ | ✅ |
-| Perf samples + recommendations | — | — | ✅ 30s sampler (no frame dist.) | ✅ + frame-time avg/max |
+| Perf samples + recommendations | — | — | — (CupboardLink is gameplay-only) | ✅ full Rust.ServerMetrics-style telemetry |
 
 Loss behaviors: plugin unreachable → bounded buffer + backoff (oldest shed);
 Redis down → 503 backpressure, plugin re-sends; identity down → enforcement

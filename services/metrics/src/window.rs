@@ -11,7 +11,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Duration, Utc};
-use cupboard_domain::PerfEvent;
+use cupboard_domain::{NetworkUpdate, PerfEvent, PerfTimings, PlayerPerf};
 use uuid::Uuid;
 
 /// How much history the window keeps.
@@ -22,14 +22,32 @@ pub const RETENTION: Duration = Duration::minutes(120);
 pub struct Sample {
     pub at: DateTime<Utc>,
     pub fps: f64,
+    pub fps_avg: Option<f64>,
+    pub frame_ms: Option<f64>,
     pub entities: i64,
     pub players: i64,
     pub memory_mb: f64,
-    #[serde(skip)]
+    pub managed_memory_mb: Option<f64>,
     pub gc_gen2: i64,
-    /// Per-plugin cumulative hook ms at sample time.
-    #[serde(skip)]
-    pub hooks: Vec<(String, f64)>,
+    pub gc_gen0: i64,
+    pub gc_gen1: i64,
+    pub memory_collections: Option<i64>,
+    pub memory_allocations: Option<i64>,
+    pub gc_triggered: Option<i64>,
+    pub frame_ms_avg: Option<f64>,
+    pub frame_ms_max: Option<f64>,
+    pub task_load_balancer: Option<i64>,
+    pub task_invoke_handler: Option<i64>,
+    pub task_workshop_skins_queue: Option<i64>,
+    pub network_bytes_received: Option<i64>,
+    pub network_bytes_sent: Option<i64>,
+    pub network_packet_loss: Option<i64>,
+    pub players_joining: Option<i64>,
+    pub players_queued: Option<i64>,
+    pub hooks: Vec<cupboard_domain::HookTiming>,
+    pub timings: PerfTimings,
+    pub network_updates: Vec<NetworkUpdate>,
+    pub player_metrics: Vec<PlayerPerf>,
 }
 
 struct ServerWindow {
@@ -49,15 +67,32 @@ impl WindowStore {
         let sample = Sample {
             at: ev.at,
             fps: ev.fps,
+            fps_avg: ev.fps_avg,
+            frame_ms: ev.frame_ms,
             entities: ev.entities,
             players: ev.players,
             memory_mb: ev.memory_mb,
+            managed_memory_mb: ev.managed_memory_mb,
+            gc_gen0: ev.gc_gen0,
+            gc_gen1: ev.gc_gen1,
             gc_gen2: ev.gc_gen2,
-            hooks: ev
-                .hooks
-                .iter()
-                .map(|h| (h.plugin.clone(), h.total_ms))
-                .collect(),
+            memory_collections: ev.memory_collections,
+            memory_allocations: ev.memory_allocations,
+            gc_triggered: ev.gc_triggered,
+            frame_ms_avg: ev.frame_ms_avg,
+            frame_ms_max: ev.frame_ms_max,
+            task_load_balancer: ev.task_load_balancer,
+            task_invoke_handler: ev.task_invoke_handler,
+            task_workshop_skins_queue: ev.task_workshop_skins_queue,
+            network_bytes_received: ev.network_bytes_received,
+            network_bytes_sent: ev.network_bytes_sent,
+            network_packet_loss: ev.network_packet_loss,
+            players_joining: ev.players_joining,
+            players_queued: ev.players_queued,
+            hooks: ev.hooks.to_vec(),
+            timings: ev.timings.clone(),
+            network_updates: ev.network_updates.clone(),
+            player_metrics: ev.player_metrics.clone(),
         };
         let mut inner = self.inner.write().expect("window store poisoned");
         let window = inner.entry(ev.server_id.0).or_insert_with(|| ServerWindow {
@@ -116,15 +151,32 @@ mod tests {
             entities: 1000,
             players: 2,
             memory_mb: 900.0,
+            managed_memory_mb: Some(500.0),
             gc_gen0: 1,
             gc_gen1: 1,
             gc_gen2: 1,
+            fps_avg: None,
+            frame_ms: None,
             frame_ms_avg: None,
             frame_ms_max: None,
+            memory_collections: None,
+            memory_allocations: None,
+            gc_triggered: None,
+            task_load_balancer: None,
+            task_invoke_handler: None,
+            task_workshop_skins_queue: None,
+            network_bytes_received: None,
+            network_bytes_sent: None,
+            network_packet_loss: None,
+            players_joining: None,
+            players_queued: None,
             hooks: vec![HookTiming {
                 plugin: "X".into(),
                 total_ms: 10.0,
             }],
+            timings: Default::default(),
+            network_updates: Vec::new(),
+            player_metrics: Vec::new(),
         }
     }
 
