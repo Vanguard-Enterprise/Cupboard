@@ -2,7 +2,7 @@
 
 Cupboard is being rebuilt for a single-developer workflow.
 
-The previous implementation was removed on the `codex/ai-first-rebuild` branch. It
+The previous implementation was removed on the `refactor/ai-first-rebuild` branch. It
 remains available in Git history at commit `2c06f0f` and on `main`. No old code
 should be copied into the rebuild by default.
 

@@ -25,6 +25,9 @@ This repository is a clean rebuild for one developer working with coding agents.
 
 ## Developer workflow
 
+- Name branches for the work using `<type>/<short-description>`, such as `feat`,
+  `fix`, `refactor`, `docs`, `test`, `perf`, or `chore`. Do not use an agent or
+  author name as the prefix.
 - Provide one root command for local development and one root command for all
   required checks.
 - Keep setup reproducible from a fresh clone.
