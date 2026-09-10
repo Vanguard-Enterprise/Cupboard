@@ -1,14 +1,10 @@
 # Cupboard
 
-Cupboard is being rebuilt for a single-developer workflow.
+This repository contains the in-progress application rebuild.
 
-The previous implementation was removed on the `refactor/ai-first-rebuild` branch. It
-remains available in Git history at commit `2c06f0f` and on `main`. No old code
-should be copied into the rebuild by default.
+Read the [rebuild plan](docs/REBUILD.md) for the current product scope,
+architecture, and acceptance criteria. Contributors should also follow
+[AGENTS.md](AGENTS.md).
 
-## Current state
-
-There is intentionally no application code yet. The next commit should establish
-one small, runnable product path rather than recreate the former service layout.
-
-Read [docs/REBUILD.md](docs/REBUILD.md) before adding code.
+Application setup and development commands will be documented here when the first
+runnable slice is added.
