@@ -68,6 +68,7 @@ async fn setup(token: Option<&str>) -> Option<AppState> {
         jwt_public_key_pem: TEST_PUBLIC_PEM.into(),
         master_key: [7u8; 32],
         internal_api_token: token.map(String::from),
+        allow_private_game_servers: false,
     };
     let keys = Keys::verifier_from_ed_pem(&config.jwt_public_key_pem).expect("test verifier key");
 

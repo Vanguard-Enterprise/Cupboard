@@ -181,6 +181,25 @@ impl RconClient {
     /// password is percent-encoded into the path so values with URL-reserved characters
     /// (space, `/`, `#`, `?`, `%`, …) still produce a valid URL.
     pub async fn connect(host: &str, port: u16, password: &str) -> Result<Self, GameconnError> {
+        Self::connect_with_policy(host, port, password, false).await
+    }
+
+    /// Dial a trusted private target. This is intended only for explicitly enabled local
+    /// development stacks; production callers must use [`Self::connect`].
+    pub async fn connect_trusted(
+        host: &str,
+        port: u16,
+        password: &str,
+    ) -> Result<Self, GameconnError> {
+        Self::connect_with_policy(host, port, password, true).await
+    }
+
+    async fn connect_with_policy(
+        host: &str,
+        port: u16,
+        password: &str,
+        allow_blocked: bool,
+    ) -> Result<Self, GameconnError> {
         // SSRF guard: resolve the host and refuse if any resolved address is in a blocked
         // (cluster-internal) range, then dial the validated IP directly. Connecting by the
         // resolved IP (rather than the hostname) closes the DNS-rebind TOCTOU window that a
@@ -193,7 +212,7 @@ impl RconClient {
             .first()
             .copied()
             .ok_or_else(|| GameconnError::Connect(format!("could not resolve {host}")))?;
-        if addrs.iter().any(|a| crate::guard::is_blocked_addr(a.ip())) {
+        if !allow_blocked && addrs.iter().any(|a| crate::guard::is_blocked_addr(a.ip())) {
             return Err(GameconnError::BlockedAddress(host.to_string()));
         }
         let host_str = match target.ip() {

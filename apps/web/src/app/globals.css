@@ -27,6 +27,11 @@
   --workspace: #0b0b0b;
   --surface-raised: #111111;
   --surface-subtle: #0e0e0e;
+  --chart-1: #f5f5f5;
+  --chart-2: #b8b8b8;
+  --chart-3: #858585;
+  --chart-4: #626262;
+  --chart-5: #d6d6d6;
   --sidebar: #080808;
   --sidebar-foreground: #f5f5f5;
   --sidebar-primary: #e5e5e5;
@@ -60,6 +65,11 @@
   --color-workspace: var(--workspace);
   --color-surface-raised: var(--surface-raised);
   --color-surface-subtle: var(--surface-subtle);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);

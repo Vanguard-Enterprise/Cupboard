@@ -26,6 +26,10 @@ pub struct Config {
     /// Shared secret the Collector presents (`X-Internal-Token`) to the cross-tenant
     /// `/internal/*` endpoints. `None` disables those endpoints (fail closed).
     pub internal_api_token: Option<String>,
+
+    /// Permit trusted private game-server targets in an explicitly configured local lab.
+    /// Defaults off to preserve the production SSRF boundary.
+    pub allow_private_game_servers: bool,
 }
 
 impl Config {
@@ -67,6 +71,8 @@ impl Config {
             internal_api_token: env::var("INTERNAL_API_TOKEN")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            allow_private_game_servers: env::var("ALLOW_PRIVATE_GAME_SERVERS")
+                .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES")),
         })
     }
 }

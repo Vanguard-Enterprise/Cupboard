@@ -68,13 +68,32 @@ pub struct ServerInfo {
 /// Query one server's A2S_INFO. `timeout` bounds each UDP wait (not the whole exchange;
 /// worst case is `MAX_CHALLENGE_RETRIES + 1` waits).
 pub async fn query_info(host: &str, port: u16, timeout: Duration) -> Result<ServerInfo, A2sError> {
+    query_info_with_policy(host, port, timeout, false).await
+}
+
+/// Query a trusted private target. This is reserved for explicitly enabled local
+/// development stacks; production callers must use [`query_info`].
+pub async fn query_info_trusted(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<ServerInfo, A2sError> {
+    query_info_with_policy(host, port, timeout, true).await
+}
+
+async fn query_info_with_policy(
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    allow_blocked: bool,
+) -> Result<ServerInfo, A2sError> {
     // Resolve first so the local bind can match the peer's address family, and run the
     // SSRF guard over every resolved address before sending a single packet.
     let addrs = crate::guard::resolve(host, port).await?;
     let peer = *addrs
         .first()
         .ok_or_else(|| A2sError::Resolve(host.to_string()))?;
-    if addrs.iter().any(|a| crate::guard::is_blocked_addr(a.ip())) {
+    if !allow_blocked && addrs.iter().any(|a| crate::guard::is_blocked_addr(a.ip())) {
         return Err(A2sError::BlockedAddress(host.to_string()));
     }
     let bind_addr = if peer.is_ipv6() {

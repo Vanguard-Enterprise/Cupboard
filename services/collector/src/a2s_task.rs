@@ -14,13 +14,24 @@ use crate::fleet_client::{FleetClient, ServerConfig};
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Run forever (until aborted by the manager). `query_port` is validated by the caller.
-pub async fn run(config: ServerConfig, fleet: FleetClient, query_port: u16, interval: Duration) {
+pub async fn run(
+    config: ServerConfig,
+    fleet: FleetClient,
+    query_port: u16,
+    interval: Duration,
+    allow_private_game_servers: bool,
+) {
     let mut ticker = tokio::time::interval(interval);
     // A missed tick means we were slow, not that we owe a burst of queries.
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await; // fires immediately on the first iteration
-        match a2s::query_info(&config.rcon_host, query_port, QUERY_TIMEOUT).await {
+        let query = if allow_private_game_servers {
+            a2s::query_info_trusted(&config.rcon_host, query_port, QUERY_TIMEOUT).await
+        } else {
+            a2s::query_info(&config.rcon_host, query_port, QUERY_TIMEOUT).await
+        };
+        match query {
             Ok(info) => {
                 tracing::debug!(
                     server = %config.name, players = info.players, map = %info.map,

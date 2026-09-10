@@ -40,22 +40,31 @@ pub async fn run(
     identity: IdentityClient,
     poll_interval: Duration,
     stream_maxlen: usize,
+    allow_private_game_servers: bool,
 ) {
     // A poll interval below the reply timeout would let the frame loop's wake instant sit
     // in the past while a reply is still pending, hot-spinning the loop. Floor it.
     let poll_interval = poll_interval.max(REPLY_TIMEOUT);
     let mut backoff = INITIAL_BACKOFF;
     loop {
-        let dial = match tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            RconClient::connect(
-                &config.rcon_host,
-                config.rcon_port as u16,
-                &config.rcon_password,
-            ),
-        )
-        .await
-        {
+        let connect = async {
+            if allow_private_game_servers {
+                RconClient::connect_trusted(
+                    &config.rcon_host,
+                    config.rcon_port as u16,
+                    &config.rcon_password,
+                )
+                .await
+            } else {
+                RconClient::connect(
+                    &config.rcon_host,
+                    config.rcon_port as u16,
+                    &config.rcon_password,
+                )
+                .await
+            }
+        };
+        let dial = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
             Ok(result) => result,
             Err(_elapsed) => Err(GameconnError::Connect(format!(
                 "connect timed out after {CONNECT_TIMEOUT:?}"

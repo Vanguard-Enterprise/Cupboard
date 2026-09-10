@@ -183,7 +183,7 @@ pub async fn import(
     if let Some(query_port) = body.query_port {
         check_port(query_port, "query_port")?;
     }
-    crate::http::reject_blocked_rcon_host(rcon_host, rcon_port as u16).await?;
+    crate::http::reject_blocked_rcon_host(&state, rcon_host, rcon_port as u16).await?;
 
     let id = servers::upsert_imported(
         &state.owner_pool,

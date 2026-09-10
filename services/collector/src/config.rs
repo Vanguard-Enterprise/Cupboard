@@ -30,6 +30,10 @@ pub struct Config {
     pub push_stream_maxlen: usize,
     /// Per-server push request budget per minute (fixed window).
     pub push_rate_limit_per_min: u32,
+
+    /// Permit RFC1918/CGNAT game-server targets in an explicitly configured local lab.
+    /// Defaults off so production keeps the outbound SSRF boundary.
+    pub allow_private_game_servers: bool,
 }
 
 impl Config {
@@ -66,6 +70,8 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(120),
+            allow_private_game_servers: env::var("ALLOW_PRIVATE_GAME_SERVERS")
+                .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES")),
         })
     }
 }

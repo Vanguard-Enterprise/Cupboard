@@ -63,6 +63,7 @@ pub async fn run(
     reconcile_interval: Duration,
     a2s_interval: Duration,
     stream_maxlen: usize,
+    allow_private_game_servers: bool,
 ) {
     let mut running: HashMap<Uuid, Running> = HashMap::new();
     let mut ticker = tokio::time::interval(reconcile_interval);
@@ -107,6 +108,7 @@ pub async fn run(
                     identity.clone(),
                     poll_interval,
                     stream_maxlen,
+                    allow_private_game_servers,
                 ));
                 // u16 range is guaranteed by fleet's CHECK constraint; anything else is a
                 // corrupt row we skip rather than panic on.
@@ -119,6 +121,7 @@ pub async fn run(
                             fleet.clone(),
                             port,
                             a2s_interval,
+                            allow_private_game_servers,
                         ))
                     });
                 running.insert(*id, Running { rcon, a2s, key });

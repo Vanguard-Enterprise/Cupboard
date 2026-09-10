@@ -83,7 +83,14 @@ async fn readyz(State(state): State<AppState>) -> (StatusCode, Json<serde_json::
 /// immediate error instead of a silent perpetual connect failure. On resolution FAILURE
 /// (hosts may be DNS names that are transiently unresolvable) the write is allowed through;
 /// the dial-time guard in `cupboard_gameconn` remains the backstop.
-pub(crate) async fn reject_blocked_rcon_host(host: &str, port: u16) -> Result<(), AppError> {
+pub(crate) async fn reject_blocked_rcon_host(
+    state: &AppState,
+    host: &str,
+    port: u16,
+) -> Result<(), AppError> {
+    if state.config.allow_private_game_servers {
+        return Ok(());
+    }
     match cupboard_gameconn::guard::resolves_to_blocked(host, port).await {
         Ok(true) => Err(AppError::BadRequest(format!(
             "rcon_host '{host}' resolves to a blocked private/loopback/link-local address"

@@ -189,6 +189,7 @@ load_environment() {
   public_host="${public_host:-localhost}"
 
   export ENVIRONMENT="development"
+  export ALLOW_PRIVATE_GAME_SERVERS="true"
   export AUTH_SERVICE_URL="http://127.0.0.1:${SERVICE_PORTS[auth]}"
   export AUTH_INTERNAL_URL="$AUTH_SERVICE_URL"
   export FLEET_SERVICE_URL="http://127.0.0.1:${SERVICE_PORTS[fleet]}"
