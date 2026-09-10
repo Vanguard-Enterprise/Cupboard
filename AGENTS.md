@@ -1,41 +1,94 @@
-# Cupboard UI conventions
+# Cupboard working rules
 
-- Reuse the installed shadcn components in `apps/web/src/components/ui` before creating
-  any new UI primitive. Do not hand-roll buttons, dialogs, menus, inputs, tables, cards,
-  tooltips, navigation, or equivalent controls when an installed component covers it.
-- `apps/web/components.json` is authoritative. Keep `rtl: true`, the Radix Nova style,
-  CSS-variable theming, Lucide icons, and pointer cursor support enabled.
-- Add or refresh official components from `apps/web` with
-  `npx shadcn@latest add <component>`; use `--all` when intentionally refreshing the
-  complete catalog. Preserve local product-level compositions outside the `ui` folder.
-- Cupboard brand tokens live in `apps/web/src/app/globals.css`. Use semantic tokens such
-  as `bg-background`, `bg-card`, `text-foreground`, and `text-muted-foreground` instead
-  of introducing one-off palette values. Mirror those variables in non-React frontends.
-- All new layouts and interactions must work in both `dir="ltr"` and `dir="rtl"`. Prefer
-  logical spacing/alignment utilities (`ms`, `me`, `ps`, `pe`, `start`, `end`) and keep
-  the direction provider intact.
-- The shared shadcn `Card` has a default flex gap between its children. When a
-  `CardHeader` sits directly above `CardContent` containing a table or other flush
-  surface, use `className="gap-0"` on that card to avoid an unintended blank strip.
+This repository is a clean rebuild for one developer working with coding agents.
 
-# Local development stack
+## Before changing code
 
-- When the user asks to start, spin up, restart, or check the local Cupboard stack, use
-  `./scripts/dev-stack.sh start`, `restart`, or `status` from the repository root. Do
-  not assemble an ad-hoc set of background commands.
-- The launcher keeps PostgreSQL and Redis in Podman, runs every Rust service through
-  `cargo watch`, runs the dashboard with Next.js development mode, and runs the
-  marketing server with Node watch mode. It binds all HTTP services to `0.0.0.0` and
-  prints the detected LAN/NetBird URLs after startup.
-- When reporting the started stack to the user, use the machine's NetBird IPv4 address
-  (typically in `100.64.0.0/10`) with the service ports, for example
-  `http://<netbird-ip>:13000/` for the dashboard and `http://<netbird-ip>:18080/` for
-  the gateway. Do not report `127.0.0.1`, LAN/private interface addresses, container
-  addresses, or other direct IPs as the primary URLs. If no NetBird address is
-  available, say that explicitly instead of substituting a direct IP.
-- The Discord bot joins the hot-reload stack when `DISCORD_BOT_TOKEN` is present in
-  `.dev-stack/stack.env`; otherwise the launcher reports that it was skipped. Never
-  print or commit that private environment file.
-- Use `./scripts/dev-stack.sh logs <component>` for diagnostics and
-  `./scripts/dev-stack.sh stop` to stop application watchers. Use `down` only when the
-  user also wants the PostgreSQL and Redis containers stopped; data volumes are kept.
+- Read `README.md` and `docs/REBUILD.md`.
+- Treat the old implementation as reference material only. Do not restore or copy
+  it unless the user asks for a specific piece.
+- Preserve unrelated user changes already in the working tree.
+
+## How to build
+
+- Work in complete user-visible slices. A slice includes the UI, server behavior,
+  persistence, and tests needed to use it.
+- Start with one deployable application. Add a worker only when work cannot safely
+  run in that application.
+- Keep code together until a measured runtime or ownership problem requires a
+  split. A product feature name is not a reason to create a service or package.
+- Prefer direct calls within the application. Do not introduce internal HTTP,
+  queues, or duplicated transport types between modules.
+- Add an abstraction after two real implementations need it, not before.
+- Delete abandoned paths instead of keeping compatibility layers for unreleased
+  code.
+
+## Developer workflow
+
+- Name branches for the work using `<type>/<short-description>`, such as `feat`,
+  `fix`, `refactor`, `docs`, `test`, `perf`, or `chore`. Do not use an agent or
+  author name as the prefix. When work has a Linear issue, include its lowercase
+  identifier after the slash, such as `feat/cup-123-server-health`.
+- Provide one root command for local development and one root command for all
+  required checks.
+- Keep setup reproducible from a fresh clone.
+- Tests must cover tenant isolation, authorization, secret handling, and the main
+  success path of each slice.
+- Update `docs/REBUILD.md` when a decision changes the repository shape or launch
+  scope.
+- Do not claim completion until the relevant checks pass.
+
+## Linear workflow
+
+- Use the Linear `Cupboard` team and `Cupboard rebuild` project as the source of
+  truth for planned product work. Do not mirror the backlog into GitHub issues.
+- Before starting a nontrivial change, find its `CUP` issue. Create one in Backlog
+  if the work is not tracked yet, using the repository requirements and user
+  request as its acceptance criteria.
+- Moving an issue from Backlog to Todo means the work is approved to start. Move
+  it to In Progress when implementation begins and to In Review when its pull
+  request is ready for review.
+- Put the issue identifier in the branch name and pull request title. Add
+  `Fixes CUP-N` to the pull request description so Linear links the pull request
+  and can update the issue from GitHub activity.
+- Post implementation progress, material decisions, and blockers as comments on
+  the Linear issue. Do not leave the only record in local notes or chat.
+- Move an issue to Done only after its pull request is merged and required checks
+  pass. Prefer the configured GitHub automation for status changes and correct
+  the Linear status directly if the integration misses an event.
+
+## Pull request completion
+
+When the user asks you to create, update, or finish a pull request, carry it
+through the full review cycle:
+
+- After each push, find every CI check and automated code-review integration
+  enabled for the pull request. Wait for pending jobs and reviews to finish.
+- Treat CI failures as part of the task. Read the logs, reproduce the failure when
+  practical, fix the cause, push the fix, and monitor the new run. Do not dismiss
+  a failure as environment-specific without evidence.
+- Delegate the automated review feedback to an independent subagent when
+  subagents are available. Have it check every recommendation against the diff,
+  surrounding code, requirements, and tests.
+- Apply valid recommendations, add or update tests when needed, and push the
+  fixes. Leave the code unchanged when a recommendation is invalid.
+- Reply directly to the originating pull request review thread for every
+  recommendation. For a valid recommendation, reply after pushing the fix and
+  state what changed. For an invalid recommendation, reply with the technical
+  reason for rejecting it. Do not leave these decisions only in local notes,
+  commit messages, or the final chat response. Resolve the thread only after
+  posting the reply.
+- Repeat the review and CI cycle after every fix. A pull request is ready only
+  when required CI is green, enabled automated reviewers have responded, and no
+  valid finding remains unresolved.
+- If a check or reviewer does not complete, keep its status explicit. Do not call
+  the pull request ready. Stop waiting only when the user cancels or a documented
+  access or service failure prevents further monitoring.
+
+## Safety
+
+- Never log credentials, session tokens, RCON passwords, API keys, or raw secrets.
+- Enforce tenant ownership in the data-access path, not only in UI or route code.
+- Use maintained authentication and cryptography libraries. Do not invent either.
+- Keep migrations forward-only once a migration has been used outside local
+  development.

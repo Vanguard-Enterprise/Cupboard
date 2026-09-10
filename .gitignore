@@ -1,18 +1,17 @@
-# Environment / secrets
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 
-# Editor / OS
+node_modules/
+.next/
+dist/
+target/
+coverage/
+
+.dev-stack/
+*.log
+.DS_Store
 .idea/
 .vscode/
-*.swp
-.DS_Store
-
-# Logs
-*.log
-/.dev-stack/
-
-# Rust build artifacts
-/target
