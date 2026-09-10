@@ -27,7 +27,8 @@ This repository is a clean rebuild for one developer working with coding agents.
 
 - Name branches for the work using `<type>/<short-description>`, such as `feat`,
   `fix`, `refactor`, `docs`, `test`, `perf`, or `chore`. Do not use an agent or
-  author name as the prefix.
+  author name as the prefix. When work has a Linear issue, include its lowercase
+  identifier after the slash, such as `feat/cup-123-server-health`.
 - Provide one root command for local development and one root command for all
   required checks.
 - Keep setup reproducible from a fresh clone.
@@ -36,6 +37,53 @@ This repository is a clean rebuild for one developer working with coding agents.
 - Update `docs/REBUILD.md` when a decision changes the repository shape or launch
   scope.
 - Do not claim completion until the relevant checks pass.
+
+## Linear workflow
+
+- Use the Linear `Cupboard` team and `Cupboard rebuild` project as the source of
+  truth for planned product work. Do not mirror the backlog into GitHub issues.
+- Before starting a nontrivial change, find its `CUP` issue. Create one in Backlog
+  if the work is not tracked yet, using the repository requirements and user
+  request as its acceptance criteria.
+- Moving an issue from Backlog to Todo means the work is approved to start. Move
+  it to In Progress when implementation begins and to In Review when its pull
+  request is ready for review.
+- Put the issue identifier in the branch name and pull request title. Add
+  `Fixes CUP-N` to the pull request description so Linear links the pull request
+  and can update the issue from GitHub activity.
+- Post implementation progress, material decisions, and blockers as comments on
+  the Linear issue. Do not leave the only record in local notes or chat.
+- Move an issue to Done only after its pull request is merged and required checks
+  pass. Prefer the configured GitHub automation for status changes and correct
+  the Linear status directly if the integration misses an event.
+
+## Pull request completion
+
+When the user asks you to create, update, or finish a pull request, carry it
+through the full review cycle:
+
+- After each push, find every CI check and automated code-review integration
+  enabled for the pull request. Wait for pending jobs and reviews to finish.
+- Treat CI failures as part of the task. Read the logs, reproduce the failure when
+  practical, fix the cause, push the fix, and monitor the new run. Do not dismiss
+  a failure as environment-specific without evidence.
+- Delegate the automated review feedback to an independent subagent when
+  subagents are available. Have it check every recommendation against the diff,
+  surrounding code, requirements, and tests.
+- Apply valid recommendations, add or update tests when needed, and push the
+  fixes. Leave the code unchanged when a recommendation is invalid.
+- Reply directly to the originating pull request review thread for every
+  recommendation. For a valid recommendation, reply after pushing the fix and
+  state what changed. For an invalid recommendation, reply with the technical
+  reason for rejecting it. Do not leave these decisions only in local notes,
+  commit messages, or the final chat response. Resolve the thread only after
+  posting the reply.
+- Repeat the review and CI cycle after every fix. A pull request is ready only
+  when required CI is green, enabled automated reviewers have responded, and no
+  valid finding remains unresolved.
+- If a check or reviewer does not complete, keep its status explicit. Do not call
+  the pull request ready. Stop waiting only when the user cancels or a documented
+  access or service failure prevents further monitoring.
 
 ## Safety
 
