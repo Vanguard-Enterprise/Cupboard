@@ -35,10 +35,12 @@ performance analysis stay out until the core loop works in a deployed environmen
 - Redis, a message bus, and internal HTTP services are absent until a feature has a
   concrete need for them.
 
-The implementation language, web framework, database library, authentication
-provider, and deployment target must be chosen together before application code is
-added. The choice should favor one-language development, mature libraries, fast
-tests, and simple deployment. The previous Rust and Next.js stack is not assumed.
+The initial runtime and frontend shape is recorded in
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md). The backend is a Rust monolith, and the
+frontend is a static React and TypeScript SPA built with Vite. The database
+library, authentication provider, and deployment target must still be chosen
+together before application code is added. These choices should favor maintained
+libraries, fast tests, and simple deployment.
 
 ## Acceptance bar for the first slice
 
