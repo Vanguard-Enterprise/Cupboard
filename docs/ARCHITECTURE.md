@@ -129,7 +129,6 @@ The following choices remain open and must be made as one compatible set:
 - Rust web framework and asynchronous runtime
 - PostgreSQL access and migration library
 - Authentication and session provider
-- Public API credential format and lifecycle
 - Production deployment target and secret-key source
 - CDN or edge-cache implementation
 
