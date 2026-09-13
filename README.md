@@ -8,7 +8,7 @@ architecture, and acceptance criteria. Contributors should also follow
 
 ## Web development
 
-Install the Node.js dependencies once:
+Use Node.js 24.18.0 (recorded in `.nvmrc`), then install the dependencies:
 
 ```bash
 npm install

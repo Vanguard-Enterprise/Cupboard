@@ -1,23 +1,38 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { networkInterfaces } from "node:os";
 import { pathToFileURL } from "node:url";
 
-export function createDevServerConfig(interfaces, port = "5173") {
+export function findNetBirdAddress(interfaces, statusJson) {
+  if (statusJson) {
+    try {
+      const netbirdIp = JSON.parse(statusJson).netbirdIp;
+
+      if (typeof netbirdIp === "string" && netbirdIp.length > 0) {
+        return netbirdIp.split("/", 1)[0];
+      }
+    } catch {
+      // Fall back to NetBird's standard interface names.
+    }
+  }
+
   const candidates = Object.entries(interfaces).flatMap(([name, addresses]) =>
     (addresses ?? [])
       .filter((address) => address.family === "IPv4" && !address.internal)
       .map((address) => ({ name, address: address.address })),
   );
 
-  const netbird =
-    candidates.find(({ name }) => /^(wt|wg|netbird)/i.test(name)) ??
-    candidates.find(({ address }) => address.startsWith("100."));
+  return candidates.find(({ name }) => /^(?:wt\d+|netbird\d*)$/i.test(name))
+    ?.address;
+}
+
+export function createDevServerConfig(interfaces, port = "5173", statusJson) {
+  const netbirdAddress = findNetBirdAddress(interfaces, statusJson);
 
   return {
     hostname: "0.0.0.0",
     port,
     localUrl: `http://localhost:${port}`,
-    netbirdUrl: netbird ? `http://${netbird.address}:${port}` : undefined,
+    netbirdUrl: netbirdAddress ? `http://${netbirdAddress}:${port}` : undefined,
   };
 }
 
@@ -33,9 +48,21 @@ export function createNextDevArgs({ hostname, port }) {
 }
 
 function start() {
+  let netbirdStatus;
+
+  try {
+    netbirdStatus = execFileSync("netbird", ["status", "--json"], {
+      encoding: "utf8",
+      timeout: 2000,
+    });
+  } catch {
+    // NetBird may be unavailable; interface detection remains as a fallback.
+  }
+
   const config = createDevServerConfig(
     networkInterfaces(),
     process.env.CUPBOARD_PORT ?? "5173",
+    netbirdStatus,
   );
 
   console.log("\nCupboard development server");

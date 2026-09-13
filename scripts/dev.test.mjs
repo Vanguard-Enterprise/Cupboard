@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createDevServerConfig, createNextDevArgs } from "./dev.mjs";
+import {
+  createDevServerConfig,
+  createNextDevArgs,
+  findNetBirdAddress,
+} from "./dev.mjs";
 
 const address = (value) => ({
   address: value,
@@ -42,9 +46,22 @@ describe("development server configuration", () => {
     expect(config.netbirdUrl).toBe("http://100.107.41.153:6000");
   });
 
-  it("falls back to an address in NetBird's carrier-grade NAT range", () => {
-    const config = createDevServerConfig({ eth0: [address("100.90.0.4")] });
+  it("prefers the address reported by the NetBird daemon", () => {
+    const config = createDevServerConfig(
+      { wt0: [address("100.80.0.3")] },
+      "5173",
+      JSON.stringify({ netbirdIp: "100.107.41.153/16" }),
+    );
 
-    expect(config.netbirdUrl).toBe("http://100.90.0.4:5173");
+    expect(config.netbirdUrl).toBe("http://100.107.41.153:5173");
+  });
+
+  it("does not label unrelated WireGuard or 100.x interfaces as NetBird", () => {
+    const interfaces = {
+      wg0: [address("100.64.0.1")],
+      eth0: [address("100.107.41.153")],
+    };
+
+    expect(findNetBirdAddress(interfaces)).toBeUndefined();
   });
 });
