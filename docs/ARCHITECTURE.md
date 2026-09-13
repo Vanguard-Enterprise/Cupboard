@@ -2,65 +2,80 @@
 
 ## Status
 
-This document records the architecture decisions made before application code is
-added. The runtime stack is only partly selected. The remaining decisions at the
-end of this document must be resolved before the first application slice begins.
+This document records the starting architecture. The frontend foundation is now
+selected and implemented. The backend decisions at the end of this document must
+be resolved before the first persistent application slice begins.
 
 ## Product boundary
 
-Cupboard is one deployable application for Rust server operators. It owns the web
-interface, authentication, tenant-scoped data, PostgreSQL persistence, RCON and
-A2S communication, and scheduled server-health checks.
+Cupboard has a Next.js web runtime and a Rust application runtime for server
+operators. The web runtime owns rendering and browser-facing interaction. The
+Rust application owns authentication enforcement, tenant-scoped data,
+PostgreSQL persistence, RCON and A2S communication, and scheduled server-health
+checks.
 
-The application remains a monolith until a measured reliability, performance, or
-ownership problem requires a process or service boundary. Product feature names
-do not create service boundaries.
+The Rust application remains a monolith until a measured reliability,
+performance, or ownership problem requires another process or service boundary.
+Product feature names do not create service boundaries.
 
 ## Production shape
 
 ```mermaid
 flowchart LR
-    browser[Browser] -->|Static assets| edge[CDN or edge cache]
-    edge -->|Cache miss| app[Rust monolith]
-    browser -->|HTTPS requests| app
+    browser[Browser] --> web[Next.js web runtime]
+    web -->|Authenticated API requests| app[Rust monolith]
     app --> db[(PostgreSQL)]
     app -->|RCON and A2S| servers[Rust game servers]
 ```
 
-The Rust monolith is the only production application process. It contains the
-HTTP server, application behavior, background work, and external server
-integrations. Modules call each other directly. Cupboard does not use internal
-HTTP, a message bus, Redis, or a separate worker at launch.
+The Next.js process is the server-rendered web boundary. The Rust monolith
+contains application behavior, background work, persistence, authorization, and
+external server integrations. Modules inside the Rust application call each
+other directly. Cupboard does not use a message bus, Redis, or a separate worker
+at launch.
 
 PostgreSQL is the only application data store. Once a migration has been used
 outside local development, later changes use forward-only migrations.
 
-## Frontend
+## Web frontend
 
-The frontend uses React and TypeScript, built with Vite. React Router runs in SPA
-mode with runtime server rendering disabled.
+The frontend uses React, TypeScript, and the Next.js App Router. Pages and layouts
+are Server Components by default. They may fetch from the Rust API during server
+rendering. Client Components are reserved for browser state, event handlers, and
+live interactions. Frequently refreshed server state may use TanStack Query when
+the first feature needs client caching or polling.
 
-The frontend build produces static HTML, JavaScript, CSS, and other assets. Node.js
-is a development and build dependency only. Production does not run Next.js, a
-Node.js frontend server, React Server Components, or frontend middleware.
+Tailwind CSS provides utility styles and semantic Slate theme variables. Shadcn
+is initialized with Radix and its current component catalog is source-owned in
+`src/components/ui`. Cupboard-specific components will live with their feature
+or in `src/components/app`. The UI does not use a separately published component
+package because only one application consumes it.
 
-The production build packages the static assets with the application artifact.
-A CDN or edge proxy should cache those assets. Content-hashed assets receive a
-long immutable cache lifetime, while the application shell uses a short or
-revalidation-based policy so deployments become visible promptly. This cache is
-delivery infrastructure, not another application service.
+The operator experience is AI first. The primary interface accepts an operator's
+intent, shows which server data the assistant used, separates findings from
+proposed actions, and reports a verified result after execution. Conventional
+screens will remain available for inspection and direct control. Any action that can
+interrupt service, change configuration, expose data, or affect players requires
+an explicit approval step. The backend will enforce authorization and approval;
+the frontend is never the enforcement boundary.
 
-The browser fetches runtime data from the Rust monolith. The frontend never
-connects to PostgreSQL, RCON, or A2S directly. The Rust application enforces all
-authentication, authorization, workflow, and tenant rules.
+The production build creates a Next.js server artifact plus browser assets. A CDN
+or edge proxy may cache content-hashed assets. Server-rendered routes remain
+dynamic when they depend on operator sessions or tenant data.
+
+The Next.js runtime calls the Rust application over HTTP. It never connects to
+PostgreSQL, RCON, or A2S directly. The Rust application enforces all
+authentication, authorization, workflow, and tenant rules. Rendering a control
+in Next.js is never proof that an operator may perform its action.
 
 ## HTTP interfaces
 
-The monolith has two HTTP contract boundaries backed by the same application
+The system has two HTTP contract boundaries backed by the same Rust application
 behavior:
 
-- `/app-api/*` supports the Cupboard web interface. It uses an authenticated web
-  session and may evolve with the frontend.
+- `/app-api/*` supports the Next.js web runtime. It uses an authenticated web
+  session and may evolve with the frontend. Server Components call it directly;
+  browser-side requests use a same-origin Next.js boundary when required.
 - `/api/v1/*` will be the supported public API when that work enters the launch
   scope. It is versioned and uses scoped API credentials, rate limits, and
   pagination where applicable.
@@ -71,9 +86,9 @@ into a compatibility promise. Both interfaces call the same Rust functions for
 authorization, tenant-scoped access, validation, and persistence. Business rules
 must not be copied into route handlers.
 
-Cupboard does not treat application API routes as secret or assume they can only
-be called by the shipped frontend. Every request must be safe when called
-directly, repeated, or sent out of the expected UI order.
+Cupboard does not treat application API routes as secret or assume that only the
+Next.js runtime can call them. Every request must be safe when called directly,
+repeated, or sent out of the expected UI order.
 
 ## Server health and load
 
@@ -108,19 +123,23 @@ when their authorization and invalidation behavior is explicit.
 ## Development and delivery
 
 A fresh clone will provide one root command that starts PostgreSQL, the Rust
-application, and the Vite development server. A separate root command will run all
-required formatting, static checks, and tests for Rust and TypeScript.
+application, and the Next.js development server. A separate root command will
+run all required formatting, static checks, and tests for Rust and TypeScript.
 
 Development tooling may run several child processes behind that one command.
-Production still deploys one application artifact. The build compiles the static
-frontend before assembling that artifact.
+Production deploys the Next.js web artifact and the Rust application artifact.
+
+Until the backend exists, `npm run dev` is the root development command. It starts
+Next.js with hot reloading on `0.0.0.0`, prints the local URL, and discovers the
+machine's active NetBird IPv4 address for remote testing. `npm run check` checks
+formatting, lint, TypeScript, tests, and the production web build.
 
 ## Deliberately absent
 
-The starting architecture does not include microservices, a separate frontend
-runtime, server-side frontend rendering, an internal API service, Redis, a queue,
-or a standalone worker. Any later addition must name the current measured problem
-that requires it in `docs/REBUILD.md`.
+The starting architecture does not include feature microservices, Redis, a queue,
+or a standalone worker. Next.js is the single web runtime and Rust is the single
+application API runtime. Any later addition must name the current measured
+problem that requires it in `docs/REBUILD.md`.
 
 ## Decisions still required before code
 
