@@ -37,6 +37,10 @@ This repository is a clean rebuild for one developer working with coding agents.
 - Update `docs/REBUILD.md` when a decision changes the repository shape or launch
   scope.
 - Do not claim completion until the relevant checks pass.
+- Bind every local web development server to `0.0.0.0` so it is reachable through
+  NetBird. The root development command must print the active NetBird URL.
+- Whenever a user asks an agent to start the development server, include the
+  clickable NetBird URL in the response. Do not provide only a localhost URL.
 
 ## Linear workflow
 

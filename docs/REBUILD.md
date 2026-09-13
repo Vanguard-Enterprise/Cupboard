@@ -24,23 +24,39 @@ This path is the first proof, not the whole launch scope. Moderation, player
 identity, commerce, Discord, public APIs, white-label sites, and advanced
 performance analysis stay out until the core loop works in a deployed environment.
 
+Cupboard uses an AI-first operator flow. The operator states an intent, Cupboard
+reads the relevant stored server state, explains its findings, proposes a concrete
+action, obtains approval when the action is sensitive, and reports the verified
+outcome. The dashboard remains the source of truth for inspection and manual
+control. A conversational response must never imply that an action ran when it
+was only suggested or attempted.
+
 ## Starting architecture
 
 - One repository.
-- One production application by default.
+- One Next.js web runtime.
+- One Rust API and background-work runtime.
 - One PostgreSQL database.
 - One web interface.
-- Background work runs in the application until it causes a measured reliability
-  or scaling problem.
+- Background work runs in the Rust application until it causes a measured
+  reliability or scaling problem.
 - Redis, a message bus, and internal HTTP services are absent until a feature has a
   concrete need for them.
 
 The initial runtime and frontend shape is recorded in
-[`docs/ARCHITECTURE.md`](ARCHITECTURE.md). The backend is a Rust monolith, and the
-frontend is a static React and TypeScript SPA built with Vite. The database
-library, authentication provider, and deployment target must still be chosen
-together before application code is added. These choices should favor maintained
-libraries, fast tests, and simple deployment.
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md). The backend remains a Rust monolith.
+The web interface uses Next.js App Router so it can render on the server and call
+the Rust API without exposing private service credentials to the browser. This
+requires a separate web runtime, which is the first deliberate exception to the
+single-application default. The database library, authentication provider, and
+deployment target must still be chosen together before the first persistent
+application slice is added. These choices should favor maintained libraries,
+fast tests, and simple deployment.
+
+The frontend foundation stays in this repository. It uses Next.js Server
+Components, semantic Slate theme tokens, and source-owned shadcn controls.
+Feature slices may use mock data until the Rust application API is implemented.
+Mocked response shapes do not create a compatibility promise for that API.
 
 ## Acceptance bar for the first slice
 
@@ -59,7 +75,9 @@ or manual repair after a normal restart.
 ## Rules for adding complexity
 
 A new process, package, data store, queue, or protocol needs a short note in this
-file that names the current problem it solves. Expected future scale is not enough.
+file that names the current problem it solves. The Next.js runtime exists because
+the product requires server rendering and server-side API requests. Expected
+future scale is not enough reason for another process.
 
 Code generators may create a starting point, but generated code receives the same
 review and test requirements as handwritten code. If nobody can explain why a
