@@ -1,5 +1,3 @@
-"use client";
-
 import { cn } from "cn";
 import Link from "next/link";
 
@@ -15,7 +13,7 @@ import { Input } from "@/components/ui/input";
 
 export function LoginForm({
   className,
-  onSubmit,
+  action = "/login",
   ...props
 }: React.ComponentProps<"form">) {
   return (
@@ -23,10 +21,7 @@ export function LoginForm({
       {...props}
       className={cn("flex flex-col gap-6", className)}
       method="post"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSubmit?.(event);
-      }}
+      action={action}
     >
       <FieldGroup>
         <div className="flex flex-col items-center gap-1 text-center">

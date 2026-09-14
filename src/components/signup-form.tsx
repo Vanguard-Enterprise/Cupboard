@@ -1,5 +1,3 @@
-"use client";
-
 import { cn } from "cn";
 
 import { Button } from "@/components/ui/button";
@@ -8,7 +6,7 @@ import { Input } from "@/components/ui/input";
 
 export function SignupForm({
   className,
-  onSubmit,
+  action = "/signup",
   ...props
 }: React.ComponentProps<"form">) {
   return (
@@ -16,10 +14,7 @@ export function SignupForm({
       {...props}
       className={cn("flex flex-col gap-6", className)}
       method="post"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSubmit?.(event);
-      }}
+      action={action}
     >
       <FieldGroup>
         <div className="flex flex-col items-center gap-1 text-center">
