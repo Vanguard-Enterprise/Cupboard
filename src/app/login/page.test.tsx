@@ -1,0 +1,14 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import LoginPage from "./page";
+
+describe("login page", () => {
+  it("renders the Cupboard login form", () => {
+    const markup = renderToStaticMarkup(<LoginPage />);
+
+    expect(markup).toContain("Cupboard");
+    expect(markup).toContain("Login to your account");
+    expect(markup).toContain('id="email"');
+    expect(markup).toContain('id="password"');
+  });
+});
