@@ -48,6 +48,8 @@ organization details, and public contacts. Private contacts are excluded.
 
 Profile edits remain drafts until Save changes is selected. Cancel restores the
 saved values across both tabs. Invalid edits show an error and are not saved.
+Updates from another tab refresh untouched forms. If local edits conflict with
+a newer saved profile, Cancel loads the latest version before editing continues.
 
 Profile settings are a browser-local prototype stored under
 `cupboard:organization:local-preview:profile:v1`. Nothing is shared between

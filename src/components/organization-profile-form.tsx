@@ -33,6 +33,18 @@ function ProfileEditor({
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saveError, setSaveError] = useState("");
   const [savedNotice, setSavedNotice] = useState(false);
+  const [baseline, setBaseline] = useState(saved);
+  const [conflict, setConflict] = useState(false);
+  if (saved !== baseline) {
+    setBaseline(saved);
+    if (JSON.stringify(draft) !== JSON.stringify(saved)) setSavedNotice(false);
+    if (JSON.stringify(draft) === JSON.stringify(baseline)) {
+      setDraft(saved);
+      setConflict(false);
+    } else {
+      setConflict(JSON.stringify(draft) !== JSON.stringify(saved));
+    }
+  }
   const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
   function field(
     key: keyof OrganizationProfile,
@@ -182,6 +194,7 @@ function ProfileEditor({
       className="space-y-6"
       onSubmit={(event) => {
         event.preventDefault();
+        if (conflict) return;
         const normalized = Object.fromEntries(
           Object.entries(draft).map(([key, value]) => [key, value.trim()]),
         ) as OrganizationProfile;
@@ -303,6 +316,12 @@ function ProfileEditor({
                 Changes saved.
               </p>
             )}
+            {conflict && (
+              <p role="alert" className="w-full text-sm text-destructive">
+                This profile changed in another tab. Cancel to load the latest
+                version before editing again.
+              </p>
+            )}
             {saveError && (
               <p role="alert" className="mr-auto text-sm text-destructive">
                 {saveError}
@@ -312,9 +331,10 @@ function ProfileEditor({
               type="button"
               variant="outline"
               className="h-9 px-4"
-              disabled={!dirty}
+              disabled={!dirty && !conflict}
               onClick={() => {
                 setDraft(saved);
+                setConflict(false);
                 setErrors({});
                 setSaveError("");
                 setSavedNotice(false);
@@ -322,7 +342,11 @@ function ProfileEditor({
             >
               Cancel
             </Button>
-            <Button type="submit" className="h-9 px-4 " disabled={!dirty}>
+            <Button
+              type="submit"
+              className="h-9 px-4"
+              disabled={!dirty || conflict}
+            >
               Save changes
             </Button>
           </div>
