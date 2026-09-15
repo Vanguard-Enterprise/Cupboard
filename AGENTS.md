@@ -5,6 +5,8 @@ This repository is a clean rebuild for one developer working with coding agents.
 ## Before changing code
 
 - Read `README.md` and `docs/REBUILD.md`.
+- Before changing a user-facing interface, read `docs/DESIGN.md` and follow its
+  visual, interaction, accessibility, and writing direction.
 - Treat the old implementation as reference material only. Do not restore or copy
   it unless the user asks for a specific piece.
 - Preserve unrelated user changes already in the working tree.
@@ -19,6 +21,9 @@ This repository is a clean rebuild for one developer working with coding agents.
   split. A product feature name is not a reason to create a service or package.
 - Prefer direct calls within the application. Do not introduce internal HTTP,
   queues, or duplicated transport types between modules.
+- Never use browser-native menus in the product interface. Use the source-owned
+  select, combobox, dropdown, context-menu, command-menu, and popover components
+  in `src/components/ui`; add a missing shared component there before using it.
 - Add an abstraction after two real implementations need it, not before.
 - Delete abandoned paths instead of keeping compatibility layers for unreleased
   code.

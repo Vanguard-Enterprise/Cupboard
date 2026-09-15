@@ -14,7 +14,20 @@ import { useOrganization } from "@/components/organization-provider";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { countries, regionsForCountry } from "@/lib/address-options";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  useComboboxFilter,
+} from "@/components/ui/combobox";
+import {
+  countries,
+  countryForShortcut,
+  regionsForCountry,
+} from "@/lib/address-options";
 import {
   validateProfile,
   type OrganizationProfile,
@@ -35,6 +48,13 @@ function ProfileEditor({
   const [savedNotice, setSavedNotice] = useState(false);
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
+  const { contains: countryNameContains } = useComboboxFilter();
+  const filterCountry = (countryName: string, query: string) => {
+    const shortcut = countryForShortcut(query);
+    return shortcut
+      ? countryName === shortcut
+      : countryNameContains(countryName, query);
+  };
   if (saved !== baseline) {
     setBaseline(saved);
     if (JSON.stringify(draft) !== JSON.stringify(saved)) setSavedNotice(false);
@@ -60,8 +80,27 @@ function ProfileEditor({
         : key === "region"
           ? regionsForCountry(draft.country)
           : [];
-    const isSelect =
+    const isCombobox =
       key === "country" || (key === "region" && options.length > 0);
+    const optionNames = options.map((option) => option.name);
+    const comboboxItems =
+      draft[key] && !optionNames.includes(draft[key])
+        ? [draft[key], ...optionNames]
+        : optionNames;
+    const updateValue = (value: string) => {
+      setDraft({
+        ...draft,
+        [key]: value,
+        ...(key === "country" && value !== draft.country ? { region: "" } : {}),
+      });
+      setSaveError("");
+      setSavedNotice(false);
+      setErrors({
+        ...errors,
+        [key]: undefined,
+        ...(key === "country" ? { region: undefined } : {}),
+      });
+    };
     const common = {
       id: key,
       name: key,
@@ -86,25 +125,8 @@ function ProfileEditor({
           .filter(Boolean)
           .join(" ") || undefined,
       onChange: (
-        event: React.ChangeEvent<
-          HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
-        >,
-      ) => {
-        setDraft({
-          ...draft,
-          [key]: event.target.value,
-          ...(key === "country" && event.target.value !== draft.country
-            ? { region: "" }
-            : {}),
-        });
-        setSaveError("");
-        setSavedNotice(false);
-        setErrors({
-          ...errors,
-          [key]: undefined,
-          ...(key === "country" ? { region: undefined } : {}),
-        });
-      },
+        event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+      ) => updateValue(event.target.value),
     };
     return (
       <div
@@ -140,24 +162,46 @@ function ProfileEditor({
             </Tooltip>
           )}
         </div>
-        {isSelect ? (
-          <select
-            {...common}
-            className="h-10 w-full min-w-0 rounded-lg border border-input hover:border-border-strong bg-input-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+        {isCombobox ? (
+          <Combobox
+            items={comboboxItems}
+            value={draft[key] || null}
+            onValueChange={(value) => updateValue(value ?? "")}
+            name={key}
+            autoComplete={common.autoComplete}
+            autoHighlight
+            filter={key === "country" ? filterCountry : undefined}
           >
-            <option value="">
-              {key === "country" ? "Select country" : "Select state / region"}
-            </option>
-            {draft[key] &&
-              !options.some((option) => option.name === draft[key]) && (
-                <option value={draft[key]}>{draft[key]} (saved)</option>
-              )}
-            {options.map((option) => (
-              <option key={option.name} value={option.name}>
-                {option.name}
-              </option>
-            ))}
-          </select>
+            <ComboboxInput
+              id={key}
+              placeholder={
+                key === "country"
+                  ? "Select or search country"
+                  : "Select or search state / region"
+              }
+              aria-invalid={common["aria-invalid"]}
+              aria-describedby={common["aria-describedby"]}
+              showClear={Boolean(draft[key])}
+              className="h-10 w-full border-input bg-input-background hover:border-border-strong dark:bg-input-background"
+            />
+            <ComboboxContent className="border border-border">
+              <ComboboxEmpty>
+                {key === "country"
+                  ? "No countries found."
+                  : "No states or regions found."}
+              </ComboboxEmpty>
+              <ComboboxList>
+                {(option: string) => (
+                  <ComboboxItem key={option} value={option}>
+                    {option}
+                    {option === draft[key] && !optionNames.includes(option)
+                      ? " (saved)"
+                      : ""}
+                  </ComboboxItem>
+                )}
+              </ComboboxList>
+            </ComboboxContent>
+          </Combobox>
         ) : type === "textarea" ? (
           <Textarea
             {...common}
