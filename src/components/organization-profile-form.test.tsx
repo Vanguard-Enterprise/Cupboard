@@ -71,6 +71,32 @@ describe("Organization profile persistence", () => {
     expect(unitedKingdom.className).toContain("data-highlighted:bg-border");
   });
 
+  it("sizes combobox controls for coarse pointers", async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(screen.getByRole("tab", { name: "Contact info" }));
+
+    const country = screen.getByLabelText("Country") as HTMLInputElement;
+    const inputGroup = country.closest('[data-slot="input-group"]')!;
+    const inputAddon = inputGroup.querySelector(
+      '[data-slot="input-group-addon"]',
+    )!;
+    const trigger = inputGroup.querySelector('[aria-label="Show options"]')!;
+
+    expect(inputGroup.className).toContain(
+      "[@media(any-pointer:coarse)]:min-h-12",
+    );
+    expect(inputAddon.className).toContain("[@media(any-pointer:coarse)]:py-0");
+    expect(trigger.className).toContain("[@media(any-pointer:coarse)]:size-11");
+
+    await user.type(country, "USA");
+    await user.click(
+      await screen.findByRole("option", { name: "United States" }),
+    );
+    const clear = inputGroup.querySelector('[aria-label="Clear selection"]')!;
+    expect(clear.className).toContain("[@media(any-pointer:coarse)]:size-11");
+  });
+
   it("filters countries by common abbreviations", async () => {
     const user = userEvent.setup();
     mount();

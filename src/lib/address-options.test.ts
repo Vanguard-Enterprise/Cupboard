@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   countries,
   countryForShortcut,
@@ -35,5 +35,24 @@ describe("address options", () => {
     expect(countryForShortcut("UAE")).toBe("United Arab Emirates");
     expect(countryForShortcut("CA")).toBe("Canada");
     expect(countryForShortcut("United")).toBeUndefined();
+  });
+
+  it("keeps ASCII country codes stable in Turkish-like locales", async () => {
+    vi.resetModules();
+    const localeLowerCase = String.prototype.toLocaleLowerCase;
+    const localeSpy = vi
+      .spyOn(String.prototype, "toLocaleLowerCase")
+      .mockImplementation(function (this: string) {
+        return localeLowerCase.call(this, "tr-TR");
+      });
+
+    try {
+      const { countryForShortcut: countryForShortcutInTurkishLocale } =
+        await import("./address-options");
+      expect(countryForShortcutInTurkishLocale("is")).toBe("Iceland");
+      expect(countryForShortcutInTurkishLocale("id")).toBe("Indonesia");
+    } finally {
+      localeSpy.mockRestore();
+    }
   });
 });

@@ -3,7 +3,7 @@ import { allCountries } from "country-region-data";
 export const countries = allCountries.map(([name, code]) => ({ name, code }));
 
 const countryByCode = new Map(
-  countries.map(({ name, code }) => [code.toLocaleLowerCase(), name]),
+  countries.map(({ name, code }) => [code.toLowerCase(), name]),
 );
 
 const countryAliases = new Map([
@@ -15,7 +15,7 @@ const countryAliases = new Map([
 ]);
 
 function normalizeCountryQuery(value: string) {
-  return value.toLocaleLowerCase().replaceAll(".", "").trim();
+  return value.toLowerCase().replaceAll(".", "").trim();
 }
 
 export function countryForShortcut(query: string) {

@@ -47,7 +47,13 @@ function ComboboxClear({
   return (
     <ComboboxPrimitive.Clear
       data-slot="combobox-clear"
-      render={<InputGroupButton variant="ghost" size="icon-xs" />}
+      render={
+        <InputGroupButton
+          variant="ghost"
+          size="icon-xs"
+          className="[@media(any-pointer:coarse)]:size-11"
+        />
+      }
       className={cn(className)}
       aria-label={ariaLabel}
       {...props}
@@ -69,19 +75,24 @@ function ComboboxInput({
   showClear?: boolean;
 }) {
   return (
-    <InputGroup className={cn("w-auto", className)}>
+    <InputGroup
+      className={cn("w-auto [@media(any-pointer:coarse)]:min-h-12", className)}
+    >
       <ComboboxPrimitive.Input
         render={<InputGroupInput disabled={disabled} />}
         {...props}
       />
-      <InputGroupAddon align="inline-end">
+      <InputGroupAddon
+        align="inline-end"
+        className="[@media(any-pointer:coarse)]:py-0"
+      >
         {showTrigger && (
           <InputGroupButton
             size="icon-xs"
             variant="ghost"
             asChild
             data-slot="input-group-button"
-            className="group-has-data-[slot=combobox-clear]/input-group:hidden data-pressed:bg-transparent"
+            className="group-has-data-[slot=combobox-clear]/input-group:hidden [@media(any-pointer:coarse)]:size-11 data-pressed:bg-transparent"
             disabled={disabled}
           >
             <ComboboxTrigger />
