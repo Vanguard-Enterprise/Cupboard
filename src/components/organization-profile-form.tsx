@@ -21,10 +21,11 @@ import {
   ComboboxInput,
   ComboboxItem,
   ComboboxList,
+  useComboboxFilter,
 } from "@/components/ui/combobox";
 import {
   countries,
-  countryMatchesQuery,
+  countryForShortcut,
   regionsForCountry,
 } from "@/lib/address-options";
 import {
@@ -47,6 +48,13 @@ function ProfileEditor({
   const [savedNotice, setSavedNotice] = useState(false);
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
+  const { contains: countryNameContains } = useComboboxFilter();
+  const filterCountry = (countryName: string, query: string) => {
+    const shortcut = countryForShortcut(query);
+    return shortcut
+      ? countryName === shortcut
+      : countryNameContains(countryName, query);
+  };
   if (saved !== baseline) {
     setBaseline(saved);
     if (JSON.stringify(draft) !== JSON.stringify(saved)) setSavedNotice(false);
@@ -162,7 +170,7 @@ function ProfileEditor({
             name={key}
             autoComplete={common.autoComplete}
             autoHighlight
-            filter={key === "country" ? countryMatchesQuery : undefined}
+            filter={key === "country" ? filterCountry : undefined}
           >
             <ComboboxInput
               id={key}

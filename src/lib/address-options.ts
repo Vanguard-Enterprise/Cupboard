@@ -18,15 +18,11 @@ function normalizeCountryQuery(value: string) {
   return value.toLocaleLowerCase().replaceAll(".", "").trim();
 }
 
-export function countryMatchesQuery(countryName: string, query: string) {
+export function countryForShortcut(query: string) {
   const normalizedQuery = normalizeCountryQuery(query);
-  if (!normalizedQuery) return true;
-
-  const shortcut =
-    countryAliases.get(normalizedQuery) ?? countryByCode.get(normalizedQuery);
-  if (shortcut) return countryName === shortcut;
-
-  return normalizeCountryQuery(countryName).includes(normalizedQuery);
+  return (
+    countryAliases.get(normalizedQuery) ?? countryByCode.get(normalizedQuery)
+  );
 }
 
 export function regionsForCountry(country: string) {

@@ -90,6 +90,26 @@ describe("Organization profile persistence", () => {
     expect(screen.queryByRole("option", { name: "United States" })).toBeNull();
   });
 
+  it("keeps accent and punctuation insensitive country search", async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(screen.getByRole("tab", { name: "Contact info" }));
+
+    const country = screen.getByLabelText("Country") as HTMLInputElement;
+    const searches = [
+      ["Curacao", "Curaçao"],
+      ["Reunion", "Réunion"],
+      ["Cote", "Côte d'Ivoire, Republic of"],
+      ["Timor Leste", "Timor-Leste"],
+    ];
+
+    for (const [query, result] of searches) {
+      await user.clear(country);
+      await user.type(country, query);
+      expect(await screen.findByRole("option", { name: result })).toBeTruthy();
+    }
+  });
+
   it("filters and selects countries with the shared combobox", async () => {
     const user = userEvent.setup();
     mount();
