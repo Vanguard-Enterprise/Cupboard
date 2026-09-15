@@ -23,6 +23,7 @@ describe("development server configuration", () => {
       port: "5173",
       localUrl: "http://localhost:5173",
       netbirdUrl: undefined,
+      allowedDevOrigins: [],
     });
     expect(createNextDevArgs(config)).toEqual([
       "./node_modules/next/dist/bin/next",
@@ -44,6 +45,7 @@ describe("development server configuration", () => {
     );
 
     expect(config.netbirdUrl).toBe("http://100.107.41.153:6000");
+    expect(config.allowedDevOrigins).toEqual(["100.107.41.153"]);
   });
 
   it("prefers the address reported by the NetBird daemon", () => {
