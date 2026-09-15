@@ -67,6 +67,7 @@ describe("Organization profile persistence", () => {
     });
     await user.hover(unitedKingdom);
     expect(unitedKingdom.hasAttribute("data-highlighted")).toBe(true);
+    expect(unitedKingdom.className).toContain("min-h-11");
     expect(unitedKingdom.className).toContain("data-highlighted:bg-border");
   });
 
