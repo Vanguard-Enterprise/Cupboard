@@ -6,6 +6,12 @@ Read the [rebuild plan](docs/REBUILD.md) for the current product scope,
 architecture, and acceptance criteria. Contributors should also follow
 [AGENTS.md](AGENTS.md).
 
+## Design direction
+
+Read the [design direction](docs/DESIGN.md) before changing the interface. It
+records Cupboard's product character, visual system, interaction rules,
+accessibility bar, and writing style.
+
 ## Web development
 
 Use Node.js 24.18.0 (recorded in `.nvmrc`), then install the dependencies:
@@ -50,6 +56,9 @@ Profile edits remain drafts until Save changes is selected. Cancel restores the
 saved values across both tabs. Invalid edits show an error and are not saved.
 Updates from another tab refresh untouched forms. If local edits conflict with
 a newer saved profile, Cancel loads the latest version before editing continues.
+Country and supported state or region fields use searchable source-owned
+comboboxes instead of native browser menus. The country menu supports keyboard
+navigation and common abbreviations such as USA and UK.
 
 Profile settings are a browser-local prototype stored under
 `cupboard:organization:local-preview:profile:v1`. Nothing is shared between
