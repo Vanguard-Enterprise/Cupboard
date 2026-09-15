@@ -33,6 +33,7 @@ export function createDevServerConfig(interfaces, port = "5173", statusJson) {
     port,
     localUrl: `http://localhost:${port}`,
     netbirdUrl: netbirdAddress ? `http://${netbirdAddress}:${port}` : undefined,
+    allowedDevOrigins: netbirdAddress ? [netbirdAddress] : [],
   };
 }
 
@@ -78,6 +79,10 @@ function start() {
 
   const next = spawn(process.execPath, createNextDevArgs(config), {
     stdio: "inherit",
+    env: {
+      ...process.env,
+      CUPBOARD_DEV_ORIGINS: config.allowedDevOrigins.join(","),
+    },
   });
 
   for (const signal of ["SIGINT", "SIGTERM"]) {

@@ -1,0 +1,80 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import { usePathname } from "next/navigation";
+import { AppSidebar } from "@/components/app-sidebar";
+import { OrganizationProvider } from "@/components/organization-provider";
+import { OrganizationSearch } from "@/components/organization-search";
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
+import { profilePath } from "@/lib/dashboard-navigation";
+
+export function Workspace({
+  children,
+  defaultOpen,
+}: {
+  children: React.ReactNode;
+  defaultOpen: boolean;
+}) {
+  const pathname = usePathname();
+  const isProfile = pathname === profilePath;
+  const [searchOpen, setSearchOpen] = useState(false);
+  return (
+    <OrganizationProvider>
+      <SidebarProvider defaultOpen={defaultOpen}>
+        <AppSidebar
+          activeSection={isProfile ? "organization" : undefined}
+          onSearch={() => setSearchOpen(true)}
+        />
+        <SidebarInset>
+          <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4 py-3">
+            <SidebarTrigger />
+            <Breadcrumb>
+              <BreadcrumbList>
+                <BreadcrumbItem>
+                  {isProfile ? (
+                    <BreadcrumbLink asChild>
+                      <Link href="/dashboard">Dashboard</Link>
+                    </BreadcrumbLink>
+                  ) : (
+                    <BreadcrumbPage>Dashboard</BreadcrumbPage>
+                  )}
+                </BreadcrumbItem>
+                {isProfile && (
+                  <>
+                    <BreadcrumbSeparator />
+                    <BreadcrumbItem>
+                      <span>Organization</span>
+                    </BreadcrumbItem>
+                    <BreadcrumbSeparator />
+                    <BreadcrumbItem>
+                      <span>Settings</span>
+                    </BreadcrumbItem>
+                    <BreadcrumbSeparator />
+                    <BreadcrumbItem>
+                      <BreadcrumbPage>Profile</BreadcrumbPage>
+                    </BreadcrumbItem>
+                  </>
+                )}
+              </BreadcrumbList>
+            </Breadcrumb>
+          </header>
+          {children}
+        </SidebarInset>
+        <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
+      </SidebarProvider>
+    </OrganizationProvider>
+  );
+}

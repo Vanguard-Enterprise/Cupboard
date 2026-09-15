@@ -10,10 +10,10 @@ export default function LoginPage() {
       <div className="flex flex-col gap-4 p-6 md:p-10">
         <div className="flex justify-center gap-2 md:justify-start">
           <Link href="/" className="flex items-center gap-2 font-medium">
-            <span className="flex size-7 items-center justify-center rounded-lg border border-sky-300/40 bg-sky-400/10 text-xs font-semibold text-sky-200">
+            <span className="flex size-7 items-center justify-center rounded-lg border border-border bg-surface-elevated text-xs font-semibold text-foreground">
               C
             </span>
-            <span className="text-slate-100">Cupboard</span>
+            <span className="text-foreground">Cupboard</span>
           </Link>
         </div>
         <div className="flex flex-1 items-center justify-center">
@@ -22,7 +22,7 @@ export default function LoginPage() {
           </div>
         </div>
       </div>
-      <div className="relative hidden overflow-hidden bg-slate-950 lg:block">
+      <div className="relative hidden overflow-hidden bg-background lg:block">
         <Image
           src="/placeholder.svg"
           alt=""
@@ -30,7 +30,7 @@ export default function LoginPage() {
           priority
           className="object-cover opacity-35"
         />
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-900/70 via-slate-950/65 to-blue-950/90" />
+        <div className="absolute inset-0 bg-gradient-to-br from-card/70 via-background/65 to-background/90" />
       </div>
     </div>
   );

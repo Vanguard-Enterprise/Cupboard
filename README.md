@@ -23,6 +23,8 @@ npm run dev
 The command starts Next.js with hot reloading, binds it to all network
 interfaces, and prints both the local URL and the active NetBird URL. The
 default port is `5173`; set `CUPBOARD_PORT` to use another port.
+The command also allows the detected NetBird host to load Next.js development
+resources so interactive controls and hot reloading work over NetBird.
 
 Run every web check from the repository root:
 
@@ -35,7 +37,25 @@ Components unless they need browser state or event handlers. This lets the web
 runtime call the future Rust API without exposing private service credentials to
 the browser.
 
-Shadcn is initialized with Radix components and the default Slate color tokens.
+Shadcn is initialized with Radix components and the charcoal surfaces and muted sage accent tokens.
 The current component catalog is installed in `src/components/ui` so product
-work does not need to rerun setup. The application currently contains only a
-minimal root page; the discarded login prototype is not part of this foundation.
+work does not need to rerun setup. The `/dashboard/` page uses the shadcn
+`sidebar-07` block with organization navigation. The dashboard is empty until
+server data is connected. Organization profile settings live at
+`/dashboard/organization/settings/profile`; unfinished sidebar items have no destination.
+The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
+organization details, and public contacts. Private contacts are excluded.
+
+Profile edits remain drafts until Save changes is selected. Cancel restores the
+saved values across both tabs. Invalid edits show an error and are not saved.
+Updates from another tab refresh untouched forms. If local edits conflict with
+a newer saved profile, Cancel loads the latest version before editing continues.
+
+Profile settings are a browser-local prototype stored under
+`cupboard:organization:local-preview:profile:v1`. Nothing is shared between
+browsers or sent to a profile API. Private contacts are a field grouping, not an
+access-control boundary: anyone using this browser profile can read them. Do not
+use real confidential details until authentication and shared storage exist.
+
+The sidebar remembers its expanded state in the `sidebar_state` cookie for
+seven days, including across refreshes and visits to the login page.

@@ -54,9 +54,24 @@ application slice is added. These choices should favor maintained libraries,
 fast tests, and simple deployment.
 
 The frontend foundation stays in this repository. It uses Next.js Server
-Components, semantic Slate theme tokens, and source-owned shadcn controls.
+Components, semantic charcoal and sage theme tokens, and source-owned shadcn controls.
 Feature slices may use mock data until the Rust application API is implemented.
 Mocked response shapes do not create a compatibility promise for that API.
+
+The dashboard navigation explores a broader organization workspace in Operations,
+Community, and Organization groups. Infrastructure covers hosts and nodes; game
+servers covers Rust instances. Unimplemented navigation items have no destination and do not expand the first
+deployable slice. Connection capabilities must be
+verified per connector before offering actions such as file access or host power
+control. Player identities and staff organization membership are separate domains.
+
+The first editable frontend page is `/dashboard/organization/settings/profile`. It currently
+persists a local preview in browser storage because authentication and the shared
+database remain undecided. Public and private contact fields are separate; general
+search indexes only public fields. This preview is not tenant-authorized storage
+and must not hold confidential production contacts. Shared persistence must add
+server-side membership checks before replacing the preview. Organization search
+currently covers only implemented pages and locally saved profile information.
 
 ## Acceptance bar for the first slice
 
