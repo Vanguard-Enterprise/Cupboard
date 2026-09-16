@@ -321,6 +321,10 @@ export function OrganizationIntegrations() {
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false);
   const [credentialName, setCredentialName] = useState("");
   const [credentialNameError, setCredentialNameError] = useState("");
+  const [credentialStartedWithMissingKey, setCredentialStartedWithMissingKey] =
+    useState(true);
+  const [credentialStorageCleared, setCredentialStorageCleared] =
+    useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
@@ -333,6 +337,9 @@ export function OrganizationIntegrations() {
   const [webhookEditConflict, setWebhookEditConflict] = useState<
     "deleted" | "changed" | null
   >(null);
+  const [webhookStartedWithMissingKey, setWebhookStartedWithMissingKey] =
+    useState(true);
+  const [webhookStorageCleared, setWebhookStorageCleared] = useState(false);
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(
     null,
   );
@@ -348,13 +355,21 @@ export function OrganizationIntegrations() {
   const [credentialToRevoke, setCredentialToRevoke] =
     useState<ApiCredential | null>(null);
   const [credentialRevokeConflict, setCredentialRevokeConflict] = useState<
-    "deleted" | "changed" | null
+    "deleted" | "changed" | "cleared" | null
   >(null);
+  const [
+    credentialRevokeStartedWithMissingKey,
+    setCredentialRevokeStartedWithMissingKey,
+  ] = useState(true);
   const [webhookToDelete, setWebhookToDelete] =
     useState<WebhookEndpoint | null>(null);
   const [webhookDeleteConflict, setWebhookDeleteConflict] = useState<
-    "deleted" | "changed" | null
+    "deleted" | "changed" | "cleared" | null
   >(null);
+  const [
+    webhookDeleteStartedWithMissingKey,
+    setWebhookDeleteStartedWithMissingKey,
+  ] = useState(true);
   const [unreadableToReplace, setUnreadableToReplace] = useState<string | null>(
     null,
   );
@@ -400,9 +415,21 @@ export function OrganizationIntegrations() {
     }
   }
 
-  function latestDataForMutation(): OrganizationIntegrations | null {
+  function latestDataForMutation(
+    startedWithMissingKey: boolean,
+    onCleared: () => void,
+  ): OrganizationIntegrations | null {
     const latestRaw = integrationsSnapshot();
     if (latestRaw === null) {
+      if (!startedWithMissingKey) {
+        onCleared();
+        setFeedback({
+          kind: "alert",
+          message:
+            "Integration data was cleared in another tab. Review the current preview before trying again.",
+        });
+        return null;
+      }
       return structuredClone(defaultOrganizationIntegrations);
     }
     try {
@@ -492,6 +519,8 @@ export function OrganizationIntegrations() {
   }
 
   function openCredentialDialog() {
+    setCredentialStartedWithMissingKey(integrationsSnapshot() === null);
+    setCredentialStorageCleared(false);
     setCredentialName("");
     setCredentialNameError("");
     setCredentialDialogOpen(true);
@@ -505,7 +534,10 @@ export function OrganizationIntegrations() {
       credentialNameRef.current?.focus();
       return;
     }
-    const latestData = latestDataForMutation();
+    const latestData = latestDataForMutation(
+      credentialStartedWithMissingKey,
+      () => setCredentialStorageCleared(true),
+    );
     if (!latestData) return;
     const secret = createCredentialSecret();
     const credential: ApiCredential = {
@@ -541,6 +573,8 @@ export function OrganizationIntegrations() {
   }
 
   function openWebhookDialog() {
+    setWebhookStartedWithMissingKey(integrationsSnapshot() === null);
+    setWebhookStorageCleared(false);
     setEditingWebhookId(null);
     setEditingWebhookBaseline(null);
     setWebhookEditConflict(null);
@@ -552,6 +586,8 @@ export function OrganizationIntegrations() {
   }
 
   function editWebhook(webhook: WebhookEndpoint) {
+    setWebhookStartedWithMissingKey(integrationsSnapshot() === null);
+    setWebhookStorageCleared(false);
     setSelectedWebhookId(null);
     setEditingWebhookId(webhook.id);
     setEditingWebhookBaseline(editableWebhookSnapshot(webhook));
@@ -565,7 +601,9 @@ export function OrganizationIntegrations() {
 
   function createWebhook(event: React.FormEvent) {
     event.preventDefault();
-    const latestData = latestDataForMutation();
+    const latestData = latestDataForMutation(webhookStartedWithMissingKey, () =>
+      setWebhookStorageCleared(true),
+    );
     if (!latestData) return;
     const latestEditingWebhook = editingWebhookId
       ? latestData.webhooks.find((webhook) => webhook.id === editingWebhookId)
@@ -628,7 +666,10 @@ export function OrganizationIntegrations() {
   function revokeCredential() {
     if (!credentialToRevoke) return;
     const name = credentialToRevoke.name;
-    const latestData = latestDataForMutation();
+    const latestData = latestDataForMutation(
+      credentialRevokeStartedWithMissingKey,
+      () => setCredentialRevokeConflict("cleared"),
+    );
     if (!latestData) return;
     const latestCredential = latestData.credentials.find(
       (item) => item.id === credentialToRevoke.id,
@@ -661,7 +702,10 @@ export function OrganizationIntegrations() {
   function deleteWebhook() {
     if (!webhookToDelete) return;
     const name = webhookToDelete.name;
-    const latestData = latestDataForMutation();
+    const latestData = latestDataForMutation(
+      webhookDeleteStartedWithMissingKey,
+      () => setWebhookDeleteConflict("cleared"),
+    );
     if (!latestData) return;
     const latestWebhook = latestData.webhooks.find(
       (item) => item.id === webhookToDelete.id,
@@ -753,6 +797,9 @@ export function OrganizationIntegrations() {
                 key={credential.id}
                 credential={credential}
                 onRevoke={(item) => {
+                  setCredentialRevokeStartedWithMissingKey(
+                    integrationsSnapshot() === null,
+                  );
                   setCredentialRevokeConflict(null);
                   setCredentialToRevoke(item);
                 }}
@@ -805,6 +852,9 @@ export function OrganizationIntegrations() {
                 }}
                 onEdit={editWebhook}
                 onDelete={(item) => {
+                  setWebhookDeleteStartedWithMissingKey(
+                    integrationsSnapshot() === null,
+                  );
                   setWebhookDeleteConflict(null);
                   setWebhookToDelete(item);
                 }}
@@ -834,6 +884,12 @@ export function OrganizationIntegrations() {
               cannot authenticate to the Cupboard API.
             </DialogDescription>
           </DialogHeader>
+          {credentialStorageCleared && (
+            <p role="alert" className="text-sm text-destructive">
+              Integration data was cleared in another tab. Close and reopen this
+              form before creating a credential.
+            </p>
+          )}
           <form
             id="create-credential-form"
             onSubmit={createCredential}
@@ -878,7 +934,7 @@ export function OrganizationIntegrations() {
               type="submit"
               form="create-credential-form"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              disabled={!credentialNameValid}
+              disabled={!credentialNameValid || credentialStorageCleared}
             >
               Create credential
             </Button>
@@ -961,6 +1017,12 @@ export function OrganizationIntegrations() {
               {webhookEditIssue === "deleted"
                 ? "This webhook was deleted in another tab. Close this dialog without saving."
                 : "This webhook changed in another tab. Close and reopen it before editing again."}
+            </p>
+          )}
+          {webhookStorageCleared && (
+            <p role="alert" className="text-sm text-destructive">
+              Integration data was cleared in another tab. Close and reopen this
+              form before saving.
             </p>
           )}
           <form
@@ -1078,7 +1140,11 @@ export function OrganizationIntegrations() {
               type="submit"
               form="create-webhook-form"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              disabled={!webhookFormValid || Boolean(webhookEditIssue)}
+              disabled={
+                !webhookFormValid ||
+                Boolean(webhookEditIssue) ||
+                webhookStorageCleared
+              }
             >
               {editingWebhookId ? "Save changes" : "Add webhook"}
             </Button>
@@ -1246,6 +1312,9 @@ export function OrganizationIntegrations() {
                   className="h-10 [@media(any-pointer:coarse)]:min-h-11 sm:ml-auto"
                   onClick={() => {
                     setSelectedWebhookId(null);
+                    setWebhookDeleteStartedWithMissingKey(
+                      integrationsSnapshot() === null,
+                    );
                     setWebhookDeleteConflict(null);
                     setWebhookToDelete(selectedWebhook);
                   }}
@@ -1331,7 +1400,9 @@ export function OrganizationIntegrations() {
               <p role="alert" className="text-sm text-destructive">
                 {credentialRevokeConflict === "deleted"
                   ? "This credential was already removed in another tab. Close this confirmation."
-                  : "This credential changed in another tab. Close and reopen the confirmation before revoking it."}
+                  : credentialRevokeConflict === "changed"
+                    ? "This credential changed in another tab. Close and reopen the confirmation before revoking it."
+                    : "Integration data was cleared in another tab. Close this confirmation before trying again."}
               </p>
             )}
           </AlertDialogHeader>
@@ -1380,7 +1451,9 @@ export function OrganizationIntegrations() {
               <p role="alert" className="text-sm text-destructive">
                 {webhookDeleteConflict === "deleted"
                   ? "This webhook was already deleted in another tab. Close this confirmation."
-                  : "This webhook changed in another tab. Close and reopen the confirmation before deleting it."}
+                  : webhookDeleteConflict === "changed"
+                    ? "This webhook changed in another tab. Close and reopen the confirmation before deleting it."
+                    : "Integration data was cleared in another tab. Close this confirmation before trying again."}
               </p>
             )}
           </AlertDialogHeader>

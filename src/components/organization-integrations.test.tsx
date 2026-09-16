@@ -33,6 +33,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function clearIntegrationsAsExternalUpdate() {
+  const oldValue = localStorage.getItem(organizationIntegrationsKey);
+  act(() => {
+    localStorage.removeItem(organizationIntegrationsKey);
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: organizationIntegrationsKey,
+        oldValue,
+        newValue: null,
+      }),
+    );
+  });
+}
+
 describe("Organization credentials and webhooks", () => {
   it("keeps section actions reachable on narrow screens", () => {
     render(<OrganizationIntegrations />);
@@ -139,6 +153,44 @@ describe("Organization credentials and webhooks", () => {
       stored.credentials.map((item: { name: string }) => item.name),
     ).toEqual(expect.arrayContaining(["Deploy agent", "Created elsewhere"]));
     expect(stored.webhooks[0].name).toBe("Updated elsewhere");
+  });
+
+  it("does not recreate cleared data from an open credential form", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Create credential" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Credential name" }),
+      "Deploy agent",
+    );
+    clearIntegrationsAsExternalUpdate();
+    await user.click(
+      screen
+        .getByRole("dialog", { name: "Create API credential" })
+        .querySelector('button[type="submit"]')!,
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    const dialog = screen.getByRole("dialog", {
+      name: "Create API credential",
+    });
+    expect(
+      within(dialog).getByText(
+        "Integration data was cleared in another tab. Close and reopen this form before creating a credential.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Create credential",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
   it("preserves a credential draft when integration data becomes unreadable", async () => {
@@ -589,6 +641,47 @@ describe("Organization credentials and webhooks", () => {
     });
   });
 
+  it("does not recreate cleared data from an open webhook form", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Add webhook" }));
+    const dialog = screen.getByRole("dialog", { name: "Add webhook" });
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Webhook name" }),
+      "Incident relay",
+    );
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Endpoint URL" }),
+      "https://hooks.example.com/incidents",
+    );
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Player reported" }),
+    );
+    clearIntegrationsAsExternalUpdate();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add webhook" }),
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      within(dialog).getByText(
+        "Integration data was cleared in another tab. Close and reopen this form before saving.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Add webhook",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
   it("requires confirmation before revoking a credential", async () => {
     const user = userEvent.setup();
     render(<OrganizationIntegrations />);
@@ -623,6 +716,40 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Server operations removed from preview data.",
     );
+  });
+
+  it("does not recreate cleared data from a credential revocation", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Revoke Server operations?",
+    });
+    clearIntegrationsAsExternalUpdate();
+    await user.click(
+      within(confirmation).getByRole("button", {
+        name: "Revoke credential",
+      }),
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      within(confirmation).getByText(
+        "Integration data was cleared in another tab. Close this confirmation before trying again.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(confirmation).getByRole("button", {
+          name: "Revoke credential",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
   it("opens webhook details without retry for a healthy delivery", async () => {
@@ -688,6 +815,74 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Operations bridge deleted from preview data.",
     );
+  });
+
+  it("does not recreate cleared data from an open webhook edit", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit webhook" });
+    clearIntegrationsAsExternalUpdate();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      within(dialog).getByText(
+        "Integration data was cleared in another tab. Close and reopen this form before saving.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("does not recreate cleared data from a webhook deletion", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Delete Operations relay?",
+    });
+    clearIntegrationsAsExternalUpdate();
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Delete webhook" }),
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      within(confirmation).getByText(
+        "Integration data was cleared in another tab. Close this confirmation before trying again.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(confirmation).getByRole("button", {
+          name: "Delete webhook",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
   it("does not delete a webhook changed after confirmation opens", async () => {
