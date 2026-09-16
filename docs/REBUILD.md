@@ -74,7 +74,11 @@ server-side membership checks before replacing the preview. Organization search
 currently covers only implemented pages and locally saved profile information.
 The organization usage page at `/dashboard/organization/settings/usage` previews
 activity and capacity charts with sample data. It does not meter activity, enforce
-limits, or connect to billing. The organization notifications and data page at
+limits, or connect to billing. The organization connections page at
+`/dashboard/organization/integrations/connections` previews connection health and
+setup requirements with sample data. It does not request credentials, connect an
+external account, or persist connection settings. The organization notifications
+and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
 in the current browser and can clear Cupboard's organization preview data there.
 It does not send notifications or delete shared server data.

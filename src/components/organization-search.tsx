@@ -126,6 +126,14 @@ export function OrganizationSearch({
                   Access &amp; approvals
                 </CommandItem>
                 <CommandItem
+                  value="Organization integrations connections external services"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/integrations/connections")
+                  }
+                >
+                  Connections
+                </CommandItem>
+                <CommandItem
                   value="Organization notifications data preferences browser storage"
                   onSelect={() =>
                     navigate(
