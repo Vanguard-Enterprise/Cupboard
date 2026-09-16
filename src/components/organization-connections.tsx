@@ -377,7 +377,7 @@ export function OrganizationConnections() {
                 <DialogTitle
                   ref={dialogTitleRef}
                   tabIndex={-1}
-                  className="outline-none"
+                  className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 >
                   {selected.kind === "connected"
                     ? `${selected.service.name} connection`

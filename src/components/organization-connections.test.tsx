@@ -70,10 +70,16 @@ describe("Organization connections", () => {
     const user = userEvent.setup();
     mount();
 
-    await user.click(screen.getByRole("button", { name: "Set up Cloudflare" }));
+    const setupCloudflare = screen.getByRole("button", {
+      name: "Set up Cloudflare",
+    });
+    setupCloudflare.focus();
+    await user.keyboard("{Enter}");
     expect(screen.getByRole("dialog")).toBeTruthy();
     const dialogTitle = screen.getByText("Connect Cloudflare");
     expect(document.activeElement).toBe(dialogTitle);
+    expect(dialogTitle.className).toContain("focus-visible:ring-2");
+    expect(dialogTitle.className).toContain("focus-visible:ring-ring/50");
     expect(screen.getByText("Requirements")).toBeTruthy();
     expect(screen.getByText("Scoped API token")).toBeTruthy();
     expect(screen.getByText("Selected zone access")).toBeTruthy();
