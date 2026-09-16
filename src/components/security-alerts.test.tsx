@@ -102,12 +102,22 @@ describe("Security alerts", () => {
   it("keeps the acknowledgement in memory when browser storage fails", async () => {
     const user = userEvent.setup();
     render(<SecurityAlerts />);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Open" }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by severity" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Critical" }));
+
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("Storage unavailable");
     });
 
     await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
-    expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
+    expect(screen.getByText("No matching alerts")).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be saved",
     );

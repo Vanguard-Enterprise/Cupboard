@@ -124,12 +124,10 @@ function AlertDetail({
   alert,
   acknowledged,
   onToggleAcknowledged,
-  storageError,
 }: {
   alert: SecurityAlert;
   acknowledged: boolean;
   onToggleAcknowledged: () => void;
-  storageError: string;
 }) {
   return (
     <article
@@ -235,11 +233,6 @@ function AlertDetail({
           {acknowledged && (
             <p role="status" className="text-xs text-text-muted/70">
               Alert acknowledged.
-            </p>
-          )}
-          {storageError && (
-            <p role="alert" className="basis-full text-xs text-destructive">
-              {storageError}
             </p>
           )}
         </div>
@@ -403,7 +396,7 @@ export function SecurityAlerts() {
               <p className="font-mono text-[2rem] leading-none font-semibold tracking-tight tabular-nums">
                 {value}
               </p>
-              <p className="text-[10px] leading-none font-normal text-text-muted/60">
+              <p className="text-[10px] leading-none font-normal text-text-muted">
                 {detail}
               </p>
             </div>
@@ -574,7 +567,6 @@ export function SecurityAlerts() {
               alert={selectedAlert}
               acknowledged={acknowledgedIds.has(selectedAlert.id)}
               onToggleAcknowledged={() => toggleAcknowledged(selectedAlert)}
-              storageError={storageError}
             />
           ) : (
             <Empty className="min-h-80 border-0">
@@ -590,6 +582,14 @@ export function SecurityAlerts() {
             </Empty>
           )}
         </div>
+        {storageError && (
+          <p
+            role="alert"
+            className="border-t border-border px-4 py-2.5 text-xs text-destructive sm:px-5"
+          >
+            {storageError}
+          </p>
+        )}
       </section>
     </div>
   );
