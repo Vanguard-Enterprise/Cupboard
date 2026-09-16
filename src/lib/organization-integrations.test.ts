@@ -36,6 +36,9 @@ describe("organization integrations data", () => {
     expect(() => parseOrganizationIntegrations("not-json")).toThrow(
       "Invalid integration data",
     );
+    expect(() => parseOrganizationIntegrations("")).toThrow(
+      "Invalid integration data",
+    );
     expect(() =>
       parseOrganizationIntegrations('{"credentials":"bad"}'),
     ).toThrow("Invalid integration data");

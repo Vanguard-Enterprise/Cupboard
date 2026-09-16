@@ -150,7 +150,7 @@ describe("Organization credentials and webhooks", () => {
       screen.getByRole("textbox", { name: "Credential name" }),
       "Deploy agent",
     );
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(organizationIntegrationsKey, "");
 
     await user.click(
       screen
@@ -158,9 +158,7 @@ describe("Organization credentials and webhooks", () => {
         .querySelector('button[type="submit"]')!,
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(
-      "unreadable-data",
-    );
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe("");
     expect(
       screen.getByRole("alertdialog", {
         name: "Replace unreadable integration data?",
@@ -173,7 +171,7 @@ describe("Organization credentials and webhooks", () => {
 
   it("requires confirmation before replacing unreadable integration data", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(organizationIntegrationsKey, "");
     localStorage.setItem("unrelated-preview-data", "keep-me");
     render(<OrganizationIntegrations />);
 
@@ -214,9 +212,7 @@ describe("Organization credentials and webhooks", () => {
     const confirmation = screen.getByRole("alertdialog", {
       name: "Replace unreadable integration data?",
     });
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(
-      "unreadable-data",
-    );
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe("");
     expect(
       within(confirmation)
         .getByRole("button", { name: "Keep data" })
@@ -476,6 +472,75 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Operations bridge deleted from preview data.",
     );
+  });
+
+  it("does not delete a webhook changed after confirmation opens", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Delete Operations relay?",
+    });
+    const changed = structuredClone(defaultOrganizationIntegrations);
+    changed.webhooks[0].url = "https://new.example.com/hooks/cupboard";
+    const raw = JSON.stringify(changed);
+    localStorage.setItem(organizationIntegrationsKey, raw);
+
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Delete webhook" }),
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(raw);
+    expect(
+      within(confirmation).getByText(
+        "This webhook changed in another tab. Close and reopen the confirmation before deleting it.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(confirmation).getByRole("button", {
+          name: "Delete webhook",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      screen.queryByText("Operations relay deleted from preview data."),
+    ).toBeNull();
+  });
+
+  it("does not report success when a confirmed webhook was already deleted", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Delete Operations relay?",
+    });
+    const deleted = structuredClone(defaultOrganizationIntegrations);
+    deleted.webhooks = [];
+    const raw = JSON.stringify(deleted);
+    localStorage.setItem(organizationIntegrationsKey, raw);
+
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Delete webhook" }),
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(raw);
+    expect(
+      within(confirmation).getByText(
+        "This webhook was already deleted in another tab. Close this confirmation.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("Operations relay deleted from preview data."),
+    ).toBeNull();
   });
 
   it("does not recreate a webhook deleted in another tab while editing", async () => {

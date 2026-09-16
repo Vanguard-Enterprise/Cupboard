@@ -79,9 +79,9 @@ function subscribeToIntegrations(callback: () => void) {
   };
 }
 
-function integrationsSnapshot(): string {
+function integrationsSnapshot(): string | null {
   try {
-    return localStorage.getItem(organizationIntegrationsKey) ?? "";
+    return localStorage.getItem(organizationIntegrationsKey);
   } catch {
     return "storage-unavailable";
   }
@@ -273,7 +273,7 @@ export function OrganizationIntegrations() {
     integrationsServerSnapshot,
   );
   const { data, storageUnreadable } = useMemo(() => {
-    if (raw === null || raw === "") {
+    if (raw === null) {
       return {
         data: structuredClone(defaultOrganizationIntegrations),
         storageUnreadable: false,
@@ -321,8 +321,14 @@ export function OrganizationIntegrations() {
   });
   const [credentialToRevoke, setCredentialToRevoke] =
     useState<ApiCredential | null>(null);
+  const [credentialRevokeConflict, setCredentialRevokeConflict] = useState<
+    "deleted" | "changed" | null
+  >(null);
   const [webhookToDelete, setWebhookToDelete] =
     useState<WebhookEndpoint | null>(null);
+  const [webhookDeleteConflict, setWebhookDeleteConflict] = useState<
+    "deleted" | "changed" | null
+  >(null);
   const [replaceUnreadableOpen, setReplaceUnreadableOpen] = useState(false);
   const credentialNameRef = useRef<HTMLInputElement>(null);
   const webhookNameRef = useRef<HTMLInputElement>(null);
@@ -365,7 +371,9 @@ export function OrganizationIntegrations() {
 
   function latestDataForMutation(): OrganizationIntegrations | null {
     const latestRaw = integrationsSnapshot();
-    if (!latestRaw) return structuredClone(defaultOrganizationIntegrations);
+    if (latestRaw === null) {
+      return structuredClone(defaultOrganizationIntegrations);
+    }
     try {
       return parseOrganizationIntegrations(latestRaw);
     } catch {
@@ -539,6 +547,19 @@ export function OrganizationIntegrations() {
     const name = credentialToRevoke.name;
     const latestData = latestDataForMutation();
     if (!latestData) return;
+    const latestCredential = latestData.credentials.find(
+      (item) => item.id === credentialToRevoke.id,
+    );
+    if (!latestCredential) {
+      setCredentialRevokeConflict("deleted");
+      return;
+    }
+    if (
+      JSON.stringify(latestCredential) !== JSON.stringify(credentialToRevoke)
+    ) {
+      setCredentialRevokeConflict("changed");
+      return;
+    }
     if (
       persist(
         {
@@ -559,6 +580,17 @@ export function OrganizationIntegrations() {
     const name = webhookToDelete.name;
     const latestData = latestDataForMutation();
     if (!latestData) return;
+    const latestWebhook = latestData.webhooks.find(
+      (item) => item.id === webhookToDelete.id,
+    );
+    if (!latestWebhook) {
+      setWebhookDeleteConflict("deleted");
+      return;
+    }
+    if (JSON.stringify(latestWebhook) !== JSON.stringify(webhookToDelete)) {
+      setWebhookDeleteConflict("changed");
+      return;
+    }
     if (
       persist(
         {
@@ -636,7 +668,10 @@ export function OrganizationIntegrations() {
               <CredentialRow
                 key={credential.id}
                 credential={credential}
-                onRevoke={setCredentialToRevoke}
+                onRevoke={(item) => {
+                  setCredentialRevokeConflict(null);
+                  setCredentialToRevoke(item);
+                }}
                 disabled={storageUnreadable}
               />
             ))
@@ -685,7 +720,10 @@ export function OrganizationIntegrations() {
                   setSelectedWebhookId(item.id);
                 }}
                 onEdit={editWebhook}
-                onDelete={setWebhookToDelete}
+                onDelete={(item) => {
+                  setWebhookDeleteConflict(null);
+                  setWebhookToDelete(item);
+                }}
                 disabled={storageUnreadable}
               />
             ))
@@ -1123,6 +1161,7 @@ export function OrganizationIntegrations() {
                   className="h-10 [@media(any-pointer:coarse)]:min-h-11 sm:ml-auto"
                   onClick={() => {
                     setSelectedWebhookId(null);
+                    setWebhookDeleteConflict(null);
                     setWebhookToDelete(selectedWebhook);
                   }}
                 >
@@ -1176,7 +1215,10 @@ export function OrganizationIntegrations() {
       <AlertDialog
         open={Boolean(credentialToRevoke)}
         onOpenChange={(open) => {
-          if (!open) setCredentialToRevoke(null);
+          if (!open) {
+            setCredentialToRevoke(null);
+            setCredentialRevokeConflict(null);
+          }
         }}
       >
         <AlertDialogContent>
@@ -1191,6 +1233,13 @@ export function OrganizationIntegrations() {
               This removes the credential from this browser preview. It does not
               revoke access to a live API. This cannot be undone.
             </AlertDialogDescription>
+            {credentialRevokeConflict && (
+              <p role="alert" className="text-sm text-destructive">
+                {credentialRevokeConflict === "deleted"
+                  ? "This credential was already removed in another tab. Close this confirmation."
+                  : "This credential changed in another tab. Close and reopen the confirmation before revoking it."}
+              </p>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel
@@ -1202,7 +1251,11 @@ export function OrganizationIntegrations() {
             <AlertDialogAction
               variant="destructive"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              onClick={revokeCredential}
+              onClick={(event) => {
+                event.preventDefault();
+                revokeCredential();
+              }}
+              disabled={Boolean(credentialRevokeConflict)}
             >
               Revoke credential
             </AlertDialogAction>
@@ -1213,7 +1266,10 @@ export function OrganizationIntegrations() {
       <AlertDialog
         open={Boolean(webhookToDelete)}
         onOpenChange={(open) => {
-          if (!open) setWebhookToDelete(null);
+          if (!open) {
+            setWebhookToDelete(null);
+            setWebhookDeleteConflict(null);
+          }
         }}
       >
         <AlertDialogContent>
@@ -1226,6 +1282,13 @@ export function OrganizationIntegrations() {
               This removes the endpoint and its sample delivery history from
               this browser preview. This cannot be undone.
             </AlertDialogDescription>
+            {webhookDeleteConflict && (
+              <p role="alert" className="text-sm text-destructive">
+                {webhookDeleteConflict === "deleted"
+                  ? "This webhook was already deleted in another tab. Close this confirmation."
+                  : "This webhook changed in another tab. Close and reopen the confirmation before deleting it."}
+              </p>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel
@@ -1237,7 +1300,11 @@ export function OrganizationIntegrations() {
             <AlertDialogAction
               variant="destructive"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              onClick={deleteWebhook}
+              onClick={(event) => {
+                event.preventDefault();
+                deleteWebhook();
+              }}
+              disabled={Boolean(webhookDeleteConflict)}
             >
               Delete webhook
             </AlertDialogAction>
