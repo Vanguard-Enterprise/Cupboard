@@ -210,6 +210,56 @@ describe("Security alerts", () => {
     );
   });
 
+  it("retires a failed override after persisted state catches up", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementationOnce(() => {
+        throw new Error("Storage unavailable");
+      });
+
+    await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
+    expect(screen.getByRole("alert")).toBeTruthy();
+    setItem.mockRestore();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017", "SEC-2041"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+    expect(
+      screen.getByRole("button", { name: "Acknowledge alert" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Console password has not been rotated/i,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
+    expect(JSON.parse(localStorage.getItem(securityAlertStorageKey)!)).toEqual([
+      "SEC-2017",
+      "SEC-2038",
+    ]);
+  });
+
   it("moves focus to the next alert when a filtered acknowledgement removes the selection", async () => {
     const user = userEvent.setup();
     render(<SecurityAlerts />);

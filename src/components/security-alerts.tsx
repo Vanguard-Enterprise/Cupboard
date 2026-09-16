@@ -90,6 +90,36 @@ function acknowledgementSnapshot() {
 
 const serverAcknowledgementSnapshot = () => null;
 
+function parseAcknowledgementSnapshot(snapshot: string | null) {
+  const fallback = new Set<string>(initiallyAcknowledgedAlertIds);
+  if (snapshot === null || snapshot === "") {
+    return { ids: fallback, error: "" };
+  }
+  if (snapshot === storageUnavailable) {
+    return {
+      ids: fallback,
+      error: "Saved acknowledgement state could not be loaded in this browser.",
+    };
+  }
+  try {
+    const parsed = JSON.parse(snapshot) as unknown;
+    if (!Array.isArray(parsed)) throw new Error("Invalid stored state");
+    return {
+      ids: new Set(
+        parsed.filter(
+          (id): id is string => typeof id === "string" && knownAlertIds.has(id),
+        ),
+      ),
+      error: "",
+    };
+  } catch {
+    return {
+      ids: fallback,
+      error: "Saved acknowledgement state could not be loaded in this browser.",
+    };
+  }
+}
+
 function severityLabel(severity: AlertSeverity) {
   return `${severity.slice(0, 1).toUpperCase()}${severity.slice(1)}`;
 }
@@ -275,38 +305,10 @@ export function SecurityAlerts() {
     serverAcknowledgementSnapshot,
   );
   const [saveError, setSaveError] = useState("");
-  const persistedState = useMemo(() => {
-    const fallback = new Set<string>(initiallyAcknowledgedAlertIds);
-    if (storedAcknowledgements === null || storedAcknowledgements === "") {
-      return { ids: fallback, error: "" };
-    }
-    if (storedAcknowledgements === storageUnavailable) {
-      return {
-        ids: fallback,
-        error:
-          "Saved acknowledgement state could not be loaded in this browser.",
-      };
-    }
-    try {
-      const parsed = JSON.parse(storedAcknowledgements) as unknown;
-      if (!Array.isArray(parsed)) throw new Error("Invalid stored state");
-      return {
-        ids: new Set(
-          parsed.filter(
-            (id): id is string =>
-              typeof id === "string" && knownAlertIds.has(id),
-          ),
-        ),
-        error: "",
-      };
-    } catch {
-      return {
-        ids: fallback,
-        error:
-          "Saved acknowledgement state could not be loaded in this browser.",
-      };
-    }
-  }, [storedAcknowledgements]);
+  const persistedState = useMemo(
+    () => parseAcknowledgementSnapshot(storedAcknowledgements),
+    [storedAcknowledgements],
+  );
   const effectiveSessionOverrides = useMemo(
     () =>
       new Map(
@@ -326,6 +328,28 @@ export function SecurityAlerts() {
   }, [effectiveSessionOverrides, persistedState.ids]);
   const storageError =
     (effectiveSessionOverrides.size ? saveError : "") || persistedState.error;
+
+  useEffect(
+    () =>
+      subscribeToAcknowledgements(() => {
+        const latestPersistedState = parseAcknowledgementSnapshot(
+          acknowledgementSnapshot(),
+        );
+        if (latestPersistedState.error) return;
+        setSessionAcknowledgementOverrides((currentOverrides) => {
+          const remainingOverrides = new Map(
+            [...currentOverrides].filter(
+              ([id, acknowledged]) =>
+                latestPersistedState.ids.has(id) !== acknowledged,
+            ),
+          );
+          return remainingOverrides.size === currentOverrides.size
+            ? currentOverrides
+            : remainingOverrides;
+        });
+      }),
+    [],
+  );
 
   const visibleAlerts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
