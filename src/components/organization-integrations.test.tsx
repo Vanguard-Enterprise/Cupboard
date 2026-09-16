@@ -216,6 +216,8 @@ describe("Organization credentials and webhooks", () => {
 
     await user.click(screen.getByRole("button", { name: "Add webhook" }));
     const dialog = screen.getByRole("dialog", { name: "Add webhook" });
+    expect(dialog.className).toContain("max-h-[calc(100dvh-2rem)]");
+    expect(dialog.className).toContain("overflow-y-auto");
     expect(
       within(dialog).getByText(
         "Save a sample endpoint and selected events in this browser. This preview does not send webhooks.",

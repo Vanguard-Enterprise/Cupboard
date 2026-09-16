@@ -740,7 +740,7 @@ export function OrganizationIntegrations() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {editingWebhookId ? "Edit webhook" : "Add webhook"}
