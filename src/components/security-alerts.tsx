@@ -478,9 +478,18 @@ export function SecurityAlerts() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent position="popper" align="start">
-                  <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="open">Open</SelectItem>
-                  <SelectItem value="acknowledged">Acknowledged</SelectItem>
+                  <SelectItem value="all" className="min-h-11 xl:min-h-8">
+                    All statuses
+                  </SelectItem>
+                  <SelectItem value="open" className="min-h-11 xl:min-h-8">
+                    Open
+                  </SelectItem>
+                  <SelectItem
+                    value="acknowledged"
+                    className="min-h-11 xl:min-h-8"
+                  >
+                    Acknowledged
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <Select
@@ -494,11 +503,21 @@ export function SecurityAlerts() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent position="popper" align="start">
-                  <SelectItem value="all">All severities</SelectItem>
-                  <SelectItem value="critical">Critical</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="all" className="min-h-11 xl:min-h-8">
+                    All severities
+                  </SelectItem>
+                  <SelectItem value="critical" className="min-h-11 xl:min-h-8">
+                    Critical
+                  </SelectItem>
+                  <SelectItem value="high" className="min-h-11 xl:min-h-8">
+                    High
+                  </SelectItem>
+                  <SelectItem value="medium" className="min-h-11 xl:min-h-8">
+                    Medium
+                  </SelectItem>
+                  <SelectItem value="low" className="min-h-11 xl:min-h-8">
+                    Low
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -534,12 +553,7 @@ export function SecurityAlerts() {
                       >
                         <span className="block min-w-0">
                           <span className="flex items-center justify-between gap-3">
-                            <span
-                              className={cn(
-                                "flex flex-wrap items-center gap-2",
-                                acknowledged && "opacity-70",
-                              )}
-                            >
+                            <span className="flex flex-wrap items-center gap-2">
                               <AlertSeverityBadge severity={alert.severity} />
                               {acknowledged && (
                                 <span className="text-xs text-text-muted">
@@ -547,12 +561,7 @@ export function SecurityAlerts() {
                                 </span>
                               )}
                             </span>
-                            <span
-                              className={cn(
-                                "shrink-0 text-xs text-text-muted",
-                                acknowledged && "text-text-muted/70",
-                              )}
-                            >
+                            <span className="shrink-0 text-xs text-text-muted">
                               {alert.lastSeen}
                             </span>
                           </span>

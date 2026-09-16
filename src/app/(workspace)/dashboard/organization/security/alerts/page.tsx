@@ -21,7 +21,7 @@ export default function SecurityAlertsPage() {
             <button
               type="button"
               aria-label="About sample security alerts"
-              className="inline-flex min-h-8 items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex min-h-11 items-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring xl:min-h-8"
             >
               <Badge
                 variant="outline"
