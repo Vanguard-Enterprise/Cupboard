@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/command";
 import { useOrganization } from "@/components/organization-provider";
 import { organizationSearchEntries } from "@/lib/organization-profile";
+import { auditLogPath } from "@/lib/dashboard-navigation";
 
 export function OrganizationSearchButton({ onOpen }: { onOpen: () => void }) {
   const { setOpenMobile } = useSidebar();
@@ -116,6 +117,12 @@ export function OrganizationSearch({
                   }
                 >
                   Organization usage
+                </CommandItem>
+                <CommandItem
+                  value="Organization security audit log events history access"
+                  onSelect={() => navigate(auditLogPath)}
+                >
+                  Audit log
                 </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
