@@ -117,6 +117,14 @@ export function OrganizationSearch({
                 >
                   Organization usage
                 </CommandItem>
+                <CommandItem
+                  value="Security alerts findings risk incidents servers"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/security/alerts")
+                  }
+                >
+                  Security alerts
+                </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (
