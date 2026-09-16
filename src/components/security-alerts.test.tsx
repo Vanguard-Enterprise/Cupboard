@@ -14,6 +14,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -126,6 +127,89 @@ describe("Security alerts", () => {
     );
   });
 
+  it("merges a failed acknowledgement with later cross-tab changes", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementationOnce(() => {
+        throw new Error("Storage unavailable");
+      });
+
+    await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
+    expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
+    setItem.mockRestore();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017", "SEC-2038"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+
+    expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", {
+        name: /Console password has not been rotated/i,
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Reopen alert" }));
+    expect(JSON.parse(localStorage.getItem(securityAlertStorageKey)!)).toEqual([
+      "SEC-2017",
+      "SEC-2041",
+    ]);
+  });
+
+  it("preserves a failed reopen while merging cross-tab changes", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+    await user.click(
+      screen.getByRole("button", {
+        name: /Webhook secret is stored in a host file/i,
+      }),
+    );
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementationOnce(() => {
+        throw new Error("Storage unavailable");
+      });
+
+    await user.click(screen.getByRole("button", { name: "Reopen alert" }));
+    expect(
+      screen.getByRole("button", { name: "Acknowledge alert" }),
+    ).toBeTruthy();
+    setItem.mockRestore();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017", "SEC-2038"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Acknowledge alert" }),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", {
+        name: /Console password has not been rotated/i,
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Reopen alert" }));
+    expect(JSON.parse(localStorage.getItem(securityAlertStorageKey)!)).toEqual(
+      [],
+    );
+  });
+
   it("moves focus to the next alert when a filtered acknowledgement removes the selection", async () => {
     const user = userEvent.setup();
     render(<SecurityAlerts />);
@@ -208,6 +292,30 @@ describe("Security alerts", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("combobox", { name: "Filter by status" }),
     );
+  });
+
+  it("brings the selected detail into view on narrow screens", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /Console password has not been rotated/i,
+      }),
+    );
+
+    const detail = screen.getByRole("article", {
+      name: /Console password has not been rotated/i,
+    });
+    expect(document.activeElement).toBe(detail);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+    });
   });
 
   it("keeps a failed-save warning visible during alert navigation", async () => {

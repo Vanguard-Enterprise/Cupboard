@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type RefObject,
 } from "react";
 import {
   CheckCircle2Icon,
@@ -135,15 +136,19 @@ function AlertDetail({
   alert,
   acknowledged,
   onToggleAcknowledged,
+  detailRef,
 }: {
   alert: SecurityAlert;
   acknowledged: boolean;
   onToggleAcknowledged: () => void;
+  detailRef: RefObject<HTMLElement | null>;
 }) {
   return (
     <article
+      ref={detailRef}
+      tabIndex={-1}
       aria-labelledby="selected-alert-title"
-      className="flex h-full min-w-0 flex-col"
+      className="flex h-full min-w-0 flex-col outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <div className="shrink-0 border-b border-border px-5 py-3.5 sm:px-6">
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
@@ -261,8 +266,9 @@ export function SecurityAlerts() {
   const focusedAlert = useRef<PendingFocusTarget | null>(null);
   const alertRowRefs = useRef(new Map<string, HTMLButtonElement>());
   const statusFilterRef = useRef<HTMLButtonElement>(null);
-  const [sessionAcknowledgedIds, setSessionAcknowledgedIds] =
-    useState<Set<string> | null>(null);
+  const detailPanelRef = useRef<HTMLElement>(null);
+  const [sessionAcknowledgementOverrides, setSessionAcknowledgementOverrides] =
+    useState<Map<string, boolean>>(() => new Map());
   const storedAcknowledgements = useSyncExternalStore(
     subscribeToAcknowledgements,
     acknowledgementSnapshot,
@@ -301,8 +307,25 @@ export function SecurityAlerts() {
       };
     }
   }, [storedAcknowledgements]);
-  const acknowledgedIds = sessionAcknowledgedIds ?? persistedState.ids;
-  const storageError = saveError || persistedState.error;
+  const effectiveSessionOverrides = useMemo(
+    () =>
+      new Map(
+        [...sessionAcknowledgementOverrides].filter(
+          ([id, acknowledged]) => persistedState.ids.has(id) !== acknowledged,
+        ),
+      ),
+    [persistedState.ids, sessionAcknowledgementOverrides],
+  );
+  const acknowledgedIds = useMemo(() => {
+    const ids = new Set(persistedState.ids);
+    for (const [id, acknowledged] of effectiveSessionOverrides) {
+      if (acknowledged) ids.add(id);
+      else ids.delete(id);
+    }
+    return ids;
+  }, [effectiveSessionOverrides, persistedState.ids]);
+  const storageError =
+    (effectiveSessionOverrides.size ? saveError : "") || persistedState.error;
 
   const visibleAlerts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -395,6 +418,7 @@ export function SecurityAlerts() {
   function toggleAcknowledged(alert: SecurityAlert) {
     const next = new Set(acknowledgedIds);
     const wasAcknowledged = next.has(alert.id);
+    const willBeAcknowledged = !wasAcknowledged;
     const leavesCurrentFilter =
       (!wasAcknowledged && status === "open") ||
       (wasAcknowledged && status === "acknowledged");
@@ -422,13 +446,30 @@ export function SecurityAlerts() {
         JSON.stringify([...next]),
       );
       window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
-      setSessionAcknowledgedIds(null);
+      setSessionAcknowledgementOverrides(new Map());
     } catch {
-      setSessionAcknowledgedIds(next);
-      setSaveError(
-        "The acknowledgement changed for this session but could not be saved in this browser.",
-      );
+      const nextOverrides = new Map(effectiveSessionOverrides);
+      if (persistedState.ids.has(alert.id) === willBeAcknowledged) {
+        nextOverrides.delete(alert.id);
+      } else {
+        nextOverrides.set(alert.id, willBeAcknowledged);
+      }
+      setSessionAcknowledgementOverrides(nextOverrides);
+      if (nextOverrides.size) {
+        setSaveError(
+          "The acknowledgement changed for this session but could not be saved in this browser.",
+        );
+      }
     }
+  }
+
+  function selectAlert(alertId: string) {
+    setSelectedId(alertId);
+    if (!window.matchMedia?.("(max-width: 1279px)").matches) return;
+    window.requestAnimationFrame(() => {
+      detailPanelRef.current?.focus({ preventScroll: true });
+      detailPanelRef.current?.scrollIntoView({ block: "start" });
+    });
   }
 
   const metrics = [
@@ -607,7 +648,7 @@ export function SecurityAlerts() {
                             previousIndex: alertIndex,
                           };
                         }}
-                        onClick={() => setSelectedId(alert.id)}
+                        onClick={() => selectAlert(alert.id)}
                         className={cn(
                           "block min-h-[100px] w-full border-l-2 border-l-transparent px-4 py-3.5 text-left outline-none transition-colors hover:bg-surface-elevated/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                           isSelected &&
@@ -675,6 +716,7 @@ export function SecurityAlerts() {
               alert={selectedAlert}
               acknowledged={acknowledgedIds.has(selectedAlert.id)}
               onToggleAcknowledged={() => toggleAcknowledged(selectedAlert)}
+              detailRef={detailPanelRef}
             />
           ) : (
             <Empty className="min-h-80 border-0">
