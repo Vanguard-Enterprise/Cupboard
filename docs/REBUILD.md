@@ -77,7 +77,11 @@ activity and capacity charts with sample data. It does not meter activity, enfor
 limits, or connect to billing. The organization audit log at
 `/dashboard/organization/security/audit-log` previews search, filtering, and event
 details with labeled sample data. It does not record user or server activity. The
-organization notifications and data page at
+organization connections page at
+`/dashboard/organization/integrations/connections` previews connection health and
+setup requirements with sample data. It does not request credentials, connect an
+external account, or persist connection settings. The organization notifications
+and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
 in the current browser and can clear Cupboard's organization preview data there.
 It does not send notifications or delete shared server data.

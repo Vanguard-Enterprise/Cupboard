@@ -28,6 +28,7 @@ import { useOrganization } from "@/components/organization-provider";
 import { organizationSearchEntries } from "@/lib/organization-profile";
 import {
   auditLogPath,
+  connectionsPath,
   notificationsDataPath,
 } from "@/lib/dashboard-navigation";
 
@@ -126,6 +127,12 @@ export function OrganizationSearch({
                   onSelect={() => navigate(auditLogPath)}
                 >
                   Audit log
+                </CommandItem>
+                <CommandItem
+                  value="Organization integrations connections external services"
+                  onSelect={() => navigate(connectionsPath)}
+                >
+                  Connections
                 </CommandItem>
                 <CommandItem
                   value="Organization notifications data preferences browser storage"

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { usePathname } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { OrganizationProvider } from "@/components/organization-provider";
@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import {
   auditLogPath,
+  connectionsPath,
   notificationsDataPath,
   profilePath,
   usagePath,
@@ -34,28 +35,39 @@ export function Workspace({
   defaultOpen: boolean;
 }) {
   const pathname = usePathname();
-  const isProfile = pathname === profilePath;
-  const isUsage = pathname === usagePath;
-  const isAuditLog = pathname === auditLogPath;
-  const isNotificationsData = pathname === notificationsDataPath;
-  const isOrganizationSettings = isProfile || isUsage || isNotificationsData;
-  const isOrganizationPage = isOrganizationSettings || isAuditLog;
+  const currentPage =
+    pathname === profilePath
+      ? {
+          activeSection: "organization",
+          crumbs: ["Organization", "Settings", "Profile"],
+        }
+      : pathname === usagePath
+        ? {
+            activeSection: "billing",
+            crumbs: ["Organization", "Settings", "Usage"],
+          }
+        : pathname === connectionsPath
+          ? {
+              activeSection: "connections",
+              crumbs: ["Organization", "Integrations", "Connections"],
+            }
+          : pathname === auditLogPath
+            ? {
+                activeSection: "audit-log",
+                crumbs: ["Organization", "Security", "Audit log"],
+              }
+            : pathname === notificationsDataPath
+              ? {
+                  activeSection: "preferences",
+                  crumbs: ["Organization", "Settings", "Notifications & data"],
+                }
+              : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
-          activeSection={
-            isProfile
-              ? "organization"
-              : isUsage
-                ? "billing"
-                : isNotificationsData
-                  ? "preferences"
-                  : isAuditLog
-                    ? "audit-log"
-                    : undefined
-          }
+          activeSection={currentPage?.activeSection}
           onSearch={() => setSearchOpen(true)}
         />
         <SidebarInset>
@@ -64,7 +76,7 @@ export function Workspace({
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  {isOrganizationPage ? (
+                  {currentPage ? (
                     <BreadcrumbLink asChild>
                       <Link href="/dashboard">Dashboard</Link>
                     </BreadcrumbLink>
@@ -72,30 +84,18 @@ export function Workspace({
                     <BreadcrumbPage>Dashboard</BreadcrumbPage>
                   )}
                 </BreadcrumbItem>
-                {isOrganizationPage && (
-                  <>
+                {currentPage?.crumbs.map((crumb, index) => (
+                  <Fragment key={crumb}>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
-                      <span>Organization</span>
+                      {index === currentPage.crumbs.length - 1 ? (
+                        <BreadcrumbPage>{crumb}</BreadcrumbPage>
+                      ) : (
+                        <span>{crumb}</span>
+                      )}
                     </BreadcrumbItem>
-                    <BreadcrumbSeparator />
-                    <BreadcrumbItem>
-                      <span>{isAuditLog ? "Security" : "Settings"}</span>
-                    </BreadcrumbItem>
-                    <BreadcrumbSeparator />
-                    <BreadcrumbItem>
-                      <BreadcrumbPage>
-                        {isProfile
-                          ? "Profile"
-                          : isUsage
-                            ? "Usage"
-                            : isNotificationsData
-                              ? "Notifications & data"
-                              : "Audit log"}
-                      </BreadcrumbPage>
-                    </BreadcrumbItem>
-                  </>
-                )}
+                  </Fragment>
+                ))}
               </BreadcrumbList>
             </Breadcrumb>
           </header>

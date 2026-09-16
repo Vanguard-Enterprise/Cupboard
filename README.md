@@ -53,7 +53,10 @@ server data is connected. Organization profile settings live at
 metering is connected. The organization audit log at
 `/dashboard/organization/security/audit-log` has searchable sample events and
 redacted event details until server-side audit storage exists. Organization
-notification and browser-data settings live at
+connections are previewed at
+`/dashboard/organization/integrations/connections`; the page uses sample states
+and does not connect external accounts. Organization notification and
+browser-data settings live at
 `/dashboard/organization/settings/notifications-data`. Unfinished sidebar items
 have no destination.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
