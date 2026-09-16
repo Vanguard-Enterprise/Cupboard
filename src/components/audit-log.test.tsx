@@ -50,6 +50,10 @@ describe("Audit log", () => {
     }
     expect(screen.queryByText(/results?$/)).toBeNull();
     expect(screen.getByRole("columnheader", { name: "Source" })).toBeTruthy();
+    expect(
+      screen.getByRole("table").parentElement?.parentElement?.className,
+    ).toContain("2xl:block");
+    expect(screen.getByRole("list").className).toContain("2xl:hidden");
 
     await user.type(search, "credential");
 

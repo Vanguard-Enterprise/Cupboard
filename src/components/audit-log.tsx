@@ -398,7 +398,7 @@ export function AuditLog() {
 
       {filteredEvents.length ? (
         <>
-          <div className="hidden xl:block">
+          <div className="hidden 2xl:block">
             <Table className="table-fixed">
               <TableCaption className="sr-only">
                 Sample organization audit events
@@ -493,7 +493,7 @@ export function AuditLog() {
             </Table>
           </div>
 
-          <ul className="divide-y divide-border xl:hidden">
+          <ul className="divide-y divide-border 2xl:hidden">
             {filteredEvents.map((event) => (
               <li key={event.id}>
                 <button
