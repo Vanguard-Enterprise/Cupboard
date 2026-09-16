@@ -50,7 +50,9 @@ work does not need to rerun setup. The `/dashboard/` page uses the shadcn
 server data is connected. Organization profile settings live at
 `/dashboard/organization/settings/profile`. Organization usage is available at
 `/dashboard/organization/settings/usage` with clearly labeled sample data until
-metering is connected; unfinished sidebar items have no destination.
+metering is connected. Organization notification and browser-data settings live
+at `/dashboard/organization/settings/notifications-data`; unfinished sidebar
+items have no destination.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
 organization details, and public contacts. Private contacts are excluded.
 
@@ -67,6 +69,9 @@ Profile settings are a browser-local prototype stored under
 browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not
 use real confidential details until authentication and shared storage exist.
+Notification choices are also browser-local and do not send messages yet. The
+Notifications & data page can clear both sets of organization preview data from
+the current browser without clearing unrelated local storage.
 
 The sidebar remembers its expanded state in the `sidebar_state` cookie for
 seven days, including across refreshes and visits to the login page.
