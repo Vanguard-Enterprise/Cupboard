@@ -23,6 +23,7 @@ import {
   type OrganizationNotifications,
 } from "@/lib/organization-notifications";
 import { organizationProfileKey } from "@/lib/organization-profile";
+import { securityAlertStorageKey } from "@/lib/security-alerts";
 
 const notificationOptions = [
   {
@@ -263,8 +264,10 @@ export function OrganizationNotificationsData() {
     try {
       window.localStorage.removeItem(organizationProfileKey);
       window.localStorage.removeItem(organizationNotificationsKey);
+      window.localStorage.removeItem(securityAlertStorageKey);
       window.dispatchEvent(new Event("cupboard-profile-saved"));
       window.dispatchEvent(new Event(notificationsChangedEvent));
+      window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
       setEditorGeneration((value) => value + 1);
       setClearedNotice(true);
     } catch {
@@ -300,7 +303,8 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Profile and notification preferences stored in this browser.
+              Profile, notification preferences, and security alert
+              acknowledgements stored in this browser.
             </p>
           </div>
           <AlertDialog>
@@ -323,9 +327,9 @@ export function OrganizationNotificationsData() {
                 </AlertDialogMedia>
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This removes the organization profile and notification
-                  preferences saved in this browser. You cannot undo this
-                  action.
+                  This removes the organization profile, notification
+                  preferences, and security alert acknowledgements saved in this
+                  browser. You cannot undo this action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

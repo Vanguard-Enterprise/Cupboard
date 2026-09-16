@@ -72,7 +72,7 @@ browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not
 use real confidential details until authentication and shared storage exist.
 Notification choices are also browser-local and do not send messages yet. The
-Notifications & data page can clear both sets of organization preview data from
+Notifications & data page can clear Cupboard's organization preview data from
 the current browser without clearing unrelated local storage.
 
 Security alert acknowledgements use

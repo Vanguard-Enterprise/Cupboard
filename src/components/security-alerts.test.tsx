@@ -118,6 +118,45 @@ describe("Security alerts", () => {
 
     await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
     expect(screen.getByText("No matching alerts")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be saved",
+    );
+  });
+
+  it("moves focus to the next alert when a filtered acknowledgement removes the selection", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Open" }));
+    await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
+
+    const nextAlert = screen.getByRole("button", {
+      name: /Console password has not been rotated/i,
+    });
+    expect(document.activeElement).toBe(nextAlert);
+    expect(screen.getByText("SEC-2038")).toBeTruthy();
+  });
+
+  it("keeps a failed-save warning visible during alert navigation", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+
+    await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /Console password has not been rotated/i,
+      }),
+    );
+
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be saved",
     );

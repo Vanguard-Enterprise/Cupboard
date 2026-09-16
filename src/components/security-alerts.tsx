@@ -1,6 +1,12 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
@@ -107,7 +113,7 @@ function DetailRow({
 }) {
   return (
     <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-4 border-b border-border/35 py-2 last:border-0">
-      <dt className="text-xs text-text-muted/75">{label}</dt>
+      <dt className="text-xs text-text-muted">{label}</dt>
       <dd
         className={cn(
           "text-sm text-foreground/90",
@@ -246,6 +252,9 @@ export function SecurityAlerts() {
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(securityAlerts[0].id);
+  const pendingFocusTarget = useRef<string | null>(null);
+  const alertRowRefs = useRef(new Map<string, HTMLButtonElement>());
+  const statusFilterRef = useRef<HTMLButtonElement>(null);
   const [sessionAcknowledgedIds, setSessionAcknowledgedIds] =
     useState<Set<string> | null>(null);
   const storedAcknowledgements = useSyncExternalStore(
@@ -319,9 +328,34 @@ export function SecurityAlerts() {
   );
   const affectedServers = new Set(openAlerts.map((alert) => alert.server)).size;
 
+  useEffect(() => {
+    if (!pendingFocusTarget.current) return;
+    const target =
+      pendingFocusTarget.current === "status-filter"
+        ? statusFilterRef.current
+        : alertRowRefs.current.get(pendingFocusTarget.current);
+    target?.focus();
+    pendingFocusTarget.current = null;
+  }, [visibleAlerts]);
+
   function toggleAcknowledged(alert: SecurityAlert) {
     const next = new Set(acknowledgedIds);
     const wasAcknowledged = next.has(alert.id);
+    const leavesCurrentFilter =
+      (!wasAcknowledged && status === "open") ||
+      (wasAcknowledged && status === "acknowledged");
+    if (leavesCurrentFilter) {
+      const currentIndex = visibleAlerts.findIndex(
+        (visibleAlert) => visibleAlert.id === alert.id,
+      );
+      const remainingAlerts = visibleAlerts.filter(
+        (visibleAlert) => visibleAlert.id !== alert.id,
+      );
+      const nextAlert =
+        remainingAlerts[currentIndex] ?? remainingAlerts[currentIndex - 1];
+      if (nextAlert) setSelectedId(nextAlert.id);
+      pendingFocusTarget.current = nextAlert?.id ?? "status-filter";
+    }
     if (wasAcknowledged) next.delete(alert.id);
     else next.add(alert.id);
 
@@ -429,7 +463,7 @@ export function SecurityAlerts() {
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Search alerts"
-                  className="h-9 pl-8"
+                  className="h-11 pl-8 xl:h-9"
                 />
               </label>
               <Select
@@ -437,7 +471,8 @@ export function SecurityAlerts() {
                 onValueChange={(value) => setStatus(value as StatusFilter)}
               >
                 <SelectTrigger
-                  className="h-9 w-full sm:w-36"
+                  ref={statusFilterRef}
+                  className="h-11 w-full sm:w-36 xl:h-9"
                   aria-label="Filter by status"
                 >
                   <SelectValue />
@@ -453,7 +488,7 @@ export function SecurityAlerts() {
                 onValueChange={(value) => setSeverity(value as SeverityFilter)}
               >
                 <SelectTrigger
-                  className="h-9 w-full sm:w-36"
+                  className="h-11 w-full sm:w-36 xl:h-9"
                   aria-label="Filter by severity"
                 >
                   <SelectValue />
@@ -485,11 +520,12 @@ export function SecurityAlerts() {
                     >
                       <button
                         type="button"
-                        aria-pressed={isSelected}
-                        onClick={() => {
-                          setSelectedId(alert.id);
-                          setSaveError("");
+                        ref={(node) => {
+                          if (node) alertRowRefs.current.set(alert.id, node);
+                          else alertRowRefs.current.delete(alert.id);
                         }}
+                        aria-pressed={isSelected}
+                        onClick={() => setSelectedId(alert.id)}
                         className={cn(
                           "block min-h-[100px] w-full border-l-2 border-l-transparent px-4 py-3.5 text-left outline-none transition-colors hover:bg-surface-elevated/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                           isSelected &&
