@@ -247,10 +247,13 @@ export const dashboardNavigation = [
 export const profilePath = "/dashboard/organization/settings/profile";
 export const usagePath = "/dashboard/organization/settings/usage";
 export const auditLogPath = "/dashboard/organization/security/audit-log";
+export const notificationsDataPath =
+  "/dashboard/organization/settings/notifications-data";
 
 export function navigationHref(id: string): string | undefined {
   if (id === "organization") return profilePath;
   if (id === "billing") return usagePath;
   if (id === "audit-log") return auditLogPath;
+  if (id === "preferences") return notificationsDataPath;
   return undefined;
 }

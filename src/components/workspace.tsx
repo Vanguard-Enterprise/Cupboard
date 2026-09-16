@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import {
   auditLogPath,
+  notificationsDataPath,
   profilePath,
   usagePath,
 } from "@/lib/dashboard-navigation";
@@ -36,7 +37,8 @@ export function Workspace({
   const isProfile = pathname === profilePath;
   const isUsage = pathname === usagePath;
   const isAuditLog = pathname === auditLogPath;
-  const isOrganizationSettings = isProfile || isUsage;
+  const isNotificationsData = pathname === notificationsDataPath;
+  const isOrganizationSettings = isProfile || isUsage || isNotificationsData;
   const isOrganizationPage = isOrganizationSettings || isAuditLog;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
@@ -48,9 +50,11 @@ export function Workspace({
               ? "organization"
               : isUsage
                 ? "billing"
-                : isAuditLog
-                  ? "audit-log"
-                  : undefined
+                : isNotificationsData
+                  ? "preferences"
+                  : isAuditLog
+                    ? "audit-log"
+                    : undefined
           }
           onSearch={() => setSearchOpen(true)}
         />
@@ -85,7 +89,9 @@ export function Workspace({
                           ? "Profile"
                           : isUsage
                             ? "Usage"
-                            : "Audit log"}
+                            : isNotificationsData
+                              ? "Notifications & data"
+                              : "Audit log"}
                       </BreadcrumbPage>
                     </BreadcrumbItem>
                   </>

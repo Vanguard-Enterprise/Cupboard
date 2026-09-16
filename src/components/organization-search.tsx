@@ -26,7 +26,10 @@ import {
 } from "@/components/ui/command";
 import { useOrganization } from "@/components/organization-provider";
 import { organizationSearchEntries } from "@/lib/organization-profile";
-import { auditLogPath } from "@/lib/dashboard-navigation";
+import {
+  auditLogPath,
+  notificationsDataPath,
+} from "@/lib/dashboard-navigation";
 
 export function OrganizationSearchButton({ onOpen }: { onOpen: () => void }) {
   const { setOpenMobile } = useSidebar();
@@ -123,6 +126,12 @@ export function OrganizationSearch({
                   onSelect={() => navigate(auditLogPath)}
                 >
                   Audit log
+                </CommandItem>
+                <CommandItem
+                  value="Organization notifications data preferences browser storage"
+                  onSelect={() => navigate(notificationsDataPath)}
+                >
+                  Notifications &amp; data
                 </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
