@@ -1,0 +1,1071 @@
+"use client";
+
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  CheckCircle2Icon,
+  CircleAlertIcon,
+  ClipboardIcon,
+  KeyRoundIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
+  PlusIcon,
+  RadioTowerIcon,
+  RefreshCwIcon,
+  Trash2Icon,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  createCredentialSecret,
+  defaultOrganizationIntegrations,
+  organizationIntegrationsKey,
+  readOrganizationIntegrations,
+  validateWebhookUrl,
+  webhookEvents,
+  type ApiCredential,
+  type OrganizationIntegrations,
+  type WebhookEndpoint,
+  type WebhookEvent,
+} from "@/lib/organization-integrations";
+
+type Feedback = { kind: "status" | "alert"; message: string } | null;
+
+function subscribeToIntegrations(callback: () => void) {
+  const handleStorage = (event: StorageEvent) => {
+    if (!event.key || event.key === organizationIntegrationsKey) callback();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener("cupboard-integrations-saved", callback);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener("cupboard-integrations-saved", callback);
+  };
+}
+
+function integrationsSnapshot(): string {
+  try {
+    return localStorage.getItem(organizationIntegrationsKey) ?? "";
+  } catch {
+    return "storage-unavailable";
+  }
+}
+
+const integrationsServerSnapshot = () => null;
+
+function newId(): string {
+  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+function today(): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date());
+}
+
+function CredentialRow({
+  credential,
+  onRevoke,
+}: {
+  credential: ApiCredential;
+  onRevoke: (credential: ApiCredential) => void;
+}) {
+  return (
+    <div className="grid gap-3 px-5 py-4 sm:px-6 md:grid-cols-[minmax(0,1.4fr)_10rem_10rem_auto] md:items-center">
+      <div className="min-w-0">
+        <p className="font-medium">{credential.name}</p>
+        <code className="mt-1.5 block font-mono text-xs text-muted-foreground">
+          {credential.prefix}
+        </code>
+      </div>
+      <div className="grid grid-cols-[5rem_1fr] items-baseline gap-2 md:block">
+        <p className="text-xs text-text-muted">Created</p>
+        <p className="text-sm text-muted-foreground md:mt-1">
+          {credential.createdAt}
+        </p>
+      </div>
+      <div className="grid grid-cols-[5rem_1fr] items-baseline gap-2 md:block">
+        <p className="text-xs text-text-muted">Last used</p>
+        <p className="text-sm text-muted-foreground md:mt-1">
+          {credential.lastUsed ?? "Never used"}
+        </p>
+      </div>
+      <Button
+        variant="ghost"
+        className="min-h-9 w-fit justify-self-start text-text-muted hover:bg-destructive/10 hover:text-destructive [@media(any-pointer:coarse)]:min-h-11 md:justify-self-end"
+        onClick={() => onRevoke(credential)}
+      >
+        <Trash2Icon aria-hidden="true" />
+        Revoke
+      </Button>
+    </div>
+  );
+}
+
+function WebhookRow({
+  webhook,
+  onOpen,
+  onEdit,
+  onDelete,
+}: {
+  webhook: WebhookEndpoint;
+  onOpen: (webhook: WebhookEndpoint) => void;
+  onEdit: (webhook: WebhookEndpoint) => void;
+  onDelete: (webhook: WebhookEndpoint) => void;
+}) {
+  const failed = Boolean(
+    webhook.lastDelivery && webhook.lastDelivery.status >= 400,
+  );
+  const status = !webhook.enabled
+    ? "Disabled"
+    : failed
+      ? "Delivery failed"
+      : "Active";
+  const delivery = webhook.lastDelivery
+    ? failed
+      ? `Last delivery failed ${webhook.lastDelivery.deliveredAt}`
+      : `Last delivery ${webhook.lastDelivery.deliveredAt}`
+    : "No deliveries yet";
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center">
+      <button
+        type="button"
+        className="min-w-0 px-5 py-4 text-left outline-none transition-colors hover:bg-surface-elevated focus-visible:bg-surface-elevated focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-6"
+        onClick={() => onOpen(webhook)}
+      >
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-medium text-foreground">{webhook.name}</p>
+              <Badge
+                variant={failed ? "destructive" : "outline"}
+                className={
+                  failed
+                    ? undefined
+                    : webhook.enabled
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "text-muted-foreground"
+                }
+              >
+                <span
+                  className={`size-1.5 rounded-full ${failed ? "bg-destructive" : webhook.enabled ? "bg-primary" : "bg-text-muted"}`}
+                />
+                {status}
+              </Badge>
+            </div>
+            <p className="mt-1.5 truncate font-mono text-xs text-muted-foreground">
+              {webhook.url}
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
+              <span>
+                {webhook.events.length}{" "}
+                {webhook.events.length === 1
+                  ? "subscribed event"
+                  : "subscribed events"}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span className={failed ? "text-destructive" : undefined}>
+                {delivery}
+              </span>
+            </div>
+          </div>
+        </div>
+      </button>
+      <div className="pr-4 sm:pr-5">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="min-h-9 text-muted-foreground [@media(any-pointer:coarse)]:min-h-11"
+              aria-label={`Manage ${webhook.name}`}
+            >
+              <MoreHorizontalIcon aria-hidden="true" />
+              <span className="hidden sm:inline">Manage</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-40">
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => onOpen(webhook)}
+            >
+              View details
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => onEdit(webhook)}
+            >
+              <PencilIcon aria-hidden="true" />
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              className="cursor-pointer"
+              onSelect={() => onDelete(webhook)}
+            >
+              <Trash2Icon aria-hidden="true" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
+  );
+}
+
+export function OrganizationIntegrations() {
+  const raw = useSyncExternalStore(
+    subscribeToIntegrations,
+    integrationsSnapshot,
+    integrationsServerSnapshot,
+  );
+  const data = useMemo(
+    () =>
+      raw === null
+        ? structuredClone(defaultOrganizationIntegrations)
+        : readOrganizationIntegrations(raw),
+    [raw],
+  );
+  const [feedback, setFeedback] = useState<Feedback>(null);
+  const [credentialDialogOpen, setCredentialDialogOpen] = useState(false);
+  const [credentialName, setCredentialName] = useState("");
+  const [credentialNameError, setCredentialNameError] = useState("");
+  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
+    "idle",
+  );
+  const [webhookDialogOpen, setWebhookDialogOpen] = useState(false);
+  const [editingWebhookId, setEditingWebhookId] = useState<string | null>(null);
+  const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(
+    null,
+  );
+  const [webhookName, setWebhookName] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [selectedEvents, setSelectedEvents] = useState<WebhookEvent[]>([]);
+  const [webhookErrors, setWebhookErrors] = useState({
+    name: "",
+    url: "",
+    events: "",
+  });
+  const [credentialToRevoke, setCredentialToRevoke] =
+    useState<ApiCredential | null>(null);
+  const [webhookToDelete, setWebhookToDelete] =
+    useState<WebhookEndpoint | null>(null);
+  const credentialNameRef = useRef<HTMLInputElement>(null);
+  const webhookNameRef = useRef<HTMLInputElement>(null);
+  const webhookUrlRef = useRef<HTMLInputElement>(null);
+  const selectedWebhook = data.webhooks.find(
+    (webhook) => webhook.id === selectedWebhookId,
+  );
+  const credentialNameValid = credentialName.trim().length > 0;
+  const webhookFormValid =
+    webhookName.trim().length > 0 &&
+    validateWebhookUrl(webhookUrl.trim()) === null &&
+    selectedEvents.length > 0;
+
+  function persist(next: OrganizationIntegrations, success: string): boolean {
+    try {
+      localStorage.setItem(organizationIntegrationsKey, JSON.stringify(next));
+      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      setFeedback({ kind: "status", message: success });
+      return true;
+    } catch {
+      setFeedback({
+        kind: "alert",
+        message: "Could not save this change in your browser. Try again.",
+      });
+      return false;
+    }
+  }
+
+  function openCredentialDialog() {
+    setCredentialName("");
+    setCredentialNameError("");
+    setCredentialDialogOpen(true);
+  }
+
+  function createCredential(event: React.FormEvent) {
+    event.preventDefault();
+    const name = credentialName.trim();
+    if (!name) {
+      setCredentialNameError("Enter a credential name.");
+      credentialNameRef.current?.focus();
+      return;
+    }
+    const secret = createCredentialSecret();
+    const credential: ApiCredential = {
+      id: newId(),
+      name,
+      prefix: `${secret.slice(0, 12)}...${secret.slice(-4)}`,
+      createdAt: today(),
+      lastUsed: null,
+    };
+    if (
+      persist(
+        { ...data, credentials: [credential, ...data.credentials] },
+        `${name} created.`,
+      )
+    ) {
+      setCredentialDialogOpen(false);
+      setCreatedSecret(secret);
+      setCopyState("idle");
+    }
+  }
+
+  async function copyCredential() {
+    if (!createdSecret) return;
+    try {
+      await navigator.clipboard.writeText(createdSecret);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+  }
+
+  function openWebhookDialog() {
+    setEditingWebhookId(null);
+    setWebhookName("");
+    setWebhookUrl("");
+    setSelectedEvents([]);
+    setWebhookErrors({ name: "", url: "", events: "" });
+    setWebhookDialogOpen(true);
+  }
+
+  function editWebhook(webhook: WebhookEndpoint) {
+    setSelectedWebhookId(null);
+    setEditingWebhookId(webhook.id);
+    setWebhookName(webhook.name);
+    setWebhookUrl(webhook.url);
+    setSelectedEvents(webhook.events);
+    setWebhookErrors({ name: "", url: "", events: "" });
+    setWebhookDialogOpen(true);
+  }
+
+  function createWebhook(event: React.FormEvent) {
+    event.preventDefault();
+    const name = webhookName.trim();
+    const url = webhookUrl.trim();
+    const errors = {
+      name: name ? "" : "Enter a webhook name.",
+      url: validateWebhookUrl(url) ?? "",
+      events: selectedEvents.length ? "" : "Choose at least one event.",
+    };
+    setWebhookErrors(errors);
+    if (errors.name || errors.url || errors.events) {
+      if (errors.name) webhookNameRef.current?.focus();
+      else if (errors.url) webhookUrlRef.current?.focus();
+      return;
+    }
+    const editingWebhook = data.webhooks.find(
+      (webhook) => webhook.id === editingWebhookId,
+    );
+    const webhook: WebhookEndpoint = editingWebhook
+      ? { ...editingWebhook, name, url, events: selectedEvents }
+      : {
+          id: newId(),
+          name,
+          url,
+          events: selectedEvents,
+          enabled: true,
+          createdAt: today(),
+          lastDelivery: null,
+        };
+    const webhooks = editingWebhook
+      ? data.webhooks.map((item) =>
+          item.id === editingWebhook.id ? webhook : item,
+        )
+      : [webhook, ...data.webhooks];
+    if (
+      persist(
+        { ...data, webhooks },
+        editingWebhook ? `${name} updated.` : `${name} added.`,
+      )
+    ) {
+      setWebhookDialogOpen(false);
+      setEditingWebhookId(null);
+    }
+  }
+
+  function revokeCredential() {
+    if (!credentialToRevoke) return;
+    const name = credentialToRevoke.name;
+    if (
+      persist(
+        {
+          ...data,
+          credentials: data.credentials.filter(
+            (item) => item.id !== credentialToRevoke.id,
+          ),
+        },
+        `${name} revoked.`,
+      )
+    ) {
+      setCredentialToRevoke(null);
+    }
+  }
+
+  function retryWebhook(webhook: WebhookEndpoint) {
+    const next = {
+      ...webhook,
+      lastDelivery: { status: 204, deliveredAt: "Just now" },
+    };
+    persist(
+      {
+        ...data,
+        webhooks: data.webhooks.map((item) =>
+          item.id === webhook.id ? next : item,
+        ),
+      },
+      `${webhook.name} delivery retried.`,
+    );
+  }
+
+  function deleteWebhook() {
+    if (!webhookToDelete) return;
+    const name = webhookToDelete.name;
+    if (
+      persist(
+        {
+          ...data,
+          webhooks: data.webhooks.filter(
+            (item) => item.id !== webhookToDelete.id,
+          ),
+        },
+        `${name} deleted.`,
+      )
+    ) {
+      setWebhookToDelete(null);
+      setSelectedWebhookId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      {feedback && (
+        <p
+          role={feedback.kind}
+          className={
+            feedback.kind === "alert"
+              ? "text-sm text-destructive"
+              : "text-sm text-primary"
+          }
+        >
+          {feedback.message}
+        </p>
+      )}
+
+      <section
+        aria-labelledby="credentials-heading"
+        className="overflow-hidden rounded-xl border bg-card"
+      >
+        <div className="flex items-center justify-between gap-4 border-b px-5 py-5 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-surface-elevated text-primary">
+              <KeyRoundIcon className="size-4" aria-hidden="true" />
+            </div>
+            <h2 id="credentials-heading" className="text-base font-semibold">
+              API credentials
+            </h2>
+          </div>
+          <Button
+            className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            onClick={openCredentialDialog}
+          >
+            <PlusIcon aria-hidden="true" />
+            Create credential
+          </Button>
+        </div>
+        <div className="divide-y">
+          {data.credentials.length ? (
+            data.credentials.map((credential) => (
+              <CredentialRow
+                key={credential.id}
+                credential={credential}
+                onRevoke={setCredentialToRevoke}
+              />
+            ))
+          ) : (
+            <div className="px-6 py-10 text-center">
+              <p className="text-sm font-medium">No API credentials</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Create one when a trusted tool needs API access.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section
+        aria-labelledby="webhooks-heading"
+        className="overflow-hidden rounded-xl border bg-card"
+      >
+        <div className="flex items-center justify-between gap-4 border-b px-5 py-5 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-surface-elevated text-primary">
+              <RadioTowerIcon className="size-4" aria-hidden="true" />
+            </div>
+            <h2 id="webhooks-heading" className="text-base font-semibold">
+              Webhooks
+            </h2>
+          </div>
+          <Button
+            variant="outline"
+            className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            onClick={openWebhookDialog}
+          >
+            <PlusIcon aria-hidden="true" />
+            Add webhook
+          </Button>
+        </div>
+        <div className="divide-y">
+          {data.webhooks.length ? (
+            data.webhooks.map((webhook) => (
+              <WebhookRow
+                key={webhook.id}
+                webhook={webhook}
+                onOpen={(item) => setSelectedWebhookId(item.id)}
+                onEdit={editWebhook}
+                onDelete={setWebhookToDelete}
+              />
+            ))
+          ) : (
+            <div className="px-6 py-10 text-center">
+              <p className="text-sm font-medium">No webhooks</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Add an endpoint to receive organization events.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <Dialog
+        open={credentialDialogOpen}
+        onOpenChange={setCredentialDialogOpen}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create API credential</DialogTitle>
+            <DialogDescription>
+              Name the system that will use this credential.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            id="create-credential-form"
+            onSubmit={createCredential}
+            className="grid gap-2 py-2"
+          >
+            <Label htmlFor="credential-name">Credential name</Label>
+            <Input
+              ref={credentialNameRef}
+              id="credential-name"
+              value={credentialName}
+              onChange={(event) => {
+                setCredentialName(event.target.value);
+                if (event.target.value.trim()) setCredentialNameError("");
+              }}
+              aria-invalid={Boolean(credentialNameError)}
+              aria-describedby={
+                credentialNameError ? "credential-name-error" : undefined
+              }
+              className="h-10 [@media(any-pointer:coarse)]:h-11"
+              autoComplete="off"
+              maxLength={80}
+            />
+            {credentialNameError && (
+              <p
+                id="credential-name-error"
+                role="alert"
+                className="text-sm text-destructive"
+              >
+                {credentialNameError}
+              </p>
+            )}
+          </form>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={() => setCredentialDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="create-credential-form"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              disabled={!credentialNameValid}
+            >
+              Create credential
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(createdSecret)}
+        onOpenChange={(open) => {
+          if (!open) setCreatedSecret(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg" showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Credential created</DialogTitle>
+            <DialogDescription>
+              Copy this secret now. Cupboard will not show it again.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border bg-input-background p-3">
+            <code
+              data-testid="created-credential"
+              tabIndex={0}
+              aria-label="Credential secret"
+              className="block cursor-text select-all break-all font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              {createdSecret}
+            </code>
+          </div>
+          {copyState === "error" && (
+            <p role="alert" className="text-sm text-destructive">
+              Couldn&apos;t copy to clipboard.
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="secondary"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={() => setCreatedSecret(null)}
+            >
+              Done
+            </Button>
+            <Button
+              variant={copyState === "error" ? "destructive" : "default"}
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={copyCredential}
+            >
+              <ClipboardIcon aria-hidden="true" />
+              {copyState === "error"
+                ? "Retry copy"
+                : copyState === "copied"
+                  ? "Copied"
+                  : "Copy credential"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={webhookDialogOpen}
+        onOpenChange={(open) => {
+          setWebhookDialogOpen(open);
+          if (!open) setEditingWebhookId(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {editingWebhookId ? "Edit webhook" : "Add webhook"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingWebhookId
+                ? "Update the endpoint and subscribed events."
+                : "Cupboard will send the selected events to this endpoint."}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            id="create-webhook-form"
+            onSubmit={createWebhook}
+            className="grid gap-5 py-2"
+          >
+            <div className="grid gap-2">
+              <Label htmlFor="webhook-name">Webhook name</Label>
+              <Input
+                ref={webhookNameRef}
+                id="webhook-name"
+                value={webhookName}
+                onChange={(event) => {
+                  setWebhookName(event.target.value);
+                  if (event.target.value.trim()) {
+                    setWebhookErrors((current) => ({
+                      ...current,
+                      name: "",
+                    }));
+                  }
+                }}
+                aria-invalid={Boolean(webhookErrors.name)}
+                className="h-10 [@media(any-pointer:coarse)]:h-11"
+                autoComplete="off"
+                maxLength={80}
+              />
+              {webhookErrors.name && (
+                <p role="alert" className="text-sm text-destructive">
+                  {webhookErrors.name}
+                </p>
+              )}
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="webhook-url">Endpoint URL</Label>
+              <Input
+                ref={webhookUrlRef}
+                id="webhook-url"
+                type="url"
+                placeholder="https://example.com/hooks/cupboard"
+                value={webhookUrl}
+                onChange={(event) => {
+                  setWebhookUrl(event.target.value);
+                  setWebhookErrors((current) => ({
+                    ...current,
+                    url: "",
+                  }));
+                }}
+                onBlur={() =>
+                  setWebhookErrors((current) => ({
+                    ...current,
+                    url: webhookUrl.trim()
+                      ? (validateWebhookUrl(webhookUrl.trim()) ?? "")
+                      : "",
+                  }))
+                }
+                aria-invalid={Boolean(webhookErrors.url)}
+                className="h-10 font-mono [@media(any-pointer:coarse)]:h-11"
+                maxLength={2048}
+              />
+              {webhookErrors.url ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {webhookErrors.url}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Use HTTPS. Localhost may use HTTP during development.
+                </p>
+              )}
+            </div>
+            <fieldset className="grid gap-3">
+              <legend className="text-sm font-medium">Events</legend>
+              {webhookEvents.map((option) => (
+                <label
+                  key={option.id}
+                  className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border px-3 text-sm hover:border-border-strong hover:bg-surface-elevated"
+                >
+                  <Checkbox
+                    checked={selectedEvents.includes(option.id)}
+                    onCheckedChange={(checked) => {
+                      const next =
+                        checked === true
+                          ? [...selectedEvents, option.id]
+                          : selectedEvents.filter(
+                              (event) => event !== option.id,
+                            );
+                      setSelectedEvents(next);
+                      if (next.length) {
+                        setWebhookErrors((errors) => ({
+                          ...errors,
+                          events: "",
+                        }));
+                      }
+                    }}
+                  />
+                  {option.label}
+                </label>
+              ))}
+              {webhookErrors.events && (
+                <p role="alert" className="text-sm text-destructive">
+                  {webhookErrors.events}
+                </p>
+              )}
+            </fieldset>
+          </form>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={() => setWebhookDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="create-webhook-form"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              disabled={!webhookFormValid}
+            >
+              {editingWebhookId ? "Save changes" : "Add webhook"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Sheet
+        open={Boolean(selectedWebhook)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedWebhookId(null);
+        }}
+      >
+        <SheetContent className="w-full gap-0 sm:max-w-[452px]">
+          {selectedWebhook && (
+            <>
+              <SheetHeader className="border-b px-6 py-5 pr-14">
+                <div className="flex flex-wrap items-center gap-2">
+                  <SheetTitle className="text-lg">
+                    {selectedWebhook.name}
+                  </SheetTitle>
+                  <Badge
+                    variant={
+                      selectedWebhook.lastDelivery &&
+                      selectedWebhook.lastDelivery.status >= 400
+                        ? "destructive"
+                        : "outline"
+                    }
+                    className={
+                      selectedWebhook.lastDelivery &&
+                      selectedWebhook.lastDelivery.status >= 400
+                        ? undefined
+                        : selectedWebhook.enabled
+                          ? "border-primary/30 bg-primary/10 text-primary"
+                          : "text-muted-foreground"
+                    }
+                  >
+                    {selectedWebhook.lastDelivery &&
+                    selectedWebhook.lastDelivery.status >= 400
+                      ? "Delivery failed"
+                      : selectedWebhook.enabled
+                        ? "Active"
+                        : "Disabled"}
+                  </Badge>
+                </div>
+                <SheetDescription className="sr-only">
+                  Webhook details and recent delivery activity
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+                <dl className="grid gap-5">
+                  <div>
+                    <dt className="text-xs text-text-muted">Endpoint URL</dt>
+                    <dd className="mt-2 break-all rounded-lg border bg-input-background px-3 py-2 font-mono text-xs text-muted-foreground">
+                      {selectedWebhook.url}
+                    </dd>
+                  </div>
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <div>
+                      <dt className="text-xs text-text-muted">
+                        Signing secret
+                      </dt>
+                      <dd className="mt-1.5 text-sm text-muted-foreground">
+                        Not configured
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs text-text-muted">Created</dt>
+                      <dd className="mt-1.5 text-sm text-muted-foreground">
+                        {selectedWebhook.createdAt}
+                      </dd>
+                    </div>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-text-muted">
+                      Subscribed events
+                    </dt>
+                    <dd className="mt-2 flex flex-wrap gap-2">
+                      {selectedWebhook.events.map((event) => (
+                        <Badge key={event} variant="secondary">
+                          {webhookEvents.find((item) => item.id === event)
+                            ?.label ?? event}
+                        </Badge>
+                      ))}
+                    </dd>
+                  </div>
+                </dl>
+
+                <section aria-labelledby="recent-deliveries" className="mt-7">
+                  <h3 id="recent-deliveries" className="text-sm font-medium">
+                    Recent deliveries
+                  </h3>
+                  <div className="mt-3 overflow-hidden rounded-xl border">
+                    {selectedWebhook.lastDelivery ? (
+                      <div className="flex items-center justify-between gap-4 px-4 py-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                          {selectedWebhook.lastDelivery.status >= 400 ? (
+                            <CircleAlertIcon
+                              className="size-4 shrink-0 text-destructive"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <CheckCircle2Icon
+                              className="size-4 shrink-0 text-primary"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <div>
+                            <p className="text-sm">
+                              {selectedWebhook.lastDelivery.status >= 400
+                                ? "Delivery failed"
+                                : "Delivered"}
+                            </p>
+                            <p className="mt-1 text-xs text-text-muted">
+                              {selectedWebhook.lastDelivery.deliveredAt}
+                            </p>
+                          </div>
+                        </div>
+                        <code className="rounded-md bg-surface-elevated px-2 py-1 font-mono text-xs text-muted-foreground">
+                          HTTP {selectedWebhook.lastDelivery.status}
+                        </code>
+                      </div>
+                    ) : (
+                      <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+                        No deliveries yet
+                      </p>
+                    )}
+                  </div>
+                </section>
+              </div>
+
+              <SheetFooter className="border-t px-6 py-4 sm:flex-row">
+                {selectedWebhook.lastDelivery &&
+                  selectedWebhook.lastDelivery.status >= 400 && (
+                    <Button
+                      variant="outline"
+                      className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+                      onClick={() => retryWebhook(selectedWebhook)}
+                    >
+                      <RefreshCwIcon aria-hidden="true" />
+                      Retry delivery
+                    </Button>
+                  )}
+                <Button
+                  variant="outline"
+                  className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+                  onClick={() => editWebhook(selectedWebhook)}
+                >
+                  <PencilIcon aria-hidden="true" />
+                  Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="h-10 [@media(any-pointer:coarse)]:min-h-11 sm:ml-auto"
+                  onClick={() => {
+                    setSelectedWebhookId(null);
+                    setWebhookToDelete(selectedWebhook);
+                  }}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                  Delete
+                </Button>
+              </SheetFooter>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      <AlertDialog
+        open={Boolean(credentialToRevoke)}
+        onOpenChange={(open) => {
+          if (!open) setCredentialToRevoke(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2Icon className="text-destructive" aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              Revoke {credentialToRevoke?.name}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Apps using this credential will lose API access immediately. This
+              cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              variant="secondary"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            >
+              Keep credential
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={revokeCredential}
+            >
+              Revoke credential
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(webhookToDelete)}
+        onOpenChange={(open) => {
+          if (!open) setWebhookToDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2Icon className="text-destructive" aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete {webhookToDelete?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cupboard will stop sending events to this endpoint. Delivery
+              history for this preview will be deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              variant="secondary"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            >
+              Keep webhook
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={deleteWebhook}
+            >
+              Delete webhook
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}

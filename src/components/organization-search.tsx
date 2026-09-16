@@ -117,6 +117,14 @@ export function OrganizationSearch({
                 >
                   Organization usage
                 </CommandItem>
+                <CommandItem
+                  value="Organization integrations API credentials webhooks"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/integrations/credentials")
+                  }
+                >
+                  Credentials &amp; webhooks
+                </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (

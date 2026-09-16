@@ -50,7 +50,11 @@ work does not need to rerun setup. The `/dashboard/` page uses the shadcn
 server data is connected. Organization profile settings live at
 `/dashboard/organization/settings/profile`. Organization usage is available at
 `/dashboard/organization/settings/usage` with clearly labeled sample data until
-metering is connected; unfinished sidebar items have no destination.
+metering is connected. Credentials and webhooks are available at
+`/dashboard/organization/integrations/credentials` as a browser-local preview.
+Credential secrets appear only once and are never stored; webhook endpoints and
+credential metadata use sample data or local browser storage. Unfinished sidebar
+items have no destination.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
 organization details, and public contacts. Private contacts are excluded.
 
