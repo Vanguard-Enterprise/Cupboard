@@ -129,6 +129,7 @@ describe("organization profile", () => {
       "/dashboard/organization/security/access",
       "/dashboard/organization/settings/profile",
       "/dashboard/organization/settings/usage",
+      "/dashboard/organization/settings/notifications-data",
     ]);
   });
 });

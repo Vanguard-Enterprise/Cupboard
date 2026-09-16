@@ -19,7 +19,12 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { accessPath, profilePath, usagePath } from "@/lib/dashboard-navigation";
+import {
+  accessPath,
+  notificationsDataPath,
+  profilePath,
+  usagePath,
+} from "@/lib/dashboard-navigation";
 
 export function Workspace({
   children,
@@ -32,7 +37,8 @@ export function Workspace({
   const isProfile = pathname === profilePath;
   const isUsage = pathname === usagePath;
   const isAccess = pathname === accessPath;
-  const isOrganizationSettings = isProfile || isUsage;
+  const isNotificationsData = pathname === notificationsDataPath;
+  const isOrganizationSettings = isProfile || isUsage || isNotificationsData;
   const isOrganizationSecurity = isAccess;
   const isOrganizationPage = isOrganizationSettings || isOrganizationSecurity;
   const [searchOpen, setSearchOpen] = useState(false);
@@ -47,7 +53,9 @@ export function Workspace({
                 ? "billing"
                 : isAccess
                   ? "access"
-                  : undefined
+                  : isNotificationsData
+                    ? "preferences"
+                    : undefined
           }
           onSearch={() => setSearchOpen(true)}
         />
@@ -84,7 +92,9 @@ export function Workspace({
                           ? "Profile"
                           : isUsage
                             ? "Usage"
-                            : "Access & approvals"}
+                            : isAccess
+                              ? "Access & approvals"
+                              : "Notifications & data"}
                       </BreadcrumbPage>
                     </BreadcrumbItem>
                   </>
