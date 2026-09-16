@@ -505,6 +505,13 @@ export function OrganizationIntegrations() {
       localStorage.removeItem(organizationIntegrationsKey);
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
       setUnreadableToReplace(null);
+      if (suspendedDraftDialog === "credential") {
+        setCredentialStartedWithMissingKey(true);
+        setCredentialStorageCleared(false);
+      } else if (suspendedDraftDialog === "webhook") {
+        setWebhookStartedWithMissingKey(true);
+        setWebhookStorageCleared(false);
+      }
       restoreSuspendedDraft();
       setFeedback({
         kind: "status",

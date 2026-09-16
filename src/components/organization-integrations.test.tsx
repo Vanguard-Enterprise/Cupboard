@@ -306,6 +306,137 @@ describe("Organization credentials and webhooks", () => {
     );
   });
 
+  it("rebases a credential draft after replacing unreadable data", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Create credential" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Credential name" }),
+      "Recovered draft",
+    );
+    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    await user.click(
+      screen
+        .getByRole("dialog", { name: "Create API credential" })
+        .querySelector('button[type="submit"]')!,
+    );
+    const replacement = screen.getByRole("alertdialog", {
+      name: "Replace unreadable integration data?",
+    });
+    await user.click(
+      within(replacement).getByRole("button", { name: "Replace local data" }),
+    );
+
+    const restored = screen.getByRole("dialog", {
+      name: "Create API credential",
+    });
+    expect(
+      (
+        within(restored).getByRole("textbox", {
+          name: "Credential name",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("Recovered draft");
+    await user.click(
+      within(restored).getByRole("button", { name: "Create credential" }),
+    );
+    expect(screen.getByTestId("created-credential")).toBeTruthy();
+    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
+      "Recovered draft",
+    );
+    expect(
+      screen.queryByText(
+        "Integration data was cleared in another tab. Close and reopen this form before creating a credential.",
+      ),
+    ).toBeNull();
+  });
+
+  it("rebases a new webhook draft after replacing unreadable data", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Add webhook" }));
+    const dialog = screen.getByRole("dialog", { name: "Add webhook" });
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Webhook name" }),
+      "Recovered webhook",
+    );
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Endpoint URL" }),
+      "https://hooks.example.com/recovered",
+    );
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Player reported" }),
+    );
+    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add webhook" }),
+    );
+    await user.click(
+      screen
+        .getByRole("alertdialog", {
+          name: "Replace unreadable integration data?",
+        })
+        .querySelector('[data-slot="alert-dialog-action"]')!,
+    );
+
+    const restored = screen.getByRole("dialog", { name: "Add webhook" });
+    await user.click(
+      within(restored).getByRole("button", { name: "Add webhook" }),
+    );
+    expect(screen.getByText("Recovered webhook")).toBeTruthy();
+    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
+      "https://hooks.example.com/recovered",
+    );
+  });
+
+  it("rebases a sample webhook edit after replacing unreadable data", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit webhook" });
+    const name = within(dialog).getByRole("textbox", { name: "Webhook name" });
+    await user.clear(name);
+    await user.type(name, "Recovered sample webhook");
+    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
+    await user.click(
+      screen
+        .getByRole("alertdialog", {
+          name: "Replace unreadable integration data?",
+        })
+        .querySelector('[data-slot="alert-dialog-action"]')!,
+    );
+
+    const restored = screen.getByRole("dialog", { name: "Edit webhook" });
+    await user.click(
+      within(restored).getByRole("button", { name: "Save changes" }),
+    );
+    expect(screen.getByText("Recovered sample webhook")).toBeTruthy();
+    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
+      "Recovered sample webhook",
+    );
+  });
+
   it("requires confirmation before replacing unreadable integration data", async () => {
     const user = userEvent.setup();
     localStorage.setItem(organizationIntegrationsKey, "");
