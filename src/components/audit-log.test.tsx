@@ -36,10 +36,17 @@ describe("Audit log", () => {
     ).not.toContain("sr-only");
     expect(search.className).toContain("h-11");
     expect(search.className).toContain("lg:h-9");
+    expect(search.parentElement?.parentElement?.className).toContain(
+      "lg:flex-row",
+    );
+    expect(search.parentElement?.parentElement?.className).not.toContain(
+      "md:flex-row",
+    );
     for (const select of ["Event type", "Outcome"]) {
       const trigger = screen.getByRole("combobox", { name: select });
       expect(trigger.className).toContain("data-[size=default]:h-11");
       expect(trigger.className).toContain("lg:data-[size=default]:h-9");
+      expect(trigger.className).toContain("lg:w-");
     }
     expect(screen.queryByText(/results?$/)).toBeNull();
     expect(screen.getByRole("columnheader", { name: "Source" })).toBeTruthy();
@@ -79,6 +86,9 @@ describe("Audit log", () => {
     expect(within(dialog).getByText("evt_01J7M9CSQP").className).toContain(
       "font-mono",
     );
+    const closeButton = within(dialog).getByRole("button", { name: "Close" });
+    expect(closeButton.className).toContain("size-11");
+    expect(closeButton.className).toContain("lg:size-7");
     await user.keyboard("{Escape}");
     expect(
       screen.queryByRole("dialog", { name: "Replaced RCON credential" }),
@@ -107,7 +117,10 @@ describe("Audit log", () => {
       screen.getByText("Try another search or clear your filters."),
     ).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    const clearFilters = screen.getByRole("button", { name: "Clear filters" });
+    expect(clearFilters.className).toContain("h-11");
+    expect(clearFilters.className).toContain("lg:h-8");
+    await user.click(clearFilters);
     expect(screen.queryByText(/results?$/)).toBeNull();
     expect(screen.getByLabelText("Search events").getAttribute("value")).toBe(
       "",

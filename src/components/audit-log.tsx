@@ -323,7 +323,7 @@ export function AuditLog() {
       className="overflow-hidden rounded-xl border border-border bg-card"
     >
       <div className="border-b border-border px-3 py-3">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
           <div className="relative min-w-0 flex-1">
             <label
               htmlFor="audit-search"
@@ -348,7 +348,7 @@ export function AuditLog() {
           >
             <SelectTrigger
               aria-label="Event type"
-              className="w-full bg-input-background px-3 data-[size=default]:h-11 md:w-44 lg:data-[size=default]:h-9"
+              className="w-full bg-input-background px-3 data-[size=default]:h-11 lg:w-44 lg:data-[size=default]:h-9"
             >
               <SelectValue />
             </SelectTrigger>
@@ -370,7 +370,7 @@ export function AuditLog() {
           >
             <SelectTrigger
               aria-label="Outcome"
-              className="w-full bg-input-background px-3 data-[size=default]:h-11 md:w-40 lg:data-[size=default]:h-9"
+              className="w-full bg-input-background px-3 data-[size=default]:h-11 lg:w-40 lg:data-[size=default]:h-9"
             >
               <SelectValue />
             </SelectTrigger>
@@ -386,7 +386,7 @@ export function AuditLog() {
           </Select>
           {filtersActive ? (
             <p
-              className="shrink-0 px-1 text-xs text-text-muted md:min-w-16 md:text-right"
+              className="shrink-0 px-1 text-xs text-text-muted lg:min-w-16 lg:text-right"
               role="status"
             >
               {filteredEvents.length}{" "}
@@ -538,7 +538,11 @@ export function AuditLog() {
           <p className="mt-1 max-w-sm text-sm text-muted-foreground">
             Try another search or clear your filters.
           </p>
-          <Button variant="outline" className="mt-4" onClick={clearFilters}>
+          <Button
+            variant="outline"
+            className="mt-4 h-11 lg:h-8"
+            onClick={clearFilters}
+          >
             Clear filters
           </Button>
         </div>
@@ -552,11 +556,12 @@ export function AuditLog() {
       >
         <SheetContent
           className="w-full gap-0 data-[side=right]:sm:max-w-[28.75rem]"
+          closeButtonClassName="size-11 lg:size-7"
           overlayClassName="supports-backdrop-filter:backdrop-blur-[1px]"
         >
           {selectedEvent ? (
             <>
-              <SheetHeader className="gap-3 px-5 py-4 pr-12">
+              <SheetHeader className="gap-3 px-5 py-4 pr-16 lg:pr-12">
                 <div className="flex items-start justify-between gap-3">
                   <SheetTitle className="leading-5">
                     {selectedEvent.action}
