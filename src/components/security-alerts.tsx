@@ -232,12 +232,12 @@ function AlertDetail({
             type="button"
             variant={acknowledged ? "outline" : "default"}
             onClick={onToggleAcknowledged}
-            className="min-h-10 sm:min-h-8"
+            className="min-h-11 xl:min-h-10"
           >
             {acknowledged ? "Reopen alert" : "Acknowledge alert"}
           </Button>
           {acknowledged && (
-            <p role="status" className="text-xs text-text-muted/70">
+            <p role="status" className="text-xs text-text-muted">
               Alert acknowledged.
             </p>
           )}
