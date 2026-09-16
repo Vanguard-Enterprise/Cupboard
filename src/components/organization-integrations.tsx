@@ -487,7 +487,7 @@ export function OrganizationIntegrations() {
             (item) => item.id !== credentialToRevoke.id,
           ),
         },
-        `${name} revoked.`,
+        `${name} removed from preview data.`,
       )
     ) {
       setCredentialToRevoke(null);
@@ -1065,8 +1065,8 @@ export function OrganizationIntegrations() {
               Revoke {credentialToRevoke?.name}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Apps using this credential will lose API access immediately. This
-              cannot be undone.
+              This removes the credential from this browser preview. It does not
+              revoke access to a live API. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

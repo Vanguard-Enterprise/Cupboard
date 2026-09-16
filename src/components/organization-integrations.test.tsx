@@ -238,7 +238,11 @@ describe("Organization credentials and webhooks", () => {
     const confirmation = screen.getByRole("alertdialog", {
       name: "Revoke Server operations?",
     });
-    expect(screen.getByText(/lose API access immediately/i)).toBeTruthy();
+    expect(
+      within(confirmation).getByText(
+        "This removes the credential from this browser preview. It does not revoke access to a live API. This cannot be undone.",
+      ),
+    ).toBeTruthy();
     expect(
       within(confirmation)
         .getByRole("button", { name: "Keep credential" })
@@ -257,7 +261,7 @@ describe("Organization credentials and webhooks", () => {
 
     expect(screen.queryByText("Server operations")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(
-      "Server operations revoked.",
+      "Server operations removed from preview data.",
     );
   });
 
