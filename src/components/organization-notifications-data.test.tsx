@@ -83,8 +83,11 @@ describe("Organization notifications and data", () => {
       "Moderation activity",
       "Weekly summary",
     ]) {
-      expect(notificationSwitch(name).getAttribute("data-size")).toBe("lg");
+      const preference = notificationSwitch(name);
+      expect(preference.getAttribute("data-size")).toBe("lg");
+      expect(preference.getAttribute("data-state")).toBe("unchecked");
     }
+    expect(screen.getAllByText(/Does not send email yet/)).toHaveLength(4);
   });
 
   it("saves, restores, and cancels notification choices", async () => {
@@ -93,7 +96,7 @@ describe("Organization notifications and data", () => {
 
     expect(
       notificationSwitch("Server incidents").getAttribute("data-state"),
-    ).toBe("checked");
+    ).toBe("unchecked");
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("unchecked");
@@ -115,7 +118,7 @@ describe("Organization notifications and data", () => {
     expect(
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toMatchObject({ weeklySummary: true });
-    expect(screen.getByRole("status").textContent).toBe("Choices saved.");
+    expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
 
     view.unmount();
     render(<OrganizationNotificationsData />);

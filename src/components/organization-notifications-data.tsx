@@ -29,23 +29,25 @@ const notificationOptions = [
     key: "serverIncidents",
     title: "Server incidents",
     description:
-      "Email when a managed server becomes unavailable or an incident opens.",
+      "Does not send email yet. Preference for server outages and incidents.",
   },
   {
     key: "securityAlerts",
     title: "Security alerts",
     description:
-      "Email when access, credentials, or other security-sensitive settings change.",
+      "Does not send email yet. Preference for access and security changes.",
   },
   {
     key: "moderationActivity",
     title: "Moderation activity",
-    description: "Email when a moderation case needs attention.",
+    description:
+      "Does not send email yet. Preference for moderation cases needing attention.",
   },
   {
     key: "weeklySummary",
     title: "Weekly summary",
-    description: "Email a weekly summary of organization activity.",
+    description:
+      "Does not send email yet. Preference for a weekly organization summary.",
   },
 ] as const satisfies ReadonlyArray<{
   key: keyof OrganizationNotifications;
@@ -196,7 +198,7 @@ function NotificationPreferencesEditor({
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-6 py-4 sm:px-8">
           {savedNotice && !dirty && (
             <p role="status" className="mr-auto text-sm text-muted-foreground">
-              Choices saved.
+              Preferences saved.
             </p>
           )}
           {conflict && (

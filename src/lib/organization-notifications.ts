@@ -2,8 +2,8 @@ export const organizationNotificationsKey =
   "cupboard:organization:local-preview:notifications:v1";
 
 export const defaultOrganizationNotifications = {
-  serverIncidents: true,
-  securityAlerts: true,
+  serverIncidents: false,
+  securityAlerts: false,
   moderationActivity: false,
   weeklySummary: false,
 };

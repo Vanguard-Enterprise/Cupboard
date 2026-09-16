@@ -5,6 +5,15 @@ import {
 } from "./organization-notifications";
 
 describe("organization notification preferences", () => {
+  it("defaults unavailable notification delivery to off", () => {
+    expect(defaultOrganizationNotifications).toEqual({
+      serverIncidents: false,
+      securityAlerts: false,
+      moderationActivity: false,
+      weeklySummary: false,
+    });
+  });
+
   it("parses a complete boolean preference record", () => {
     expect(
       parseOrganizationNotifications(
