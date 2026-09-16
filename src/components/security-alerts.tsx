@@ -167,17 +167,21 @@ function AlertDetail({
   acknowledged,
   onToggleAcknowledged,
   detailRef,
+  onDetailFocus,
 }: {
   alert: SecurityAlert;
   acknowledged: boolean;
   onToggleAcknowledged: () => void;
   detailRef: RefObject<HTMLElement | null>;
+  onDetailFocus: () => void;
 }) {
   return (
     <article
       ref={detailRef}
+      data-alert-id={alert.id}
       tabIndex={-1}
       aria-labelledby="selected-alert-title"
+      onFocusCapture={onDetailFocus}
       className="flex h-full min-w-0 flex-col outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <div className="shrink-0 border-b border-border px-5 py-3.5 sm:px-6">
@@ -376,6 +380,9 @@ export function SecurityAlerts() {
 
   const selectedAlert =
     visibleAlerts.find((alert) => alert.id === selectedId) ?? visibleAlerts[0];
+  const selectedAlertIndex = selectedAlert
+    ? visibleAlerts.findIndex((alert) => alert.id === selectedAlert.id)
+    : -1;
   const openAlerts = securityAlerts.filter(
     (alert) => !acknowledgedIds.has(alert.id),
   );
@@ -741,6 +748,12 @@ export function SecurityAlerts() {
               acknowledged={acknowledgedIds.has(selectedAlert.id)}
               onToggleAcknowledged={() => toggleAcknowledged(selectedAlert)}
               detailRef={detailPanelRef}
+              onDetailFocus={() => {
+                focusedAlert.current = {
+                  id: selectedAlert.id,
+                  previousIndex: selectedAlertIndex,
+                };
+              }}
             />
           ) : (
             <Empty className="min-h-80 border-0">

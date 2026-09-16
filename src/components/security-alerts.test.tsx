@@ -344,6 +344,36 @@ describe("Security alerts", () => {
     );
   });
 
+  it("restores filter focus when an external update removes the focused detail", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Open" }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by severity" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Critical" }));
+    screen.getByRole("button", { name: "Acknowledge alert" }).focus();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017", "SEC-2041"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+
+    expect(screen.getByText("No matching alerts")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+  });
+
   it("brings the selected detail into view on narrow screens", async () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
