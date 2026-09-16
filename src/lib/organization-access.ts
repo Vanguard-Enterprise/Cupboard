@@ -33,6 +33,63 @@ export type OrganizationAccessSettings = {
   rules: ApprovalRule[];
 };
 
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isOrganizationMember(
+  candidate: Record<string, unknown>,
+): candidate is Record<keyof OrganizationMember, string> & {
+  role: OrganizationRole;
+  status: OrganizationMember["status"];
+} {
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.name === "string" &&
+    typeof candidate.email === "string" &&
+    typeof candidate.initials === "string" &&
+    Boolean(candidate.id) &&
+    Boolean(candidate.name) &&
+    emailPattern.test(candidate.email) &&
+    Boolean(candidate.initials) &&
+    candidate.id.length <= 200 &&
+    candidate.name.length <= 200 &&
+    candidate.email.length <= 320 &&
+    candidate.initials.length <= 4 &&
+    roles.includes(candidate.role as OrganizationRole) &&
+    ["active", "invited"].includes(candidate.status as string)
+  );
+}
+
+export function createInvitationMember(
+  emailInput: string,
+  role: Exclude<OrganizationRole, "owner">,
+  id: string,
+): OrganizationMember | null {
+  const email = emailInput.trim().toLowerCase();
+  const name = email
+    .split("@")[0]
+    .split(/[._-]/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+  const initials =
+    email
+      .split("@")[0]
+      .split(/[._-]/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "IN";
+  const candidate = {
+    id,
+    name,
+    email,
+    initials,
+    role,
+    status: "invited" as const,
+  };
+  return isOrganizationMember(candidate) ? candidate : null;
+}
+
 export const defaultOrganizationAccess: OrganizationAccessSettings = {
   members: [
     {
@@ -113,23 +170,7 @@ export function parseOrganizationAccess(
     if (!member || typeof member !== "object")
       throw new Error("Invalid member");
     const candidate = member as Record<string, unknown>;
-    if (
-      typeof candidate.id !== "string" ||
-      typeof candidate.name !== "string" ||
-      typeof candidate.email !== "string" ||
-      typeof candidate.initials !== "string" ||
-      !candidate.id ||
-      !candidate.name ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate.email) ||
-      !candidate.initials ||
-      candidate.id.length > 200 ||
-      candidate.name.length > 200 ||
-      candidate.email.length > 320 ||
-      candidate.initials.length > 4 ||
-      !roles.includes(candidate.role as OrganizationRole) ||
-      !["active", "invited"].includes(candidate.status as string)
-    )
-      throw new Error("Invalid member");
+    if (!isOrganizationMember(candidate)) throw new Error("Invalid member");
     return {
       id: candidate.id,
       name: candidate.name,

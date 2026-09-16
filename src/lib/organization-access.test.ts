@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createInvitationMember,
   defaultOrganizationAccess,
   parseOrganizationAccess,
 } from "./organization-access";
@@ -54,5 +55,36 @@ describe("organization access settings", () => {
     expect(parsed).not.toHaveProperty("apiKey");
     expect(parsed.members[0]).not.toHaveProperty("sessionToken");
     expect(parsed.rules[0]).not.toHaveProperty("secret");
+  });
+
+  it("only creates invitations that the persistence parser accepts", () => {
+    const invitation = createInvitationMember(
+      "new.operator@example.com",
+      "viewer",
+      "invited-1",
+    );
+    expect(invitation).not.toBeNull();
+    expect(
+      parseOrganizationAccess(
+        JSON.stringify({
+          ...defaultOrganizationAccess,
+          members: [...defaultOrganizationAccess.members, invitation],
+        }),
+      ).members.at(-1),
+    ).toEqual(invitation);
+    expect(
+      createInvitationMember(
+        `${"a".repeat(201)}@example.com`,
+        "viewer",
+        "invited-2",
+      ),
+    ).toBeNull();
+    expect(
+      createInvitationMember(
+        `${"a".repeat(310)}@example.com`,
+        "viewer",
+        "invited-3",
+      ),
+    ).toBeNull();
   });
 });

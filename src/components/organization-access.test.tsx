@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   afterAll,
@@ -13,7 +19,11 @@ import {
 } from "vitest";
 import { OrganizationAccess } from "./organization-access";
 import { TooltipProvider } from "./ui/tooltip";
-import { organizationAccessKey } from "@/lib/organization-access";
+import {
+  defaultOrganizationAccess,
+  organizationAccessKey,
+  parseOrganizationAccess,
+} from "@/lib/organization-access";
 import { toast } from "sonner";
 
 vi.mock("sonner", () => ({
@@ -26,6 +36,15 @@ function mount() {
       <OrganizationAccess />
     </TooltipProvider>,
   );
+}
+
+function externalSave(settings = defaultOrganizationAccess) {
+  act(() => {
+    localStorage.setItem(organizationAccessKey, JSON.stringify(settings));
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: organizationAccessKey }),
+    );
+  });
 }
 
 beforeAll(() => {
@@ -125,6 +144,76 @@ describe("Organization access", () => {
     expect(screen.getByText("new.operator@example.com")).toBeTruthy();
     expect(screen.getByText(/3 active/).textContent).toContain("2 pending");
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(
+      parseOrganizationAccess(
+        localStorage.getItem(organizationAccessKey)!,
+      ).members.at(-1)?.email,
+    ).toBe("new.operator@example.com");
+  });
+
+  it("rejects an address whose generated member cannot be reloaded", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Member access" });
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    fireEvent.change(screen.getByLabelText("Email address"), {
+      target: { value: `${"a".repeat(201)}@example.com` },
+    });
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Send invitation",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("preserves a dirty draft when another tab saves", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Member access" });
+    const serverRule = screen.getByRole("switch", {
+      name: "Require approval for Server lifecycle",
+    }) as HTMLButtonElement;
+    await user.click(serverRule);
+
+    const external = structuredClone(defaultOrganizationAccess);
+    external.rules[3].enabled = true;
+    externalSave(external);
+
+    expect(serverRule.getAttribute("data-state")).toBe("unchecked");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "changed in another tab",
+    );
+    const save = screen.getByRole("button", {
+      name: "Save changes",
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await user.click(save);
+    expect(
+      JSON.parse(localStorage.getItem(organizationAccessKey)!).rules[3].enabled,
+    ).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(serverRule.getAttribute("data-state")).toBe("checked");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("loads another tab's save immediately when the draft is clean", async () => {
+    mount();
+    await screen.findByRole("heading", { name: "Member access" });
+    const external = structuredClone(defaultOrganizationAccess);
+    external.rules[0].enabled = false;
+    externalSave(external);
+    expect(
+      screen
+        .getByRole("switch", {
+          name: "Require approval for Server lifecycle",
+        })
+        .getAttribute("data-state"),
+    ).toBe("unchecked");
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps the draft when browser storage fails", async () => {

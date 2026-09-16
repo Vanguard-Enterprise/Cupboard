@@ -34,6 +34,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import {
   defaultOrganizationAccess,
+  createInvitationMember,
   organizationAccessKey,
   parseOrganizationAccess,
   roleLabels,
@@ -50,33 +51,16 @@ const ruleIcons: Record<ApprovalRule["id"], typeof ServerCogIcon> = {
   billing: WalletCardsIcon,
 };
 
-function initialsForEmail(email: string) {
-  return (
-    email
-      .split("@")[0]
-      .split(/[._-]/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join("") || "IN"
-  );
-}
-
-function nameForEmail(email: string) {
-  return email
-    .split("@")[0]
-    .split(/[._-]/)
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function subscribe(callback: () => void) {
   const onStorage = (event: StorageEvent) => {
     if (!event.key || event.key === organizationAccessKey) callback();
   };
   window.addEventListener("storage", onStorage);
-  return () => window.removeEventListener("storage", onStorage);
+  window.addEventListener("cupboard-access-saved", callback);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener("cupboard-access-saved", callback);
+  };
 }
 
 function snapshot() {
@@ -90,18 +74,23 @@ function snapshot() {
 const serverSnapshot = () => null;
 
 function AccessEditor({
-  initial,
+  saved,
+  sourceVersion,
   initialStorageError,
 }: {
-  initial: OrganizationAccessSettings;
+  saved: OrganizationAccessSettings;
+  sourceVersion: string;
   initialStorageError: string;
 }) {
-  const [saved, setSaved] = useState<OrganizationAccessSettings>(initial);
-  const [draft, setDraft] = useState<OrganizationAccessSettings>(initial);
+  const [draft, setDraft] = useState<OrganizationAccessSettings>(saved);
+  const [baseline, setBaseline] = useState(saved);
+  const [baselineVersion, setBaselineVersion] = useState(sourceVersion);
+  const [conflict, setConflict] = useState(false);
   const [storageError, setStorageError] = useState(initialStorageError);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<OrganizationRole>("viewer");
+  const [inviteRole, setInviteRole] =
+    useState<Exclude<OrganizationRole, "owner">>("viewer");
   const [inviteError, setInviteError] = useState("");
 
   const dirty = useMemo(
@@ -111,9 +100,25 @@ function AccessEditor({
   const activeMembers = draft.members.filter(
     (member) => member.status === "active",
   ).length;
-  const inviteEmailIsValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
-    inviteEmail.trim(),
+  const pendingInvitation = createInvitationMember(
+    inviteEmail,
+    inviteRole,
+    "pending-invitation",
   );
+  const inviteEmailIsValid = Boolean(pendingInvitation);
+
+  if (sourceVersion !== baselineVersion) {
+    const wasDirty = JSON.stringify(draft) !== JSON.stringify(baseline);
+    setBaselineVersion(sourceVersion);
+    setBaseline(saved);
+    setStorageError(initialStorageError);
+    if (!wasDirty) {
+      setDraft(saved);
+      setConflict(false);
+    } else {
+      setConflict(JSON.stringify(draft) !== JSON.stringify(saved));
+    }
+  }
 
   function updateMemberRole(id: string, role: OrganizationRole) {
     setDraft((current) => ({
@@ -135,28 +140,26 @@ function AccessEditor({
 
   function addInvitation(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const email = inviteEmail.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    const invitation = createInvitationMember(
+      inviteEmail,
+      inviteRole,
+      `invited-${Date.now()}`,
+    );
+    if (!invitation) {
       setInviteError("Enter a valid email address.");
       return;
     }
-    if (draft.members.some((member) => member.email.toLowerCase() === email)) {
+    if (
+      draft.members.some(
+        (member) => member.email.toLowerCase() === invitation.email,
+      )
+    ) {
       setInviteError("This email already has access or a pending invitation.");
       return;
     }
     setDraft((current) => ({
       ...current,
-      members: [
-        ...current.members,
-        {
-          id: `invited-${Date.now()}`,
-          name: nameForEmail(email),
-          email,
-          initials: initialsForEmail(email),
-          role: inviteRole,
-          status: "invited",
-        },
-      ],
+      members: [...current.members, invitation],
     }));
     setInviteEmail("");
     setInviteRole("viewer");
@@ -167,7 +170,7 @@ function AccessEditor({
   function saveChanges() {
     try {
       window.localStorage.setItem(organizationAccessKey, JSON.stringify(draft));
-      setSaved(draft);
+      window.dispatchEvent(new Event("cupboard-access-saved"));
       setStorageError("");
       toast.success("Changes saved");
     } catch {
@@ -180,7 +183,7 @@ function AccessEditor({
       className="space-y-5"
       onSubmit={(event) => {
         event.preventDefault();
-        if (dirty) saveChanges();
+        if (dirty && !conflict) saveChanges();
       }}
     >
       {storageError && (
@@ -361,16 +364,29 @@ function AccessEditor({
           })}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-5 pt-5 pb-4 sm:px-6">
+          {conflict && (
+            <p role="alert" className="mr-auto text-sm text-destructive">
+              Access settings changed in another tab. Cancel to load the latest
+              version.
+            </p>
+          )}
           <Button
             type="button"
             variant="secondary"
             className="h-9 px-4"
-            disabled={!dirty}
-            onClick={() => setDraft(saved)}
+            disabled={!dirty && !conflict}
+            onClick={() => {
+              setDraft(saved);
+              setConflict(false);
+            }}
           >
             <RotateCcwIcon /> Cancel
           </Button>
-          <Button type="submit" className="h-9 px-4" disabled={!dirty}>
+          <Button
+            type="submit"
+            className="h-9 px-4"
+            disabled={!dirty || conflict}
+          >
             Save changes
           </Button>
         </div>
@@ -405,6 +421,7 @@ function AccessEditor({
                     inviteError ? "invite-email-error" : undefined
                   }
                   placeholder="operator@example.com"
+                  maxLength={320}
                   className="h-10"
                   autoFocus
                 />
@@ -422,7 +439,7 @@ function AccessEditor({
                 <Select
                   value={inviteRole}
                   onValueChange={(value) =>
-                    setInviteRole(value as OrganizationRole)
+                    setInviteRole(value as Exclude<OrganizationRole, "owner">)
                   }
                 >
                   <SelectTrigger id="invite-role" className="h-10 w-full">
@@ -461,6 +478,21 @@ function AccessEditor({
 
 export function OrganizationAccess() {
   const raw = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
+  const loaded = useMemo(() => {
+    let saved = defaultOrganizationAccess;
+    let storageError = "";
+    if (raw === "storage-unavailable") {
+      storageError = "Access settings cannot use browser storage.";
+    } else if (raw) {
+      try {
+        saved = parseOrganizationAccess(raw);
+      } catch {
+        storageError =
+          "Saved access settings could not be loaded. Saving will replace the local copy.";
+      }
+    }
+    return { saved, storageError };
+  }, [raw]);
   if (raw === null)
     return (
       <p role="status" className="text-sm text-muted-foreground">
@@ -468,24 +500,11 @@ export function OrganizationAccess() {
       </p>
     );
 
-  let initial = defaultOrganizationAccess;
-  let initialStorageError = "";
-  if (raw === "storage-unavailable") {
-    initialStorageError = "Access settings cannot use browser storage.";
-  } else if (raw) {
-    try {
-      initial = parseOrganizationAccess(raw);
-    } catch {
-      initialStorageError =
-        "Saved access settings could not be loaded. Saving will replace the local copy.";
-    }
-  }
-
   return (
     <AccessEditor
-      key={raw}
-      initial={initial}
-      initialStorageError={initialStorageError}
+      saved={loaded.saved}
+      sourceVersion={raw}
+      initialStorageError={loaded.storageError}
     />
   );
 }
