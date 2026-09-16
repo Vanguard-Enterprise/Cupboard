@@ -159,11 +159,14 @@ describe("Organization notifications and data", () => {
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be loaded",
     );
-    await user.click(notificationSwitch("Weekly summary"));
+    expect(saveButton().disabled).toBe(false);
+    expect(cancelButton().disabled).toBe(true);
     await user.click(saveButton());
     expect(
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
-    ).toMatchObject({ weeklySummary: true });
+    ).toEqual(defaultOrganizationNotifications);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
   });
 
   it("keeps an unsaved choice when browser storage rejects a save", async () => {

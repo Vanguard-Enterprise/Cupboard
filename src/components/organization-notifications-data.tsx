@@ -97,6 +97,7 @@ function useSavedNotifications() {
       preferences,
       ready: raw !== null,
       storageError,
+      needsReplacement: Boolean(storageError),
       save(next: OrganizationNotifications) {
         window.localStorage.setItem(
           organizationNotificationsKey,
@@ -111,9 +112,11 @@ function useSavedNotifications() {
 function NotificationPreferencesEditor({
   saved,
   save,
+  needsReplacement,
 }: {
   saved: OrganizationNotifications;
   save: (next: OrganizationNotifications) => void;
+  needsReplacement: boolean;
 }) {
   const [draft, setDraft] = useState(saved);
   const [baseline, setBaseline] = useState(saved);
@@ -140,7 +143,7 @@ function NotificationPreferencesEditor({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (!dirty || conflict) return;
+        if ((!dirty && !needsReplacement) || conflict) return;
         setSaveError("");
         setSavedNotice(false);
         try {
@@ -229,7 +232,7 @@ function NotificationPreferencesEditor({
           <Button
             type="submit"
             className="h-11 px-4 sm:h-9"
-            disabled={!dirty || conflict}
+            disabled={(!dirty && !needsReplacement) || conflict}
           >
             Save changes
           </Button>
@@ -240,7 +243,8 @@ function NotificationPreferencesEditor({
 }
 
 export function OrganizationNotificationsData() {
-  const { preferences, ready, save, storageError } = useSavedNotifications();
+  const { preferences, ready, save, storageError, needsReplacement } =
+    useSavedNotifications();
   const [clearError, setClearError] = useState("");
   const [clearedNotice, setClearedNotice] = useState(false);
   const [editorGeneration, setEditorGeneration] = useState(0);
@@ -280,6 +284,7 @@ export function OrganizationNotificationsData() {
         key={editorGeneration}
         saved={preferences}
         save={save}
+        needsReplacement={needsReplacement}
       />
 
       <section
