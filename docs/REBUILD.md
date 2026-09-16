@@ -74,7 +74,11 @@ server-side membership checks before replacing the preview. Organization search
 currently covers only implemented pages and locally saved profile information.
 The organization usage page at `/dashboard/organization/settings/usage` previews
 activity and capacity charts with sample data. It does not meter activity, enforce
-limits, or connect to billing. The organization audit log at
+limits, or connect to billing.
+The security alerts page at `/dashboard/organization/security/alerts` previews
+sample findings and stores acknowledgement state in the browser. It does not scan
+servers or change their configuration.
+The organization audit log at
 `/dashboard/organization/security/audit-log` previews search, filtering, and event
 details with labeled sample data. It does not record user or server activity. The
 organization connections page at

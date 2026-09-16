@@ -50,7 +50,9 @@ work does not need to rerun setup. The `/dashboard/` page uses the shadcn
 server data is connected. Organization profile settings live at
 `/dashboard/organization/settings/profile`. Organization usage is available at
 `/dashboard/organization/settings/usage` with clearly labeled sample data until
-metering is connected. The organization audit log at
+metering is connected. Security alerts are available at
+`/dashboard/organization/security/alerts` with sample findings and browser-local
+acknowledgements. The organization audit log at
 `/dashboard/organization/security/audit-log` has searchable sample events and
 redacted event details until server-side audit storage exists. Organization
 connections are previewed at
@@ -76,8 +78,12 @@ browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not
 use real confidential details until authentication and shared storage exist.
 Notification choices are also browser-local and do not send messages yet. The
-Notifications & data page can clear both sets of organization preview data from
+Notifications & data page can clear Cupboard's organization preview data from
 the current browser without clearing unrelated local storage.
+
+Security alert acknowledgements use
+`cupboard:organization:local-preview:security-alerts:v1`. They update only the
+sample alerts in the current browser and do not change a live server.
 
 The access and approvals page at
 `/dashboard/organization/security/access` previews member roles, invitations,

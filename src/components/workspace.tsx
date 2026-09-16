@@ -25,6 +25,7 @@ import {
   connectionsPath,
   notificationsDataPath,
   profilePath,
+  securityAlertsPath,
   usagePath,
 } from "@/lib/dashboard-navigation";
 
@@ -52,26 +53,31 @@ export function Workspace({
               activeSection: "connections",
               crumbs: ["Organization", "Integrations", "Connections"],
             }
-          : pathname === auditLogPath
+          : pathname === securityAlertsPath
             ? {
-                activeSection: "audit-log",
-                crumbs: ["Organization", "Security", "Audit log"],
+                activeSection: "security-alerts",
+                crumbs: ["Organization", "Security", "Alerts"],
               }
-            : pathname === accessPath
+            : pathname === auditLogPath
               ? {
-                  activeSection: "access",
-                  crumbs: ["Organization", "Security", "Access & approvals"],
+                  activeSection: "audit-log",
+                  crumbs: ["Organization", "Security", "Audit log"],
                 }
-              : pathname === notificationsDataPath
+              : pathname === accessPath
                 ? {
-                    activeSection: "preferences",
-                    crumbs: [
-                      "Organization",
-                      "Settings",
-                      "Notifications & data",
-                    ],
+                    activeSection: "access",
+                    crumbs: ["Organization", "Security", "Access & approvals"],
                   }
-                : undefined;
+                : pathname === notificationsDataPath
+                  ? {
+                      activeSection: "preferences",
+                      crumbs: [
+                        "Organization",
+                        "Settings",
+                        "Notifications & data",
+                      ],
+                    }
+                  : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>

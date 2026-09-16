@@ -23,6 +23,7 @@ import {
   type OrganizationNotifications,
 } from "@/lib/organization-notifications";
 import { organizationProfileKey } from "@/lib/organization-profile";
+import { securityAlertStorageKey } from "@/lib/security-alerts";
 import {
   organizationAccessChangedEvent,
   organizationAccessKey,
@@ -267,9 +268,11 @@ export function OrganizationNotificationsData() {
     try {
       window.localStorage.removeItem(organizationProfileKey);
       window.localStorage.removeItem(organizationNotificationsKey);
+      window.localStorage.removeItem(securityAlertStorageKey);
       window.localStorage.removeItem(organizationAccessKey);
       window.dispatchEvent(new Event("cupboard-profile-saved"));
       window.dispatchEvent(new Event(notificationsChangedEvent));
+      window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
       window.dispatchEvent(new Event(organizationAccessChangedEvent));
       setEditorGeneration((value) => value + 1);
       setClearedNotice(true);
@@ -306,7 +309,8 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Profile, notification, and access settings stored in this browser.
+              Profile, notification, access, and alert acknowledgement data
+              stored in this browser.
             </p>
           </div>
           <AlertDialog>
@@ -330,8 +334,9 @@ export function OrganizationNotificationsData() {
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This removes the organization profile, notification
-                  preferences, and access settings saved in this browser. You
-                  cannot undo this action.
+                  preferences, access settings, and security alert
+                  acknowledgements saved in this browser. You cannot undo this
+                  action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

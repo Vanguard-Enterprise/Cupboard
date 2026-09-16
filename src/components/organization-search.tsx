@@ -124,6 +124,14 @@ export function OrganizationSearch({
                   Organization usage
                 </CommandItem>
                 <CommandItem
+                  value="Security alerts findings risk incidents servers"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/security/alerts")
+                  }
+                >
+                  Security alerts
+                </CommandItem>
+                <CommandItem
                   value="Organization security audit log events history access"
                   onSelect={() => navigate(auditLogPath)}
                 >
