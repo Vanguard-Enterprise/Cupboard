@@ -372,7 +372,7 @@ export function OrganizationIntegrations() {
           ...latestData,
           credentials: [credential, ...latestData.credentials],
         },
-        `${name} created.`,
+        `${name} added to preview data.`,
       )
     ) {
       setCredentialDialogOpen(false);
@@ -506,7 +506,7 @@ export function OrganizationIntegrations() {
             (item) => item.id !== webhookToDelete.id,
           ),
         },
-        `${name} deleted.`,
+        `${name} deleted from preview data.`,
       )
     ) {
       setWebhookToDelete(null);
@@ -533,7 +533,7 @@ export function OrganizationIntegrations() {
         aria-labelledby="credentials-heading"
         className="overflow-hidden rounded-xl border bg-card"
       >
-        <div className="flex items-center justify-between gap-4 border-b px-5 py-5 sm:px-6">
+        <div className="flex flex-col items-stretch gap-3 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-surface-elevated text-primary">
               <KeyRoundIcon className="size-4" aria-hidden="true" />
@@ -543,7 +543,7 @@ export function OrganizationIntegrations() {
             </h2>
           </div>
           <Button
-            className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            className="h-10 w-full sm:w-auto [@media(any-pointer:coarse)]:min-h-11"
             onClick={openCredentialDialog}
           >
             <PlusIcon aria-hidden="true" />
@@ -563,7 +563,7 @@ export function OrganizationIntegrations() {
             <div className="px-6 py-10 text-center">
               <p className="text-sm font-medium">No API credentials</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Create one when a trusted tool needs API access.
+                Create a sample credential to preview this flow.
               </p>
             </div>
           )}
@@ -574,7 +574,7 @@ export function OrganizationIntegrations() {
         aria-labelledby="webhooks-heading"
         className="overflow-hidden rounded-xl border bg-card"
       >
-        <div className="flex items-center justify-between gap-4 border-b px-5 py-5 sm:px-6">
+        <div className="flex flex-col items-stretch gap-3 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-surface-elevated text-primary">
               <RadioTowerIcon className="size-4" aria-hidden="true" />
@@ -585,7 +585,7 @@ export function OrganizationIntegrations() {
           </div>
           <Button
             variant="outline"
-            className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            className="h-10 w-full sm:w-auto [@media(any-pointer:coarse)]:min-h-11"
             onClick={openWebhookDialog}
           >
             <PlusIcon aria-hidden="true" />
@@ -610,7 +610,7 @@ export function OrganizationIntegrations() {
             <div className="px-6 py-10 text-center">
               <p className="text-sm font-medium">No webhooks</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Add an endpoint to receive organization events.
+                Add a sample endpoint to preview this flow.
               </p>
             </div>
           )}
@@ -625,7 +625,8 @@ export function OrganizationIntegrations() {
           <DialogHeader>
             <DialogTitle>Create API credential</DialogTitle>
             <DialogDescription>
-              Name the system that will use this credential.
+              Name this sample credential. It is stored in this browser and
+              cannot authenticate to the Cupboard API.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -685,7 +686,8 @@ export function OrganizationIntegrations() {
           <DialogHeader>
             <DialogTitle>Credential created</DialogTitle>
             <DialogDescription>
-              Copy this secret now. Cupboard will not show it again.
+              This sample secret cannot authenticate. Copy it now if needed;
+              Cupboard will not show it again.
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border bg-input-background p-3">
@@ -1100,8 +1102,8 @@ export function OrganizationIntegrations() {
             </AlertDialogMedia>
             <AlertDialogTitle>Delete {webhookToDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Cupboard will stop sending events to this endpoint. Delivery
-              history for this preview will be deleted.
+              This removes the endpoint and its sample delivery history from
+              this browser preview. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

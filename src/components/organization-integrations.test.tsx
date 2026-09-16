@@ -34,6 +34,24 @@ afterEach(() => {
 });
 
 describe("Organization credentials and webhooks", () => {
+  it("keeps section actions reachable on narrow screens", () => {
+    render(<OrganizationIntegrations />);
+
+    for (const [sectionName, actionName] of [
+      ["API credentials", "Create credential"],
+      ["Webhooks", "Add webhook"],
+    ] as const) {
+      const section = screen.getByRole("region", { name: sectionName });
+      expect(section.firstElementChild?.className).toContain("flex-col");
+      expect(section.firstElementChild?.className).toContain("sm:flex-row");
+      const action = within(section).getByRole("button", {
+        name: actionName,
+      });
+      expect(action.className).toContain("w-full");
+      expect(action.className).toContain("sm:w-auto");
+    }
+  });
+
   it("creates a credential without storing its full secret", async () => {
     const user = userEvent.setup();
     const writeText = vi
@@ -45,6 +63,11 @@ describe("Organization credentials and webhooks", () => {
     const createDialog = screen.getByRole("dialog", {
       name: "Create API credential",
     });
+    expect(
+      within(createDialog).getByText(
+        "Name this sample credential. It is stored in this browser and cannot authenticate to the Cupboard API.",
+      ),
+    ).toBeTruthy();
     const createButton = within(createDialog).getByRole("button", {
       name: "Create credential",
     }) as HTMLButtonElement;
@@ -68,6 +91,11 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
     expect(
       screen.getByRole("dialog", { name: "Credential created" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This sample secret cannot authenticate. Copy it now if needed; Cupboard will not show it again.",
+      ),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Done" }).getAttribute("data-variant"),
@@ -317,6 +345,11 @@ describe("Organization credentials and webhooks", () => {
       name: "Delete Operations bridge?",
     });
     expect(
+      within(confirmation).getByText(
+        "This removes the endpoint and its sample delivery history from this browser preview. This cannot be undone.",
+      ),
+    ).toBeTruthy();
+    expect(
       within(confirmation)
         .getByRole("button", { name: "Keep webhook" })
         .getAttribute("data-variant"),
@@ -331,7 +364,7 @@ describe("Organization credentials and webhooks", () => {
     );
     expect(screen.queryByText("Operations bridge")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(
-      "Operations bridge deleted.",
+      "Operations bridge deleted from preview data.",
     );
   });
 
