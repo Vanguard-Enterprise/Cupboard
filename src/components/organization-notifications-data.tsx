@@ -24,6 +24,10 @@ import {
 } from "@/lib/organization-notifications";
 import { organizationIntegrationsKey } from "@/lib/organization-integrations";
 import { organizationProfileKey } from "@/lib/organization-profile";
+import {
+  organizationAccessChangedEvent,
+  organizationAccessKey,
+} from "@/lib/organization-access";
 
 const notificationOptions = [
   {
@@ -265,9 +269,11 @@ export function OrganizationNotificationsData() {
       window.localStorage.removeItem(organizationProfileKey);
       window.localStorage.removeItem(organizationNotificationsKey);
       window.localStorage.removeItem(organizationIntegrationsKey);
+      window.localStorage.removeItem(organizationAccessKey);
       window.dispatchEvent(new Event("cupboard-profile-saved"));
       window.dispatchEvent(new Event(notificationsChangedEvent));
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      window.dispatchEvent(new Event(organizationAccessChangedEvent));
       setEditorGeneration((value) => value + 1);
       setClearedNotice(true);
     } catch {
@@ -303,8 +309,8 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Organization profile, notification preferences, credentials, and
-              webhooks stored in this browser.
+              Organization profile, notification, access, credential, and
+              webhook data stored in this browser.
             </p>
           </div>
           <AlertDialog>
@@ -328,8 +334,8 @@ export function OrganizationNotificationsData() {
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This removes all organization preview data saved in this
-                  browser, including credentials and webhooks. You cannot undo
-                  this action.
+                  browser, including access settings, credentials, and webhooks.
+                  You cannot undo this action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

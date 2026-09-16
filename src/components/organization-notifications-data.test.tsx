@@ -19,6 +19,10 @@ import {
   navigationHref,
   notificationsDataPath,
 } from "@/lib/dashboard-navigation";
+import {
+  defaultOrganizationAccess,
+  organizationAccessKey,
+} from "@/lib/organization-access";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -78,7 +82,7 @@ describe("Organization notifications and data", () => {
     expect(screen.getByText("Organization data")).toBeTruthy();
     expect(
       screen.getByText(
-        "Organization profile, notification preferences, credentials, and webhooks stored in this browser.",
+        "Organization profile, notification, access, credential, and webhook data stored in this browser.",
       ),
     ).toBeTruthy();
     for (const name of [
@@ -205,6 +209,9 @@ describe("Organization notifications and data", () => {
       organizationIntegrationsKey,
       JSON.stringify(defaultOrganizationIntegrations),
     );
+    const savedAccess = structuredClone(defaultOrganizationAccess);
+    savedAccess.rules[0].enabled = false;
+    localStorage.setItem(organizationAccessKey, JSON.stringify(savedAccess));
     localStorage.setItem("unrelated", "keep me");
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
@@ -221,6 +228,7 @@ describe("Organization notifications and data", () => {
     expect(localStorage.getItem(organizationProfileKey)).toBeNull();
     expect(localStorage.getItem(organizationNotificationsKey)).toBeNull();
     expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
     expect(screen.getByRole("status").textContent).toBe("Local data cleared.");
     expect(
