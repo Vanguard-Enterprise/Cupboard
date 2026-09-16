@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  accessPath,
+  auditLogPath,
   connectionsPath,
+  credentialsPath,
   navigationHref,
   profilePath,
   usagePath,
@@ -11,6 +14,8 @@ describe("dashboard navigation", () => {
     expect(navigationHref("connections")).toBe(connectionsPath);
     expect(navigationHref("organization")).toBe(profilePath);
     expect(navigationHref("billing")).toBe(usagePath);
-    expect(navigationHref("credentials")).toBeUndefined();
+    expect(navigationHref("credentials")).toBe(credentialsPath);
+    expect(navigationHref("access")).toBe(accessPath);
+    expect(navigationHref("audit-log")).toBe(auditLogPath);
   });
 });

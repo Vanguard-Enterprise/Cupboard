@@ -13,6 +13,10 @@ import {
 } from "@/lib/organization-profile";
 import { securityAlertStorageKey } from "@/lib/security-alerts";
 import {
+  defaultOrganizationIntegrations,
+  organizationIntegrationsKey,
+} from "@/lib/organization-integrations";
+import {
   navigationHref,
   notificationsDataPath,
 } from "@/lib/dashboard-navigation";
@@ -79,7 +83,7 @@ describe("Organization notifications and data", () => {
     expect(screen.getByText("Organization data")).toBeTruthy();
     expect(
       screen.getByText(
-        "Profile, notification, access, and alert acknowledgement data stored in this browser.",
+        "Organization profile, notification, access, credential, webhook, and security alert acknowledgement data stored in this browser.",
       ),
     ).toBeTruthy();
     for (const name of [
@@ -202,6 +206,10 @@ describe("Organization notifications and data", () => {
         weeklySummary: true,
       }),
     );
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
     localStorage.setItem(securityAlertStorageKey, JSON.stringify(["SEC-2041"]));
     const savedAccess = structuredClone(defaultOrganizationAccess);
     savedAccess.rules[0].enabled = false;
@@ -221,6 +229,7 @@ describe("Organization notifications and data", () => {
 
     expect(localStorage.getItem(organizationProfileKey)).toBeNull();
     expect(localStorage.getItem(organizationNotificationsKey)).toBeNull();
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
     expect(localStorage.getItem(securityAlertStorageKey)).toBeNull();
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");

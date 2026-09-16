@@ -124,6 +124,14 @@ export function OrganizationSearch({
                   Organization usage
                 </CommandItem>
                 <CommandItem
+                  value="Organization integrations API credentials webhooks"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/integrations/credentials")
+                  }
+                >
+                  Credentials &amp; webhooks
+                </CommandItem>
+                <CommandItem
                   value="Security alerts findings risk incidents servers"
                   onSelect={() =>
                     navigate("/dashboard/organization/security/alerts")

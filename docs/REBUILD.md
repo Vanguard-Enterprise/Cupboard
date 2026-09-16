@@ -75,6 +75,12 @@ currently covers only implemented pages and locally saved profile information.
 The organization usage page at `/dashboard/organization/settings/usage` previews
 activity and capacity charts with sample data. It does not meter activity, enforce
 limits, or connect to billing.
+The credentials and webhooks page at
+`/dashboard/organization/integrations/credentials` is also a browser-local
+preview. It stores credential metadata and webhook configuration under a local
+organization key. Generated credential secrets appear once and are never written
+to browser storage. Shared persistence must add server-side membership checks,
+secret hashing, and encrypted webhook signing secrets before production use.
 The security alerts page at `/dashboard/organization/security/alerts` previews
 sample findings and stores acknowledgement state in the browser. It does not scan
 servers or change their configuration.
