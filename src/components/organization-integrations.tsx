@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
@@ -88,6 +88,38 @@ function integrationsSnapshot(): string | null {
 }
 
 const integrationsServerSnapshot = () => null;
+
+type IntegrationViewState = {
+  raw: string | null;
+  data: OrganizationIntegrations;
+  storageUnreadable: boolean;
+};
+
+function integrationViewState(
+  raw: string | null,
+  lastValidData: OrganizationIntegrations,
+): IntegrationViewState {
+  if (raw === null) {
+    return {
+      raw,
+      data: structuredClone(defaultOrganizationIntegrations),
+      storageUnreadable: false,
+    };
+  }
+  try {
+    return {
+      raw,
+      data: parseOrganizationIntegrations(raw),
+      storageUnreadable: false,
+    };
+  } catch {
+    return {
+      raw,
+      data: lastValidData,
+      storageUnreadable: true,
+    };
+  }
+}
 
 function newId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -272,25 +304,19 @@ export function OrganizationIntegrations() {
     integrationsSnapshot,
     integrationsServerSnapshot,
   );
-  const { data, storageUnreadable } = useMemo(() => {
-    if (raw === null) {
-      return {
-        data: structuredClone(defaultOrganizationIntegrations),
-        storageUnreadable: false,
-      };
-    }
-    try {
-      return {
-        data: parseOrganizationIntegrations(raw),
-        storageUnreadable: false,
-      };
-    } catch {
-      return {
-        data: structuredClone(defaultOrganizationIntegrations),
-        storageUnreadable: true,
-      };
-    }
-  }, [raw]);
+  const [storedViewState, setStoredViewState] = useState<IntegrationViewState>(
+    () =>
+      integrationViewState(
+        raw,
+        structuredClone(defaultOrganizationIntegrations),
+      ),
+  );
+  let viewState = storedViewState;
+  if (storedViewState.raw !== raw) {
+    viewState = integrationViewState(raw, storedViewState.data);
+    setStoredViewState(viewState);
+  }
+  const { data, storageUnreadable } = viewState;
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false);
   const [credentialName, setCredentialName] = useState("");
@@ -685,7 +711,8 @@ export function OrganizationIntegrations() {
           className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3"
         >
           <p className="text-sm text-destructive">
-            Saved credential and webhook data could not be loaded.
+            Saved integration data could not be loaded. Showing the last loaded
+            data; changes are disabled.
           </p>
           <Button
             variant="secondary"
@@ -1209,6 +1236,7 @@ export function OrganizationIntegrations() {
                   variant="outline"
                   className="h-10 [@media(any-pointer:coarse)]:min-h-11"
                   onClick={() => editWebhook(selectedWebhook)}
+                  disabled={storageUnreadable}
                 >
                   <PencilIcon aria-hidden="true" />
                   Edit
@@ -1221,6 +1249,7 @@ export function OrganizationIntegrations() {
                     setWebhookDeleteConflict(null);
                     setWebhookToDelete(selectedWebhook);
                   }}
+                  disabled={storageUnreadable}
                 >
                   <Trash2Icon aria-hidden="true" />
                   Delete

@@ -262,7 +262,7 @@ describe("Organization credentials and webhooks", () => {
 
     expect(
       screen.getByText(
-        "Saved credential and webhook data could not be loaded.",
+        "Saved integration data could not be loaded. Showing the last loaded data; changes are disabled.",
       ),
     ).toBeTruthy();
     expect(
@@ -318,7 +318,7 @@ describe("Organization credentials and webhooks", () => {
     expect(localStorage.getItem("unrelated-preview-data")).toBe("keep-me");
     expect(
       screen.queryByText(
-        "Saved credential and webhook data could not be loaded.",
+        "Saved integration data could not be loaded. Showing the last loaded data; changes are disabled.",
       ),
     ).toBeNull();
     expect(
@@ -363,6 +363,102 @@ describe("Organization credentials and webhooks", () => {
         "Unreadable integration data replaced with sample data.",
       ),
     ).toBeNull();
+  });
+
+  it("keeps the last valid integration data visible while storage is unreadable", async () => {
+    const user = userEvent.setup();
+    const custom = structuredClone(defaultOrganizationIntegrations);
+    custom.credentials = [
+      {
+        id: "custom-credential",
+        name: "Custom credential",
+        prefix: "cb_live_CUSTOM...1234",
+        createdAt: "Sep 16, 2026",
+        lastUsed: null,
+      },
+    ];
+    custom.webhooks = [
+      {
+        id: "custom-webhook",
+        name: "Custom webhook",
+        url: "https://custom.example.com/hooks/cupboard",
+        events: ["player.reported"],
+        enabled: true,
+        createdAt: "Sep 16, 2026",
+        lastDelivery: null,
+      },
+    ];
+    localStorage.setItem(organizationIntegrationsKey, JSON.stringify(custom));
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByText("Custom webhook").closest("button")!);
+    const details = screen.getByRole("dialog", { name: "Custom webhook" });
+    const malformed = "unreadable-data";
+    act(() => {
+      localStorage.setItem(organizationIntegrationsKey, malformed);
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: organizationIntegrationsKey,
+          newValue: malformed,
+        }),
+      );
+    });
+
+    expect(screen.getByText("Custom credential")).toBeTruthy();
+    expect(screen.getAllByText("Custom webhook").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Server operations")).toBeNull();
+    expect(screen.queryByText("Operations relay")).toBeNull();
+    expect(
+      screen.getByText(
+        "Saved integration data could not be loaded. Showing the last loaded data; changes are disabled.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(details).getByRole("button", {
+          name: "Edit",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (
+        within(details).getByRole("button", {
+          name: "Delete",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(malformed);
+
+    const recovered = structuredClone(custom);
+    recovered.credentials[0].name = "Recovered credential";
+    recovered.webhooks[0].name = "Recovered webhook";
+    const recoveredRaw = JSON.stringify(recovered);
+    act(() => {
+      localStorage.setItem(organizationIntegrationsKey, recoveredRaw);
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: organizationIntegrationsKey,
+          newValue: recoveredRaw,
+        }),
+      );
+    });
+
+    expect(screen.getByText("Recovered credential")).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Recovered webhook" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Saved integration data could not be loaded. Showing the last loaded data; changes are disabled.",
+      ),
+    ).toBeNull();
+    expect(
+      (
+        within(details).getByRole("button", {
+          name: "Edit",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
   });
 
   it("keeps the one-time secret open until Done is selected", async () => {
