@@ -128,6 +128,7 @@ describe("organization profile", () => {
     expect(links).toEqual([
       "/dashboard/organization/integrations/connections",
       "/dashboard/organization/security/audit-log",
+      "/dashboard/organization/security/access",
       "/dashboard/organization/settings/profile",
       "/dashboard/organization/settings/usage",
       "/dashboard/organization/settings/notifications-data",

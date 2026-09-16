@@ -79,5 +79,10 @@ Notification choices are also browser-local and do not send messages yet. The
 Notifications & data page can clear both sets of organization preview data from
 the current browser without clearing unrelated local storage.
 
+The access and approvals page at
+`/dashboard/organization/security/access` previews member roles, invitations,
+and sensitive-action approval rules. Its data stays in the current browser and
+does not grant access, send invitations, or enforce approvals.
+
 The sidebar remembers its expanded state in the `sidebar_state` cookie for
 seven days, including across refreshes and visits to the login page.

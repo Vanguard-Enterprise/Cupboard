@@ -20,6 +20,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  accessPath,
   auditLogPath,
   connectionsPath,
   notificationsDataPath,
@@ -56,12 +57,21 @@ export function Workspace({
                 activeSection: "audit-log",
                 crumbs: ["Organization", "Security", "Audit log"],
               }
-            : pathname === notificationsDataPath
+            : pathname === accessPath
               ? {
-                  activeSection: "preferences",
-                  crumbs: ["Organization", "Settings", "Notifications & data"],
+                  activeSection: "access",
+                  crumbs: ["Organization", "Security", "Access & approvals"],
                 }
-              : undefined;
+              : pathname === notificationsDataPath
+                ? {
+                    activeSection: "preferences",
+                    crumbs: [
+                      "Organization",
+                      "Settings",
+                      "Notifications & data",
+                    ],
+                  }
+                : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>

@@ -85,6 +85,11 @@ and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
 in the current browser and can clear Cupboard's organization preview data there.
 It does not send notifications or delete shared server data.
+The access and approvals page at `/dashboard/organization/security/access`
+previews organization members, invitations, roles, and approval rules in local
+browser storage. These controls do not enforce permissions or send invitations.
+Shared persistence must check tenant membership and authorization in the data
+access path before this preview can become an access-control boundary.
 
 ## Acceptance bar for the first slice
 
