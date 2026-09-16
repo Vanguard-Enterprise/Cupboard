@@ -75,6 +75,11 @@ currently covers only implemented pages and locally saved profile information.
 The organization usage page at `/dashboard/organization/settings/usage` previews
 activity and capacity charts with sample data. It does not meter activity, enforce
 limits, or connect to billing.
+The access and approvals page at `/dashboard/organization/security/access`
+previews organization members, invitations, roles, and approval rules in local
+browser storage. These controls do not enforce permissions or send invitations.
+Shared persistence must check tenant membership and authorization in the data
+access path before this preview can become an access-control boundary.
 
 ## Acceptance bar for the first slice
 

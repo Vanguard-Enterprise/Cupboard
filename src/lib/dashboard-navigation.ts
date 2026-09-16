@@ -246,9 +246,11 @@ export const dashboardNavigation = [
 
 export const profilePath = "/dashboard/organization/settings/profile";
 export const usagePath = "/dashboard/organization/settings/usage";
+export const accessPath = "/dashboard/organization/security/access";
 
 export function navigationHref(id: string): string | undefined {
   if (id === "organization") return profilePath;
   if (id === "billing") return usagePath;
+  if (id === "access") return accessPath;
   return undefined;
 }

@@ -19,7 +19,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { profilePath, usagePath } from "@/lib/dashboard-navigation";
+import { accessPath, profilePath, usagePath } from "@/lib/dashboard-navigation";
 
 export function Workspace({
   children,
@@ -31,14 +31,23 @@ export function Workspace({
   const pathname = usePathname();
   const isProfile = pathname === profilePath;
   const isUsage = pathname === usagePath;
+  const isAccess = pathname === accessPath;
   const isOrganizationSettings = isProfile || isUsage;
+  const isOrganizationSecurity = isAccess;
+  const isOrganizationPage = isOrganizationSettings || isOrganizationSecurity;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
           activeSection={
-            isProfile ? "organization" : isUsage ? "billing" : undefined
+            isProfile
+              ? "organization"
+              : isUsage
+                ? "billing"
+                : isAccess
+                  ? "access"
+                  : undefined
           }
           onSearch={() => setSearchOpen(true)}
         />
@@ -48,7 +57,7 @@ export function Workspace({
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  {isOrganizationSettings ? (
+                  {isOrganizationPage ? (
                     <BreadcrumbLink asChild>
                       <Link href="/dashboard">Dashboard</Link>
                     </BreadcrumbLink>
@@ -56,7 +65,7 @@ export function Workspace({
                     <BreadcrumbPage>Dashboard</BreadcrumbPage>
                   )}
                 </BreadcrumbItem>
-                {isOrganizationSettings && (
+                {isOrganizationPage && (
                   <>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
@@ -64,12 +73,18 @@ export function Workspace({
                     </BreadcrumbItem>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
-                      <span>Settings</span>
+                      <span>
+                        {isOrganizationSecurity ? "Security" : "Settings"}
+                      </span>
                     </BreadcrumbItem>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
                       <BreadcrumbPage>
-                        {isProfile ? "Profile" : "Usage"}
+                        {isProfile
+                          ? "Profile"
+                          : isUsage
+                            ? "Usage"
+                            : "Access & approvals"}
                       </BreadcrumbPage>
                     </BreadcrumbItem>
                   </>

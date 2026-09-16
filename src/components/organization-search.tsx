@@ -117,6 +117,14 @@ export function OrganizationSearch({
                 >
                   Organization usage
                 </CommandItem>
+                <CommandItem
+                  value="Organization security access approvals members roles invitations"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/security/access")
+                  }
+                >
+                  Access &amp; approvals
+                </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (
