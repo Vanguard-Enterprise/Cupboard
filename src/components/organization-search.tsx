@@ -117,6 +117,14 @@ export function OrganizationSearch({
                 >
                   Organization usage
                 </CommandItem>
+                <CommandItem
+                  value="Organization integrations connections external services"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/integrations/connections")
+                  }
+                >
+                  Connections
+                </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (
