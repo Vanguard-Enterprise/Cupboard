@@ -81,7 +81,11 @@ preview. It stores credential metadata and webhook configuration under a local
 organization key. Generated credential secrets appear once and are never written
 to browser storage. Shared persistence must add server-side membership checks,
 secret hashing, and encrypted webhook signing secrets before production use.
-The organization notifications and data page at
+The organization connections page at
+`/dashboard/organization/integrations/connections` previews connection health and
+setup requirements with sample data. It does not request credentials, connect an
+external account, or persist connection settings. The organization notifications
+and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
 in the current browser and can clear Cupboard's organization preview data there.
 It does not send notifications or delete shared server data.
