@@ -101,6 +101,14 @@ function today(): string {
   }).format(new Date());
 }
 
+function editableWebhookSnapshot(webhook: WebhookEndpoint): string {
+  return JSON.stringify({
+    name: webhook.name,
+    url: webhook.url,
+    events: [...webhook.events].sort(),
+  });
+}
+
 function CredentialRow({
   credential,
   onRevoke,
@@ -274,7 +282,12 @@ export function OrganizationIntegrations() {
   );
   const [webhookDialogOpen, setWebhookDialogOpen] = useState(false);
   const [editingWebhookId, setEditingWebhookId] = useState<string | null>(null);
-  const [webhookEditConflict, setWebhookEditConflict] = useState(false);
+  const [editingWebhookBaseline, setEditingWebhookBaseline] = useState<
+    string | null
+  >(null);
+  const [webhookEditConflict, setWebhookEditConflict] = useState<
+    "deleted" | "changed" | null
+  >(null);
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(
     null,
   );
@@ -300,9 +313,15 @@ export function OrganizationIntegrations() {
   const editingWebhook = editingWebhookId
     ? data.webhooks.find((webhook) => webhook.id === editingWebhookId)
     : undefined;
-  const webhookEditMissing = Boolean(
-    webhookEditConflict || (editingWebhookId && !editingWebhook),
-  );
+  const webhookEditIssue =
+    webhookEditConflict ??
+    (editingWebhookId && !editingWebhook
+      ? "deleted"
+      : editingWebhook &&
+          editingWebhookBaseline !== null &&
+          editableWebhookSnapshot(editingWebhook) !== editingWebhookBaseline
+        ? "changed"
+        : null);
   const credentialNameValid = credentialName.trim().length > 0;
   const webhookFormValid =
     webhookName.trim().length > 0 &&
@@ -370,7 +389,8 @@ export function OrganizationIntegrations() {
 
   function openWebhookDialog() {
     setEditingWebhookId(null);
-    setWebhookEditConflict(false);
+    setEditingWebhookBaseline(null);
+    setWebhookEditConflict(null);
     setWebhookName("");
     setWebhookUrl("");
     setSelectedEvents([]);
@@ -381,7 +401,8 @@ export function OrganizationIntegrations() {
   function editWebhook(webhook: WebhookEndpoint) {
     setSelectedWebhookId(null);
     setEditingWebhookId(webhook.id);
-    setWebhookEditConflict(false);
+    setEditingWebhookBaseline(editableWebhookSnapshot(webhook));
+    setWebhookEditConflict(null);
     setWebhookName(webhook.name);
     setWebhookUrl(webhook.url);
     setSelectedEvents(webhook.events);
@@ -396,7 +417,17 @@ export function OrganizationIntegrations() {
       ? latestData.webhooks.find((webhook) => webhook.id === editingWebhookId)
       : undefined;
     if (editingWebhookId && !latestEditingWebhook) {
-      setWebhookEditConflict(true);
+      setWebhookEditConflict("deleted");
+      return;
+    }
+    if (
+      editingWebhookId &&
+      latestEditingWebhook &&
+      (editingWebhookBaseline === null ||
+        editableWebhookSnapshot(latestEditingWebhook) !==
+          editingWebhookBaseline)
+    ) {
+      setWebhookEditConflict("changed");
       return;
     }
     const name = webhookName.trim();
@@ -436,6 +467,7 @@ export function OrganizationIntegrations() {
     ) {
       setWebhookDialogOpen(false);
       setEditingWebhookId(null);
+      setEditingWebhookBaseline(null);
     }
   }
 
@@ -700,7 +732,8 @@ export function OrganizationIntegrations() {
           setWebhookDialogOpen(open);
           if (!open) {
             setEditingWebhookId(null);
-            setWebhookEditConflict(false);
+            setEditingWebhookBaseline(null);
+            setWebhookEditConflict(null);
           }
         }}
       >
@@ -715,10 +748,11 @@ export function OrganizationIntegrations() {
                 : "Cupboard will send the selected events to this endpoint."}
             </DialogDescription>
           </DialogHeader>
-          {webhookEditMissing && (
+          {webhookEditIssue && (
             <p role="alert" className="text-sm text-destructive">
-              This webhook was deleted in another tab. Close this dialog without
-              saving.
+              {webhookEditIssue === "deleted"
+                ? "This webhook was deleted in another tab. Close this dialog without saving."
+                : "This webhook changed in another tab. Close and reopen it before editing again."}
             </p>
           )}
           <form
@@ -836,7 +870,7 @@ export function OrganizationIntegrations() {
               type="submit"
               form="create-webhook-form"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              disabled={!webhookFormValid || webhookEditMissing}
+              disabled={!webhookFormValid || Boolean(webhookEditIssue)}
             >
               {editingWebhookId ? "Save changes" : "Add webhook"}
             </Button>

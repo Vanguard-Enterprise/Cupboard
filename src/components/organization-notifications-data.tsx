@@ -22,6 +22,7 @@ import {
   parseOrganizationNotifications,
   type OrganizationNotifications,
 } from "@/lib/organization-notifications";
+import { organizationIntegrationsKey } from "@/lib/organization-integrations";
 import { organizationProfileKey } from "@/lib/organization-profile";
 
 const notificationOptions = [
@@ -263,8 +264,10 @@ export function OrganizationNotificationsData() {
     try {
       window.localStorage.removeItem(organizationProfileKey);
       window.localStorage.removeItem(organizationNotificationsKey);
+      window.localStorage.removeItem(organizationIntegrationsKey);
       window.dispatchEvent(new Event("cupboard-profile-saved"));
       window.dispatchEvent(new Event(notificationsChangedEvent));
+      window.dispatchEvent(new Event("cupboard-integrations-saved"));
       setEditorGeneration((value) => value + 1);
       setClearedNotice(true);
     } catch {
@@ -300,7 +303,8 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Profile and notification preferences stored in this browser.
+              Organization profile, notification preferences, credentials, and
+              webhooks stored in this browser.
             </p>
           </div>
           <AlertDialog>
@@ -323,9 +327,9 @@ export function OrganizationNotificationsData() {
                 </AlertDialogMedia>
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This removes the organization profile and notification
-                  preferences saved in this browser. You cannot undo this
-                  action.
+                  This removes all organization preview data saved in this
+                  browser, including credentials and webhooks. You cannot undo
+                  this action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

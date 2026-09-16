@@ -12,6 +12,10 @@ import {
   organizationProfileKey,
 } from "@/lib/organization-profile";
 import {
+  defaultOrganizationIntegrations,
+  organizationIntegrationsKey,
+} from "@/lib/organization-integrations";
+import {
   navigationHref,
   notificationsDataPath,
 } from "@/lib/dashboard-navigation";
@@ -74,7 +78,7 @@ describe("Organization notifications and data", () => {
     expect(screen.getByText("Organization data")).toBeTruthy();
     expect(
       screen.getByText(
-        "Profile and notification preferences stored in this browser.",
+        "Organization profile, notification preferences, credentials, and webhooks stored in this browser.",
       ),
     ).toBeTruthy();
     for (const name of [
@@ -197,6 +201,10 @@ describe("Organization notifications and data", () => {
         weeklySummary: true,
       }),
     );
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(defaultOrganizationIntegrations),
+    );
     localStorage.setItem("unrelated", "keep me");
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
@@ -212,6 +220,7 @@ describe("Organization notifications and data", () => {
 
     expect(localStorage.getItem(organizationProfileKey)).toBeNull();
     expect(localStorage.getItem(organizationNotificationsKey)).toBeNull();
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
     expect(screen.getByRole("status").textContent).toBe("Local data cleared.");
     expect(

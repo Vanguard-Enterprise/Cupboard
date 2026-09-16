@@ -288,6 +288,56 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.queryByText("Operations relay added.")).toBeNull();
   });
 
+  it("does not overwrite a webhook changed in another tab while editing", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const editDialog = screen.getByRole("dialog", { name: "Edit webhook" });
+
+    const changed = structuredClone(defaultOrganizationIntegrations);
+    changed.webhooks[0] = {
+      ...changed.webhooks[0],
+      name: "Updated elsewhere",
+      url: "https://new.example.com/hooks/cupboard",
+      events: ["player.reported"],
+    };
+    const raw = JSON.stringify(changed);
+    act(() => {
+      localStorage.setItem(organizationIntegrationsKey, raw);
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: organizationIntegrationsKey,
+          newValue: raw,
+        }),
+      );
+      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    });
+
+    fireEvent.submit(editDialog.querySelector("form")!);
+    expect(
+      await within(editDialog).findByText(
+        "This webhook changed in another tab. Close and reopen it before editing again.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        within(editDialog).getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    const stored = JSON.parse(
+      localStorage.getItem(organizationIntegrationsKey)!,
+    );
+    expect(stored.webhooks[0]).toMatchObject(changed.webhooks[0]);
+    expect(screen.queryByText("Operations relay updated.")).toBeNull();
+  });
+
   it("does not report a simulated webhook retry as delivered", async () => {
     const user = userEvent.setup();
     const data = structuredClone(defaultOrganizationIntegrations);
