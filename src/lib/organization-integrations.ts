@@ -71,40 +71,51 @@ export function readOrganizationIntegrations(
 ): OrganizationIntegrations {
   if (!raw) return structuredClone(defaultOrganizationIntegrations);
   try {
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object") {
-      return structuredClone(defaultOrganizationIntegrations);
-    }
-    const candidate = value as Record<string, unknown>;
-    if (
-      !Array.isArray(candidate.credentials) ||
-      !candidate.credentials.every(isApiCredential) ||
-      !Array.isArray(candidate.webhooks) ||
-      !candidate.webhooks.every(isWebhookEndpoint)
-    ) {
-      return structuredClone(defaultOrganizationIntegrations);
-    }
-    return {
-      credentials: candidate.credentials.map((credential) => ({
-        id: credential.id,
-        name: credential.name,
-        prefix: credential.prefix,
-        createdAt: credential.createdAt,
-        lastUsed: credential.lastUsed,
-      })),
-      webhooks: candidate.webhooks.map((webhook) => ({
-        id: webhook.id,
-        name: webhook.name,
-        url: webhook.url,
-        events: [...webhook.events],
-        enabled: webhook.enabled,
-        createdAt: webhook.createdAt,
-        lastDelivery: webhook.lastDelivery ? { ...webhook.lastDelivery } : null,
-      })),
-    };
+    return parseOrganizationIntegrations(raw);
   } catch {
     return structuredClone(defaultOrganizationIntegrations);
   }
+}
+
+export function parseOrganizationIntegrations(
+  raw: string,
+): OrganizationIntegrations {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("Invalid integration data");
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("Invalid integration data");
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    !Array.isArray(candidate.credentials) ||
+    !candidate.credentials.every(isApiCredential) ||
+    !Array.isArray(candidate.webhooks) ||
+    !candidate.webhooks.every(isWebhookEndpoint)
+  ) {
+    throw new Error("Invalid integration data");
+  }
+  return {
+    credentials: candidate.credentials.map((credential) => ({
+      id: credential.id,
+      name: credential.name,
+      prefix: credential.prefix,
+      createdAt: credential.createdAt,
+      lastUsed: credential.lastUsed,
+    })),
+    webhooks: candidate.webhooks.map((webhook) => ({
+      id: webhook.id,
+      name: webhook.name,
+      url: webhook.url,
+      events: [...webhook.events],
+      enabled: webhook.enabled,
+      createdAt: webhook.createdAt,
+      lastDelivery: webhook.lastDelivery ? { ...webhook.lastDelivery } : null,
+    })),
+  };
 }
 
 function isApiCredential(value: unknown): value is ApiCredential {

@@ -56,7 +56,7 @@ import {
   createCredentialSecret,
   defaultOrganizationIntegrations,
   organizationIntegrationsKey,
-  readOrganizationIntegrations,
+  parseOrganizationIntegrations,
   validateWebhookUrl,
   webhookEvents,
   type ApiCredential,
@@ -112,9 +112,11 @@ function editableWebhookSnapshot(webhook: WebhookEndpoint): string {
 function CredentialRow({
   credential,
   onRevoke,
+  disabled,
 }: {
   credential: ApiCredential;
   onRevoke: (credential: ApiCredential) => void;
+  disabled: boolean;
 }) {
   return (
     <div className="grid gap-3 px-5 py-4 sm:px-6 md:grid-cols-[minmax(0,1.4fr)_10rem_10rem_auto] md:items-center">
@@ -140,6 +142,7 @@ function CredentialRow({
         variant="ghost"
         className="min-h-9 w-fit justify-self-start text-text-muted hover:bg-destructive/10 hover:text-destructive [@media(any-pointer:coarse)]:min-h-11 md:justify-self-end"
         onClick={() => onRevoke(credential)}
+        disabled={disabled}
       >
         <Trash2Icon aria-hidden="true" />
         Revoke
@@ -153,11 +156,13 @@ function WebhookRow({
   onOpen,
   onEdit,
   onDelete,
+  disabled,
 }: {
   webhook: WebhookEndpoint;
   onOpen: (webhook: WebhookEndpoint) => void;
   onEdit: (webhook: WebhookEndpoint) => void;
   onDelete: (webhook: WebhookEndpoint) => void;
+  disabled: boolean;
 }) {
   const failed = Boolean(
     webhook.lastDelivery && webhook.lastDelivery.status >= 400,
@@ -176,8 +181,9 @@ function WebhookRow({
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center">
       <button
         type="button"
-        className="min-w-0 px-5 py-4 text-left outline-none transition-colors hover:bg-surface-elevated focus-visible:bg-surface-elevated focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-6"
+        className="min-w-0 px-5 py-4 text-left outline-none transition-colors hover:bg-surface-elevated focus-visible:bg-surface-elevated focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent sm:px-6"
         onClick={() => onOpen(webhook)}
+        disabled={disabled}
       >
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
@@ -224,6 +230,7 @@ function WebhookRow({
               variant="ghost"
               className="min-h-9 text-muted-foreground [@media(any-pointer:coarse)]:min-h-11"
               aria-label={`Manage ${webhook.name}`}
+              disabled={disabled}
             >
               <MoreHorizontalIcon aria-hidden="true" />
               <span className="hidden sm:inline">Manage</span>
@@ -265,13 +272,25 @@ export function OrganizationIntegrations() {
     integrationsSnapshot,
     integrationsServerSnapshot,
   );
-  const data = useMemo(
-    () =>
-      raw === null
-        ? structuredClone(defaultOrganizationIntegrations)
-        : readOrganizationIntegrations(raw),
-    [raw],
-  );
+  const { data, storageUnreadable } = useMemo(() => {
+    if (raw === null || raw === "") {
+      return {
+        data: structuredClone(defaultOrganizationIntegrations),
+        storageUnreadable: false,
+      };
+    }
+    try {
+      return {
+        data: parseOrganizationIntegrations(raw),
+        storageUnreadable: false,
+      };
+    } catch {
+      return {
+        data: structuredClone(defaultOrganizationIntegrations),
+        storageUnreadable: true,
+      };
+    }
+  }, [raw]);
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false);
   const [credentialName, setCredentialName] = useState("");
@@ -304,6 +323,7 @@ export function OrganizationIntegrations() {
     useState<ApiCredential | null>(null);
   const [webhookToDelete, setWebhookToDelete] =
     useState<WebhookEndpoint | null>(null);
+  const [replaceUnreadableOpen, setReplaceUnreadableOpen] = useState(false);
   const credentialNameRef = useRef<HTMLInputElement>(null);
   const webhookNameRef = useRef<HTMLInputElement>(null);
   const webhookUrlRef = useRef<HTMLInputElement>(null);
@@ -343,6 +363,43 @@ export function OrganizationIntegrations() {
     }
   }
 
+  function latestDataForMutation(): OrganizationIntegrations | null {
+    const latestRaw = integrationsSnapshot();
+    if (!latestRaw) return structuredClone(defaultOrganizationIntegrations);
+    try {
+      return parseOrganizationIntegrations(latestRaw);
+    } catch {
+      setCredentialDialogOpen(false);
+      setWebhookDialogOpen(false);
+      setCredentialToRevoke(null);
+      setWebhookToDelete(null);
+      setSelectedWebhookId(null);
+      setReplaceUnreadableOpen(true);
+      setFeedback({
+        kind: "alert",
+        message: "Saved credential and webhook data could not be loaded.",
+      });
+      return null;
+    }
+  }
+
+  function replaceUnreadableData() {
+    try {
+      localStorage.removeItem(organizationIntegrationsKey);
+      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      setReplaceUnreadableOpen(false);
+      setFeedback({
+        kind: "status",
+        message: "Unreadable integration data replaced with sample data.",
+      });
+    } catch {
+      setFeedback({
+        kind: "alert",
+        message: "Could not replace the saved data in your browser. Try again.",
+      });
+    }
+  }
+
   function openCredentialDialog() {
     setCredentialName("");
     setCredentialNameError("");
@@ -357,6 +414,8 @@ export function OrganizationIntegrations() {
       credentialNameRef.current?.focus();
       return;
     }
+    const latestData = latestDataForMutation();
+    if (!latestData) return;
     const secret = createCredentialSecret();
     const credential: ApiCredential = {
       id: newId(),
@@ -365,7 +424,6 @@ export function OrganizationIntegrations() {
       createdAt: today(),
       lastUsed: null,
     };
-    const latestData = readOrganizationIntegrations(integrationsSnapshot());
     if (
       persist(
         {
@@ -416,7 +474,8 @@ export function OrganizationIntegrations() {
 
   function createWebhook(event: React.FormEvent) {
     event.preventDefault();
-    const latestData = readOrganizationIntegrations(integrationsSnapshot());
+    const latestData = latestDataForMutation();
+    if (!latestData) return;
     const latestEditingWebhook = editingWebhookId
       ? latestData.webhooks.find((webhook) => webhook.id === editingWebhookId)
       : undefined;
@@ -478,7 +537,8 @@ export function OrganizationIntegrations() {
   function revokeCredential() {
     if (!credentialToRevoke) return;
     const name = credentialToRevoke.name;
-    const latestData = readOrganizationIntegrations(integrationsSnapshot());
+    const latestData = latestDataForMutation();
+    if (!latestData) return;
     if (
       persist(
         {
@@ -497,7 +557,8 @@ export function OrganizationIntegrations() {
   function deleteWebhook() {
     if (!webhookToDelete) return;
     const name = webhookToDelete.name;
-    const latestData = readOrganizationIntegrations(integrationsSnapshot());
+    const latestData = latestDataForMutation();
+    if (!latestData) return;
     if (
       persist(
         {
@@ -529,6 +590,24 @@ export function OrganizationIntegrations() {
         </p>
       )}
 
+      {storageUnreadable && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3"
+        >
+          <p className="text-sm text-destructive">
+            Saved credential and webhook data could not be loaded.
+          </p>
+          <Button
+            variant="secondary"
+            className="h-9 [@media(any-pointer:coarse)]:min-h-11"
+            onClick={() => setReplaceUnreadableOpen(true)}
+          >
+            Replace local data
+          </Button>
+        </div>
+      )}
+
       <section
         aria-labelledby="credentials-heading"
         className="overflow-hidden rounded-xl border bg-card"
@@ -545,6 +624,7 @@ export function OrganizationIntegrations() {
           <Button
             className="h-10 w-full sm:w-auto [@media(any-pointer:coarse)]:min-h-11"
             onClick={openCredentialDialog}
+            disabled={storageUnreadable}
           >
             <PlusIcon aria-hidden="true" />
             Create credential
@@ -557,6 +637,7 @@ export function OrganizationIntegrations() {
                 key={credential.id}
                 credential={credential}
                 onRevoke={setCredentialToRevoke}
+                disabled={storageUnreadable}
               />
             ))
           ) : (
@@ -587,6 +668,7 @@ export function OrganizationIntegrations() {
             variant="outline"
             className="h-10 w-full sm:w-auto [@media(any-pointer:coarse)]:min-h-11"
             onClick={openWebhookDialog}
+            disabled={storageUnreadable}
           >
             <PlusIcon aria-hidden="true" />
             Add webhook
@@ -604,6 +686,7 @@ export function OrganizationIntegrations() {
                 }}
                 onEdit={editWebhook}
                 onDelete={setWebhookToDelete}
+                disabled={storageUnreadable}
               />
             ))
           ) : (
@@ -1051,6 +1134,44 @@ export function OrganizationIntegrations() {
           )}
         </SheetContent>
       </Sheet>
+
+      <AlertDialog
+        open={replaceUnreadableOpen}
+        onOpenChange={setReplaceUnreadableOpen}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <CircleAlertIcon
+                className="text-destructive"
+                aria-hidden="true"
+              />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              Replace unreadable integration data?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The saved credential and webhook preview data will be discarded
+              and replaced with sample data. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              variant="secondary"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            >
+              Keep data
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={replaceUnreadableData}
+            >
+              Replace local data
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={Boolean(credentialToRevoke)}

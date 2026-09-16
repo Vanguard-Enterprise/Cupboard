@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCredentialSecret,
+  parseOrganizationIntegrations,
   readOrganizationIntegrations,
   validateWebhookUrl,
 } from "./organization-integrations";
@@ -31,8 +32,17 @@ describe("organization integrations data", () => {
     ).toBe(1);
   });
 
+  it("rejects malformed storage when a write needs verified data", () => {
+    expect(() => parseOrganizationIntegrations("not-json")).toThrow(
+      "Invalid integration data",
+    );
+    expect(() =>
+      parseOrganizationIntegrations('{"credentials":"bad"}'),
+    ).toThrow("Invalid integration data");
+  });
+
   it("drops unknown stored fields so secrets cannot survive a rewrite", () => {
-    const parsed = readOrganizationIntegrations(
+    const parsed = parseOrganizationIntegrations(
       JSON.stringify({
         credentials: [
           {

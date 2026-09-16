@@ -141,6 +141,114 @@ describe("Organization credentials and webhooks", () => {
     expect(stored.webhooks[0].name).toBe("Updated elsewhere");
   });
 
+  it("does not overwrite integration data that becomes unreadable during a change", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Create credential" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Credential name" }),
+      "Deploy agent",
+    );
+    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+
+    await user.click(
+      screen
+        .getByRole("dialog", { name: "Create API credential" })
+        .querySelector('button[type="submit"]')!,
+    );
+
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(
+      "unreadable-data",
+    );
+    expect(
+      screen.getByRole("alertdialog", {
+        name: "Replace unreadable integration data?",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("dialog", { name: "Credential created" }),
+    ).toBeNull();
+  });
+
+  it("requires confirmation before replacing unreadable integration data", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem("unrelated-preview-data", "keep-me");
+    render(<OrganizationIntegrations />);
+
+    expect(
+      screen.getByText(
+        "Saved credential and webhook data could not be loaded.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create credential",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Add webhook" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getAllByRole("button", {
+          name: "Revoke",
+        })[0] as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Manage Operations relay",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    await user.click(
+      screen.getByRole("button", { name: "Replace local data" }),
+    );
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Replace unreadable integration data?",
+    });
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(
+      "unreadable-data",
+    );
+    expect(
+      within(confirmation)
+        .getByRole("button", { name: "Keep data" })
+        .getAttribute("data-variant"),
+    ).toBe("secondary");
+    expect(
+      within(confirmation)
+        .getByRole("button", { name: "Replace local data" })
+        .getAttribute("data-variant"),
+    ).toBe("destructive");
+
+    await user.click(
+      within(confirmation).getByRole("button", {
+        name: "Replace local data",
+      }),
+    );
+    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(localStorage.getItem("unrelated-preview-data")).toBe("keep-me");
+    expect(
+      screen.queryByText(
+        "Saved credential and webhook data could not be loaded.",
+      ),
+    ).toBeNull();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Create credential",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
   it("keeps the one-time secret open until Done is selected", async () => {
     const user = userEvent.setup();
     render(<OrganizationIntegrations />);
