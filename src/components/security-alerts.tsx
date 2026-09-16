@@ -148,12 +148,12 @@ function DetailRow({
   mono?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-4 border-b border-border/35 py-2 last:border-0">
+    <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-3 border-b border-border/35 py-2 last:border-0 sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:gap-4">
       <dt className="text-xs text-text-muted">{label}</dt>
       <dd
         className={cn(
-          "text-sm text-foreground/90",
-          mono && "font-mono text-xs",
+          "min-w-0 text-sm text-foreground/90",
+          mono && "break-all font-mono text-xs",
         )}
       >
         {value}
