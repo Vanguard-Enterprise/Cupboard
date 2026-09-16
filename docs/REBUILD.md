@@ -78,7 +78,10 @@ limits, or connect to billing.
 The security alerts page at `/dashboard/organization/security/alerts` previews
 sample findings and stores acknowledgement state in the browser. It does not scan
 servers or change their configuration.
-The organization connections page at
+The organization audit log at
+`/dashboard/organization/security/audit-log` previews search, filtering, and event
+details with labeled sample data. It does not record user or server activity. The
+organization connections page at
 `/dashboard/organization/integrations/connections` previews connection health and
 setup requirements with sample data. It does not request credentials, connect an
 external account, or persist connection settings. The organization notifications

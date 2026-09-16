@@ -26,6 +26,12 @@ import {
 } from "@/components/ui/command";
 import { useOrganization } from "@/components/organization-provider";
 import { organizationSearchEntries } from "@/lib/organization-profile";
+import {
+  accessPath,
+  auditLogPath,
+  connectionsPath,
+  notificationsDataPath,
+} from "@/lib/dashboard-navigation";
 
 export function OrganizationSearchButton({ onOpen }: { onOpen: () => void }) {
   const { setOpenMobile } = useSidebar();
@@ -126,28 +132,26 @@ export function OrganizationSearch({
                   Security alerts
                 </CommandItem>
                 <CommandItem
+                  value="Organization security audit log events history access"
+                  onSelect={() => navigate(auditLogPath)}
+                >
+                  Audit log
+                </CommandItem>
+                <CommandItem
                   value="Organization security access approvals members roles invitations"
-                  onSelect={() =>
-                    navigate("/dashboard/organization/security/access")
-                  }
+                  onSelect={() => navigate(accessPath)}
                 >
                   Access &amp; approvals
                 </CommandItem>
                 <CommandItem
                   value="Organization integrations connections external services"
-                  onSelect={() =>
-                    navigate("/dashboard/organization/integrations/connections")
-                  }
+                  onSelect={() => navigate(connectionsPath)}
                 >
                   Connections
                 </CommandItem>
                 <CommandItem
                   value="Organization notifications data preferences browser storage"
-                  onSelect={() =>
-                    navigate(
-                      "/dashboard/organization/settings/notifications-data",
-                    )
-                  }
+                  onSelect={() => navigate(notificationsDataPath)}
                 >
                   Notifications &amp; data
                 </CommandItem>
