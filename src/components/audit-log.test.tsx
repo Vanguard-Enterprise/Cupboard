@@ -63,10 +63,13 @@ describe("Audit log", () => {
     ).toBeGreaterThan(0);
     expect(screen.queryByText("Updated organization profile")).toBeNull();
 
-    const eventRow = screen.getByRole("row", {
+    const rowAction = within(screen.getByRole("table")).getByRole("button", {
       name: "View event: Replaced RCON credential for Glacier Network 2",
     });
-    await user.click(eventRow);
+    const eventRow = rowAction.closest("tr");
+    expect(eventRow).toBeTruthy();
+    expect(eventRow?.hasAttribute("tabindex")).toBe(false);
+    await user.click(eventRow!);
 
     const dialog = screen.getByRole("dialog", {
       name: "Replaced RCON credential",
@@ -98,12 +101,23 @@ describe("Audit log", () => {
       screen.queryByRole("dialog", { name: "Replaced RCON credential" }),
     ).toBeNull();
 
-    eventRow.focus();
+    rowAction.focus();
     await user.keyboard("{Enter}");
     expect(
       screen.getByRole("dialog", { name: "Replaced RCON credential" }),
     ).toBeTruthy();
     await user.keyboard("{Escape}");
+  });
+
+  it("searches visible source values", async () => {
+    const user = userEvent.setup();
+    render(<AuditLog />);
+
+    await user.type(screen.getByLabelText("Search events"), "Approved action");
+
+    expect(screen.getByText("1 result")).toBeTruthy();
+    expect(screen.getAllByText("Restarted server").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Updated organization profile")).toBeNull();
   });
 
   it("shows an empty state and clears all filters", async () => {

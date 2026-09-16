@@ -296,7 +296,14 @@ export function AuditLog() {
     return events.filter((event) => {
       const matchesQuery =
         !normalizedQuery ||
-        [event.actor, event.actorDetail, event.action, event.target, event.id]
+        [
+          event.actor,
+          event.actorDetail,
+          event.action,
+          event.target,
+          event.source,
+          event.id,
+        ]
           .join(" ")
           .toLowerCase()
           .includes(normalizedQuery);
@@ -429,20 +436,8 @@ export function AuditLog() {
                 {filteredEvents.map((event) => (
                   <TableRow
                     key={event.id}
-                    tabIndex={0}
-                    aria-label={`View event: ${event.action} for ${event.target}`}
-                    aria-haspopup="dialog"
                     onClick={() => setSelectedEvent(event)}
-                    onKeyDown={(keyboardEvent) => {
-                      if (
-                        keyboardEvent.key === "Enter" ||
-                        keyboardEvent.key === " "
-                      ) {
-                        keyboardEvent.preventDefault();
-                        setSelectedEvent(event);
-                      }
-                    }}
-                    className="cursor-pointer hover:bg-surface-elevated/80 focus-visible:bg-surface-elevated/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    className="cursor-pointer hover:bg-surface-elevated/80 focus-within:bg-surface-elevated/80"
                   >
                     <TableCell className="px-4 py-[11px] align-middle">
                       <time dateTime={event.timestamp}>
@@ -481,10 +476,21 @@ export function AuditLog() {
                     <TableCell className="py-[11px] pr-4 align-middle">
                       <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                         <span className="truncate">{event.source}</span>
-                        <ChevronRightIcon
-                          className="size-4 shrink-0 text-text-muted/60"
-                          aria-hidden="true"
-                        />
+                        <button
+                          type="button"
+                          aria-label={`View event: ${event.action} for ${event.target}`}
+                          aria-haspopup="dialog"
+                          onClick={(clickEvent) => {
+                            clickEvent.stopPropagation();
+                            setSelectedEvent(event);
+                          }}
+                          className="-m-1 shrink-0 rounded p-1 text-text-muted/60 outline-none transition-colors hover:text-text-muted focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronRightIcon
+                            className="size-4"
+                            aria-hidden="true"
+                          />
+                        </button>
                       </span>
                     </TableCell>
                   </TableRow>
