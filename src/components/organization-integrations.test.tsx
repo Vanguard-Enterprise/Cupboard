@@ -74,6 +74,80 @@ describe("Organization credentials and webhooks", () => {
     ).toBe("secondary");
   });
 
+  it("preserves concurrent integration changes when creating a credential", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Create credential" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Credential name" }),
+      "Deploy agent",
+    );
+
+    const concurrent = structuredClone(defaultOrganizationIntegrations);
+    concurrent.credentials.unshift({
+      id: "concurrent-credential",
+      name: "Created elsewhere",
+      prefix: "cb_live_OTHER...1234",
+      createdAt: "Sep 16, 2026",
+      lastUsed: null,
+    });
+    concurrent.webhooks[0].name = "Updated elsewhere";
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(concurrent),
+    );
+
+    await user.click(
+      screen
+        .getByRole("dialog", { name: "Create API credential" })
+        .querySelector('button[type="submit"]')!,
+    );
+
+    const stored = JSON.parse(
+      localStorage.getItem(organizationIntegrationsKey)!,
+    );
+    expect(
+      stored.credentials.map((item: { name: string }) => item.name),
+    ).toEqual(expect.arrayContaining(["Deploy agent", "Created elsewhere"]));
+    expect(stored.webhooks[0].name).toBe("Updated elsewhere");
+  });
+
+  it("keeps the one-time secret open until Done is selected", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(screen.getByRole("button", { name: "Create credential" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Credential name" }),
+      "Deploy agent",
+    );
+    await user.click(
+      screen
+        .getByRole("dialog", { name: "Create API credential" })
+        .querySelector('button[type="submit"]')!,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Credential created" });
+    const secret = screen.getByTestId("created-credential").textContent;
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Credential created" })).toBe(
+      dialog,
+    );
+    expect(screen.getByTestId("created-credential").textContent).toBe(secret);
+
+    fireEvent.pointerDown(
+      document.querySelector('[data-slot="dialog-overlay"]')!,
+    );
+    fireEvent.click(document.querySelector('[data-slot="dialog-overlay"]')!);
+    expect(screen.getByTestId("created-credential").textContent).toBe(secret);
+
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Credential created" }),
+    ).toBeNull();
+  });
+
   it("offers a neutral retry state when credential copy fails", async () => {
     const user = userEvent.setup();
     const writeText = vi

@@ -365,9 +365,13 @@ export function OrganizationIntegrations() {
       createdAt: today(),
       lastUsed: null,
     };
+    const latestData = readOrganizationIntegrations(integrationsSnapshot());
     if (
       persist(
-        { ...data, credentials: [credential, ...data.credentials] },
+        {
+          ...latestData,
+          credentials: [credential, ...latestData.credentials],
+        },
         `${name} created.`,
       )
     ) {
@@ -474,11 +478,12 @@ export function OrganizationIntegrations() {
   function revokeCredential() {
     if (!credentialToRevoke) return;
     const name = credentialToRevoke.name;
+    const latestData = readOrganizationIntegrations(integrationsSnapshot());
     if (
       persist(
         {
-          ...data,
-          credentials: data.credentials.filter(
+          ...latestData,
+          credentials: latestData.credentials.filter(
             (item) => item.id !== credentialToRevoke.id,
           ),
         },
@@ -492,11 +497,12 @@ export function OrganizationIntegrations() {
   function deleteWebhook() {
     if (!webhookToDelete) return;
     const name = webhookToDelete.name;
+    const latestData = readOrganizationIntegrations(integrationsSnapshot());
     if (
       persist(
         {
-          ...data,
-          webhooks: data.webhooks.filter(
+          ...latestData,
+          webhooks: latestData.webhooks.filter(
             (item) => item.id !== webhookToDelete.id,
           ),
         },
@@ -674,12 +680,7 @@ export function OrganizationIntegrations() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={Boolean(createdSecret)}
-        onOpenChange={(open) => {
-          if (!open) setCreatedSecret(null);
-        }}
-      >
+      <Dialog open={Boolean(createdSecret)} onOpenChange={() => undefined}>
         <DialogContent className="sm:max-w-lg" showCloseButton={false}>
           <DialogHeader>
             <DialogTitle>Credential created</DialogTitle>
