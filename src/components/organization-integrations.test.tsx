@@ -188,6 +188,16 @@ describe("Organization credentials and webhooks", () => {
 
     await user.click(screen.getByRole("button", { name: "Add webhook" }));
     const dialog = screen.getByRole("dialog", { name: "Add webhook" });
+    expect(
+      within(dialog).getByText(
+        "Save a sample endpoint and selected events in this browser. This preview does not send webhooks.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).queryByText(
+        "Cupboard will send the selected events to this endpoint.",
+      ),
+    ).toBeNull();
     const addButton = within(dialog).getByRole("button", {
       name: "Add webhook",
     }) as HTMLButtonElement;

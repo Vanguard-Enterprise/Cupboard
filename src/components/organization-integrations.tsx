@@ -746,7 +746,7 @@ export function OrganizationIntegrations() {
             <DialogDescription>
               {editingWebhookId
                 ? "Update the endpoint and subscribed events."
-                : "Cupboard will send the selected events to this endpoint."}
+                : "Save a sample endpoint and selected events in this browser. This preview does not send webhooks."}
             </DialogDescription>
           </DialogHeader>
           {webhookEditIssue && (

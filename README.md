@@ -54,6 +54,9 @@ metering is connected. Credentials and webhooks are available at
 `/dashboard/organization/integrations/credentials` as a browser-local preview.
 Credential secrets appear only once and are never stored; webhook endpoints and
 credential metadata use sample data or local browser storage. Organization
+audit log at
+`/dashboard/organization/security/audit-log` has searchable sample events and
+redacted event details until server-side audit storage exists. Organization
 connections are previewed at
 `/dashboard/organization/integrations/connections`; the page uses sample states
 and does not connect external accounts. Organization notification and

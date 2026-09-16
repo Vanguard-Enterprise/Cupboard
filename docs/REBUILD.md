@@ -81,7 +81,10 @@ preview. It stores credential metadata and webhook configuration under a local
 organization key. Generated credential secrets appear once and are never written
 to browser storage. Shared persistence must add server-side membership checks,
 secret hashing, and encrypted webhook signing secrets before production use.
-The organization connections page at
+The organization audit log at
+`/dashboard/organization/security/audit-log` previews search, filtering, and event
+details with labeled sample data. It does not record user or server activity. The
+organization connections page at
 `/dashboard/organization/integrations/connections` previews connection health and
 setup requirements with sample data. It does not request credentials, connect an
 external account, or persist connection settings. The organization notifications

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import {
   accessPath,
+  auditLogPath,
   connectionsPath,
   credentialsPath,
   notificationsDataPath,
@@ -61,21 +62,26 @@ export function Workspace({
                   "Credentials & webhooks",
                 ],
               }
-            : pathname === accessPath
+            : pathname === auditLogPath
               ? {
-                  activeSection: "access",
-                  crumbs: ["Organization", "Security", "Access & approvals"],
+                  activeSection: "audit-log",
+                  crumbs: ["Organization", "Security", "Audit log"],
                 }
-              : pathname === notificationsDataPath
+              : pathname === accessPath
                 ? {
-                    activeSection: "preferences",
-                    crumbs: [
-                      "Organization",
-                      "Settings",
-                      "Notifications & data",
-                    ],
+                    activeSection: "access",
+                    crumbs: ["Organization", "Security", "Access & approvals"],
                   }
-                : undefined;
+                : pathname === notificationsDataPath
+                  ? {
+                      activeSection: "preferences",
+                      crumbs: [
+                        "Organization",
+                        "Settings",
+                        "Notifications & data",
+                      ],
+                    }
+                  : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
