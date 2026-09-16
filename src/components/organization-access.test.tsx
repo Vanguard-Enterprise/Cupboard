@@ -302,4 +302,32 @@ describe("Organization access", () => {
       ).disabled,
     ).toBe(false);
   });
+
+  it("replaces malformed stored settings with valid defaults", async () => {
+    localStorage.setItem(organizationAccessKey, "not-json");
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Member access" });
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "could not be loaded",
+    );
+    const cancel = screen.getByRole("button", {
+      name: "Cancel",
+    }) as HTMLButtonElement;
+    const save = screen.getByRole("button", {
+      name: "Save changes",
+    }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
+    expect(save.disabled).toBe(false);
+
+    await user.click(save);
+
+    expect(
+      parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!),
+    ).toEqual(defaultOrganizationAccess);
+    expect(toast.success).toHaveBeenCalledWith("Changes saved");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(save.disabled).toBe(true);
+  });
 });

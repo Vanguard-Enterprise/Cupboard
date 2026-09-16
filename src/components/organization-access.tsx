@@ -35,6 +35,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   defaultOrganizationAccess,
   createInvitationMember,
+  organizationAccessChangedEvent,
   organizationAccessKey,
   parseOrganizationAccess,
   roleLabels,
@@ -56,10 +57,10 @@ function subscribe(callback: () => void) {
     if (!event.key || event.key === organizationAccessKey) callback();
   };
   window.addEventListener("storage", onStorage);
-  window.addEventListener("cupboard-access-saved", callback);
+  window.addEventListener(organizationAccessChangedEvent, callback);
   return () => {
     window.removeEventListener("storage", onStorage);
-    window.removeEventListener("cupboard-access-saved", callback);
+    window.removeEventListener(organizationAccessChangedEvent, callback);
   };
 }
 
@@ -77,10 +78,12 @@ function AccessEditor({
   saved,
   sourceVersion,
   initialStorageError,
+  needsReplacement,
 }: {
   saved: OrganizationAccessSettings;
   sourceVersion: string;
   initialStorageError: string;
+  needsReplacement: boolean;
 }) {
   const [draft, setDraft] = useState<OrganizationAccessSettings>(saved);
   const [baseline, setBaseline] = useState(saved);
@@ -174,7 +177,7 @@ function AccessEditor({
   function saveChanges() {
     try {
       window.localStorage.setItem(organizationAccessKey, JSON.stringify(draft));
-      window.dispatchEvent(new Event("cupboard-access-saved"));
+      window.dispatchEvent(new Event(organizationAccessChangedEvent));
       setStorageError("");
       toast.success("Changes saved");
     } catch {
@@ -187,7 +190,7 @@ function AccessEditor({
       className="space-y-5"
       onSubmit={(event) => {
         event.preventDefault();
-        if (dirty && !conflict) saveChanges();
+        if ((dirty || needsReplacement) && !conflict) saveChanges();
       }}
     >
       {storageError && (
@@ -389,7 +392,7 @@ function AccessEditor({
           <Button
             type="submit"
             className="h-9 px-4"
-            disabled={!dirty || conflict}
+            disabled={(!dirty && !needsReplacement) || conflict}
           >
             Save changes
           </Button>
@@ -485,6 +488,7 @@ export function OrganizationAccess() {
   const loaded = useMemo(() => {
     let saved = defaultOrganizationAccess;
     let storageError = "";
+    let needsReplacement = false;
     if (raw === "storage-unavailable") {
       storageError = "Access settings cannot use browser storage.";
     } else if (raw) {
@@ -493,9 +497,10 @@ export function OrganizationAccess() {
       } catch {
         storageError =
           "Saved access settings could not be loaded. Saving will replace the local copy.";
+        needsReplacement = true;
       }
     }
-    return { saved, storageError };
+    return { saved, storageError, needsReplacement };
   }, [raw]);
   if (raw === null)
     return (
@@ -509,6 +514,7 @@ export function OrganizationAccess() {
       saved={loaded.saved}
       sourceVersion={raw}
       initialStorageError={loaded.storageError}
+      needsReplacement={loaded.needsReplacement}
     />
   );
 }
