@@ -50,12 +50,15 @@ work does not need to rerun setup. The `/dashboard/` page uses the shadcn
 server data is connected. Organization profile settings live at
 `/dashboard/organization/settings/profile`. Organization usage is available at
 `/dashboard/organization/settings/usage` with clearly labeled sample data until
-metering is connected. Organization connections are previewed at
+metering is connected. The organization audit log at
+`/dashboard/organization/security/audit-log` has searchable sample events and
+redacted event details until server-side audit storage exists. Organization
+connections are previewed at
 `/dashboard/organization/integrations/connections`; the page uses sample states
 and does not connect external accounts. Organization notification and
-browser-data settings live
-at `/dashboard/organization/settings/notifications-data`; unfinished sidebar
-items have no destination.
+browser-data settings live at
+`/dashboard/organization/settings/notifications-data`. Unfinished sidebar items
+have no destination.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
 organization details, and public contacts. Private contacts are excluded.
 
