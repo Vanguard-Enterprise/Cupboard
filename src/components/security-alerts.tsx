@@ -472,7 +472,7 @@ export function SecurityAlerts() {
               >
                 <SelectTrigger
                   ref={statusFilterRef}
-                  className="h-11 w-full sm:w-36 xl:h-9"
+                  className="w-full data-[size=default]:h-11 sm:w-36 xl:data-[size=default]:h-9"
                   aria-label="Filter by status"
                 >
                   <SelectValue />
@@ -497,7 +497,7 @@ export function SecurityAlerts() {
                 onValueChange={(value) => setSeverity(value as SeverityFilter)}
               >
                 <SelectTrigger
-                  className="h-11 w-full sm:w-36 xl:h-9"
+                  className="w-full data-[size=default]:h-11 sm:w-36 xl:data-[size=default]:h-9"
                   aria-label="Filter by severity"
                 >
                   <SelectValue />
