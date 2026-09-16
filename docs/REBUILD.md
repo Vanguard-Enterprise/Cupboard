@@ -78,6 +78,10 @@ limits, or connect to billing.
 The security alerts page at `/dashboard/organization/security/alerts` previews
 sample findings and stores acknowledgement state in the browser. It does not scan
 servers or change their configuration.
+The organization notifications and data page at
+`/dashboard/organization/settings/notifications-data` stores notification choices
+in the current browser and can clear Cupboard's organization preview data there.
+It does not send notifications or delete shared server data.
 
 ## Acceptance bar for the first slice
 

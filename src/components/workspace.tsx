@@ -20,6 +20,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  notificationsDataPath,
   profilePath,
   securityAlertsPath,
   usagePath,
@@ -35,8 +36,9 @@ export function Workspace({
   const pathname = usePathname();
   const isProfile = pathname === profilePath;
   const isUsage = pathname === usagePath;
+  const isNotificationsData = pathname === notificationsDataPath;
   const isSecurityAlerts = pathname === securityAlertsPath;
-  const isOrganizationSettings = isProfile || isUsage;
+  const isOrganizationSettings = isProfile || isUsage || isNotificationsData;
   const isOrganizationPage = isOrganizationSettings || isSecurityAlerts;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
@@ -48,9 +50,11 @@ export function Workspace({
               ? "organization"
               : isUsage
                 ? "billing"
-                : isSecurityAlerts
-                  ? "security-alerts"
-                  : undefined
+                : isNotificationsData
+                  ? "preferences"
+                  : isSecurityAlerts
+                    ? "security-alerts"
+                    : undefined
           }
           onSearch={() => setSearchOpen(true)}
         />
@@ -81,7 +85,13 @@ export function Workspace({
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
                       <BreadcrumbPage>
-                        {isProfile ? "Profile" : isUsage ? "Usage" : "Alerts"}
+                        {isSecurityAlerts
+                          ? "Alerts"
+                          : isProfile
+                            ? "Profile"
+                            : isUsage
+                              ? "Usage"
+                              : "Notifications & data"}
                       </BreadcrumbPage>
                     </BreadcrumbItem>
                   </>
