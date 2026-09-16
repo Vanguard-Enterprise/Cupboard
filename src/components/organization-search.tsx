@@ -125,6 +125,16 @@ export function OrganizationSearch({
                 >
                   Credentials &amp; webhooks
                 </CommandItem>
+                <CommandItem
+                  value="Organization notifications data preferences browser storage"
+                  onSelect={() =>
+                    navigate(
+                      "/dashboard/organization/settings/notifications-data",
+                    )
+                  }
+                >
+                  Notifications &amp; data
+                </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (

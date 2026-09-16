@@ -288,7 +288,7 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.queryByText("Operations relay added.")).toBeNull();
   });
 
-  it("surfaces and retries a failed webhook delivery", async () => {
+  it("does not report a simulated webhook retry as delivered", async () => {
     const user = userEvent.setup();
     const data = structuredClone(defaultOrganizationIntegrations);
     data.webhooks[0].lastDelivery = {
@@ -307,10 +307,19 @@ describe("Organization credentials and webhooks", () => {
     await user.click(
       within(details).getByRole("button", { name: "Retry delivery" }),
     );
-    expect(within(details).getByText("Just now")).toBeTruthy();
-    expect(within(details).getByText("HTTP 204")).toBeTruthy();
     expect(
-      within(details).queryByRole("button", { name: "Retry delivery" }),
-    ).toBeNull();
+      within(details).getByText(
+        "Retry delivery isn't available in this sample-data preview.",
+      ),
+    ).toBeTruthy();
+    expect(within(details).getByText("4 minutes ago")).toBeTruthy();
+    expect(within(details).getByText("HTTP 503")).toBeTruthy();
+    expect(
+      within(details).getByRole("button", { name: "Retry delivery" }),
+    ).toBeTruthy();
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
+        .lastDelivery,
+    ).toEqual({ status: 503, deliveredAt: "4 minutes ago" });
   });
 });

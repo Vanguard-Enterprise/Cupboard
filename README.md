@@ -53,7 +53,9 @@ server data is connected. Organization profile settings live at
 metering is connected. Credentials and webhooks are available at
 `/dashboard/organization/integrations/credentials` as a browser-local preview.
 Credential secrets appear only once and are never stored; webhook endpoints and
-credential metadata use sample data or local browser storage. Unfinished sidebar
+credential metadata use sample data or local browser storage. Organization
+notification and browser-data settings live at
+`/dashboard/organization/settings/notifications-data`; unfinished sidebar
 items have no destination.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
 organization details, and public contacts. Private contacts are excluded.
@@ -71,6 +73,9 @@ Profile settings are a browser-local prototype stored under
 browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not
 use real confidential details until authentication and shared storage exist.
+Notification choices are also browser-local and do not send messages yet. The
+Notifications & data page can clear both sets of organization preview data from
+the current browser without clearing unrelated local storage.
 
 The sidebar remembers its expanded state in the `sidebar_state` cookie for
 seven days, including across refreshes and visits to the login page.

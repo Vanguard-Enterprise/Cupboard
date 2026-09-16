@@ -278,6 +278,7 @@ export function OrganizationIntegrations() {
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(
     null,
   );
+  const [retryUnavailable, setRetryUnavailable] = useState(false);
   const [webhookName, setWebhookName] = useState("");
   const [webhookUrl, setWebhookUrl] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<WebhookEvent[]>([]);
@@ -456,22 +457,6 @@ export function OrganizationIntegrations() {
     }
   }
 
-  function retryWebhook(webhook: WebhookEndpoint) {
-    const next = {
-      ...webhook,
-      lastDelivery: { status: 204, deliveredAt: "Just now" },
-    };
-    persist(
-      {
-        ...data,
-        webhooks: data.webhooks.map((item) =>
-          item.id === webhook.id ? next : item,
-        ),
-      },
-      `${webhook.name} delivery retried.`,
-    );
-  }
-
   function deleteWebhook() {
     if (!webhookToDelete) return;
     const name = webhookToDelete.name;
@@ -575,7 +560,10 @@ export function OrganizationIntegrations() {
               <WebhookRow
                 key={webhook.id}
                 webhook={webhook}
-                onOpen={(item) => setSelectedWebhookId(item.id)}
+                onOpen={(item) => {
+                  setRetryUnavailable(false);
+                  setSelectedWebhookId(item.id);
+                }}
                 onEdit={editWebhook}
                 onDelete={setWebhookToDelete}
               />
@@ -859,7 +847,10 @@ export function OrganizationIntegrations() {
       <Sheet
         open={Boolean(selectedWebhook)}
         onOpenChange={(open) => {
-          if (!open) setSelectedWebhookId(null);
+          if (!open) {
+            setSelectedWebhookId(null);
+            setRetryUnavailable(false);
+          }
         }}
       >
         <SheetContent className="w-full gap-0 sm:max-w-[452px]">
@@ -978,6 +969,12 @@ export function OrganizationIntegrations() {
                       </p>
                     )}
                   </div>
+                  {retryUnavailable && (
+                    <p role="status" className="mt-3 text-xs text-destructive">
+                      Retry delivery isn&apos;t available in this sample-data
+                      preview.
+                    </p>
+                  )}
                 </section>
               </div>
 
@@ -987,7 +984,7 @@ export function OrganizationIntegrations() {
                     <Button
                       variant="outline"
                       className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-                      onClick={() => retryWebhook(selectedWebhook)}
+                      onClick={() => setRetryUnavailable(true)}
                     >
                       <RefreshCwIcon aria-hidden="true" />
                       Retry delivery
