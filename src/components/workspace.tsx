@@ -19,7 +19,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { profilePath } from "@/lib/dashboard-navigation";
+import { profilePath, usagePath } from "@/lib/dashboard-navigation";
 
 export function Workspace({
   children,
@@ -30,12 +30,16 @@ export function Workspace({
 }) {
   const pathname = usePathname();
   const isProfile = pathname === profilePath;
+  const isUsage = pathname === usagePath;
+  const isOrganizationSettings = isProfile || isUsage;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
-          activeSection={isProfile ? "organization" : undefined}
+          activeSection={
+            isProfile ? "organization" : isUsage ? "billing" : undefined
+          }
           onSearch={() => setSearchOpen(true)}
         />
         <SidebarInset>
@@ -44,7 +48,7 @@ export function Workspace({
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  {isProfile ? (
+                  {isOrganizationSettings ? (
                     <BreadcrumbLink asChild>
                       <Link href="/dashboard">Dashboard</Link>
                     </BreadcrumbLink>
@@ -52,7 +56,7 @@ export function Workspace({
                     <BreadcrumbPage>Dashboard</BreadcrumbPage>
                   )}
                 </BreadcrumbItem>
-                {isProfile && (
+                {isOrganizationSettings && (
                   <>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
@@ -64,7 +68,9 @@ export function Workspace({
                     </BreadcrumbItem>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
-                      <BreadcrumbPage>Profile</BreadcrumbPage>
+                      <BreadcrumbPage>
+                        {isProfile ? "Profile" : "Usage"}
+                      </BreadcrumbPage>
                     </BreadcrumbItem>
                   </>
                 )}
