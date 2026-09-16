@@ -30,10 +30,21 @@ describe("Audit log", () => {
     const user = userEvent.setup();
     render(<AuditLog />);
 
+    const search = screen.getByLabelText("Search events");
+    expect(
+      document.querySelector('label[for="audit-search"]')?.className,
+    ).not.toContain("sr-only");
+    expect(search.className).toContain("h-11");
+    expect(search.className).toContain("lg:h-9");
+    for (const select of ["Event type", "Outcome"]) {
+      const trigger = screen.getByRole("combobox", { name: select });
+      expect(trigger.className).toContain("data-[size=default]:h-11");
+      expect(trigger.className).toContain("lg:data-[size=default]:h-9");
+    }
     expect(screen.queryByText(/results?$/)).toBeNull();
     expect(screen.getByRole("columnheader", { name: "Source" })).toBeTruthy();
 
-    await user.type(screen.getByLabelText("Search events"), "credential");
+    await user.type(search, "credential");
 
     expect(screen.getByText("1 result")).toBeTruthy();
     expect(

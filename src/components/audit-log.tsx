@@ -325,7 +325,10 @@ export function AuditLog() {
       <div className="border-b border-border px-3 py-3">
         <div className="flex flex-col gap-4 md:flex-row md:items-center">
           <div className="relative min-w-0 flex-1">
-            <label htmlFor="audit-search" className="sr-only">
+            <label
+              htmlFor="audit-search"
+              className="pointer-events-none absolute top-1/2 left-9 z-10 -translate-y-1/2 text-xs font-medium text-text-muted"
+            >
               Search events
             </label>
             <SearchIcon
@@ -336,8 +339,7 @@ export function AuditLog() {
               id="audit-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search events"
-              className="h-9 pl-9"
+              className="h-11 pr-3 pl-[7.5rem] lg:h-9"
             />
           </div>
           <Select
@@ -346,7 +348,7 @@ export function AuditLog() {
           >
             <SelectTrigger
               aria-label="Event type"
-              className="w-full bg-input-background px-3 data-[size=default]:h-9 md:w-44"
+              className="w-full bg-input-background px-3 data-[size=default]:h-11 md:w-44 lg:data-[size=default]:h-9"
             >
               <SelectValue />
             </SelectTrigger>
@@ -368,7 +370,7 @@ export function AuditLog() {
           >
             <SelectTrigger
               aria-label="Outcome"
-              className="w-full bg-input-background px-3 data-[size=default]:h-9 md:w-40"
+              className="w-full bg-input-background px-3 data-[size=default]:h-11 md:w-40 lg:data-[size=default]:h-9"
             >
               <SelectValue />
             </SelectTrigger>
