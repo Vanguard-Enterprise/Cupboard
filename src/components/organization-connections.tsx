@@ -161,11 +161,11 @@ export function OrganizationConnections() {
   const catalogRef = useRef<HTMLElement>(null);
   const dialogTitleRef = useRef<HTMLHeadingElement>(null);
   const filteredCatalog = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) return catalogServices;
     return catalogServices.filter((service) =>
       `${service.name} ${service.category} ${service.description}`
-        .toLocaleLowerCase()
+        .toLowerCase()
         .includes(normalizedQuery),
     );
   }, [query]);
@@ -227,6 +227,7 @@ export function OrganizationConnections() {
               <button
                 type="button"
                 aria-label={`${service.status === "connected" ? "Manage" : "Resolve"} ${service.name}`}
+                aria-describedby={`${service.id}-connection-details ${service.id}-last-checked`}
                 onClick={() => setSelected({ kind: "connected", service })}
                 className={`group grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 border-l-2 px-3 py-2.5 text-left outline-none transition-colors focus-visible:bg-surface-elevated focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_7.5rem_5.75rem] ${
                   service.status === "attention"
@@ -235,7 +236,10 @@ export function OrganizationConnections() {
                 }`}
               >
                 <ServiceIcon icon={service.icon} />
-                <div className="min-w-0">
+                <div
+                  id={`${service.id}-connection-details`}
+                  className="min-w-0"
+                >
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-foreground">
                       {service.name}
@@ -255,7 +259,10 @@ export function OrganizationConnections() {
                     {service.statusDetail}
                   </p>
                 </div>
-                <span className="col-start-2 whitespace-nowrap text-xs text-text-muted sm:col-start-auto sm:text-right">
+                <span
+                  id={`${service.id}-last-checked`}
+                  className="col-start-2 whitespace-nowrap text-xs text-text-muted sm:col-start-auto sm:text-right"
+                >
                   Checked {service.lastChecked}
                 </span>
                 <span
@@ -285,7 +292,10 @@ export function OrganizationConnections() {
             Available connections
           </h2>
           <div className="w-full sm:w-64">
-            <label htmlFor="connection-search" className="sr-only">
+            <label
+              htmlFor="connection-search"
+              className="mb-1.5 block text-xs text-text-muted"
+            >
               Search available connections
             </label>
             <InputGroup className="h-10 bg-input-background [@media(any-pointer:coarse)]:h-11">

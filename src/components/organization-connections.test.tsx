@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { OrganizationConnections } from "./organization-connections";
 import { TooltipProvider } from "./ui/tooltip";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function mount() {
   return render(
@@ -62,6 +65,9 @@ describe("Organization connections", () => {
     const search = screen.getByRole("searchbox", {
       name: "Search available connections",
     });
+    const searchLabel = screen.getByText("Search available connections");
+    expect(searchLabel.getAttribute("for")).toBe("connection-search");
+    expect(searchLabel.className).not.toContain("sr-only");
     expect(document.activeElement).toBe(search);
     await user.type(search, "network");
 
@@ -78,6 +84,26 @@ describe("Organization connections", () => {
     );
     await user.click(clearSearch);
     expect(screen.getByText("Pterodactyl")).toBeTruthy();
+  });
+
+  it("filters connections independently of the browser locale", async () => {
+    const localeLowerCase = String.prototype.toLocaleLowerCase;
+    vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(
+      function (this: string) {
+        return localeLowerCase.call(this, "tr-TR");
+      },
+    );
+    const user = userEvent.setup();
+    mount();
+
+    await user.type(
+      screen.getByRole("searchbox", {
+        name: "Search available connections",
+      }),
+      "BATTLEMETRICS",
+    );
+
+    expect(screen.getByText("BattleMetrics")).toBeTruthy();
   });
 
   it("opens concise setup and connected-service details", async () => {
@@ -103,9 +129,19 @@ describe("Organization connections", () => {
     expect(close.getAttribute("data-variant")).toBe("secondary");
     await user.click(close);
 
-    expect(screen.getByRole("button", { name: "Manage Discord" })).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Resolve Pelican Panel" }),
+      screen.getByRole("button", {
+        name: "Manage Discord",
+        description:
+          /Connected.*Community roles and moderation events.*Northstar Rust.*Sync healthy.*Checked 2 minutes ago/i,
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Resolve Pelican Panel",
+        description:
+          /Needs attention.*Server status and power controls.*Operations panel.*API key rejected.*Checked 18 minutes ago/i,
+      }),
     ).toBeTruthy();
 
     await user.click(screen.getByText("Community roles and moderation events"));
