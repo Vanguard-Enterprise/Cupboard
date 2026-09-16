@@ -81,6 +81,9 @@ preview. It stores credential metadata and webhook configuration under a local
 organization key. Generated credential secrets appear once and are never written
 to browser storage. Shared persistence must add server-side membership checks,
 secret hashing, and encrypted webhook signing secrets before production use.
+The security alerts page at `/dashboard/organization/security/alerts` previews
+sample findings and stores acknowledgement state in the browser. It does not scan
+servers or change their configuration.
 The organization audit log at
 `/dashboard/organization/security/audit-log` previews search, filtering, and event
 details with labeled sample data. It does not record user or server activity. The

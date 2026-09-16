@@ -132,6 +132,14 @@ export function OrganizationSearch({
                   Credentials &amp; webhooks
                 </CommandItem>
                 <CommandItem
+                  value="Security alerts findings risk incidents servers"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/security/alerts")
+                  }
+                >
+                  Security alerts
+                </CommandItem>
+                <CommandItem
                   value="Organization security audit log events history access"
                   onSelect={() => navigate(auditLogPath)}
                 >

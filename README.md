@@ -53,8 +53,10 @@ server data is connected. Organization profile settings live at
 metering is connected. Credentials and webhooks are available at
 `/dashboard/organization/integrations/credentials` as a browser-local preview.
 Credential secrets appear only once and are never stored; webhook endpoints and
-credential metadata use sample data or local browser storage. Organization
-audit log at
+credential metadata use sample data or local browser storage. Security alerts
+are available at
+`/dashboard/organization/security/alerts` with sample findings and browser-local
+acknowledgements. The organization audit log at
 `/dashboard/organization/security/audit-log` has searchable sample events and
 redacted event details until server-side audit storage exists. Organization
 connections are previewed at
@@ -82,6 +84,10 @@ use real confidential details until authentication and shared storage exist.
 Notification choices are also browser-local and do not send messages yet. The
 Notifications & data page can clear all organization preview data from
 the current browser without clearing unrelated local storage.
+
+Security alert acknowledgements use
+`cupboard:organization:local-preview:security-alerts:v1`. They update only the
+sample alerts in the current browser and do not change a live server.
 
 The access and approvals page at
 `/dashboard/organization/security/access` previews member roles, invitations,
