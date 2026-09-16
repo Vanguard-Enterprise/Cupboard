@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecurityAlerts } from "./security-alerts";
@@ -141,6 +141,73 @@ describe("Security alerts", () => {
     });
     expect(document.activeElement).toBe(nextAlert);
     expect(screen.getByText("SEC-2038")).toBeTruthy();
+  });
+
+  it("restores row focus after a cross-tab acknowledgement removes the focused alert", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Open" }));
+
+    const focusedAlert = screen.getByRole("button", {
+      name: /RCON endpoint accepts public connections/i,
+    });
+    focusedAlert.focus();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017", "SEC-2041"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: /Console password has not been rotated/i,
+      }),
+    );
+    expect(screen.getByText("SEC-2038")).toBeTruthy();
+  });
+
+  it("restores filter focus when a cross-tab acknowledgement empties the queue", async () => {
+    const user = userEvent.setup();
+    render(<SecurityAlerts />);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Open" }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by severity" }),
+    );
+    await user.click(screen.getByRole("option", { name: "Critical" }));
+
+    screen
+      .getByRole("button", {
+        name: /RCON endpoint accepts public connections/i,
+      })
+      .focus();
+
+    act(() => {
+      localStorage.setItem(
+        securityAlertStorageKey,
+        JSON.stringify(["SEC-2017", "SEC-2041"]),
+      );
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: securityAlertStorageKey }),
+      );
+    });
+
+    expect(screen.getByText("No matching alerts")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole("combobox", { name: "Filter by status" }),
+    );
   });
 
   it("keeps a failed-save warning visible during alert navigation", async () => {

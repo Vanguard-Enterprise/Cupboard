@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,6 +45,10 @@ import {
 
 type StatusFilter = "all" | "open" | "acknowledged";
 type SeverityFilter = "all" | AlertSeverity;
+type PendingFocusTarget = {
+  id: string;
+  previousIndex?: number;
+};
 
 const severityStyles: Record<AlertSeverity, string> = {
   critical: "border-destructive/25 bg-destructive/[0.07] text-destructive",
@@ -252,7 +257,8 @@ export function SecurityAlerts() {
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(securityAlerts[0].id);
-  const pendingFocusTarget = useRef<string | null>(null);
+  const pendingFocusTarget = useRef<PendingFocusTarget | null>(null);
+  const focusedAlert = useRef<PendingFocusTarget | null>(null);
   const alertRowRefs = useRef(new Map<string, HTMLButtonElement>());
   const statusFilterRef = useRef<HTMLButtonElement>(null);
   const [sessionAcknowledgedIds, setSessionAcknowledgedIds] =
@@ -329,13 +335,61 @@ export function SecurityAlerts() {
   const affectedServers = new Set(openAlerts.map((alert) => alert.server)).size;
 
   useEffect(() => {
-    if (!pendingFocusTarget.current) return;
-    const target =
-      pendingFocusTarget.current === "status-filter"
-        ? statusFilterRef.current
-        : alertRowRefs.current.get(pendingFocusTarget.current);
-    target?.focus();
-    pendingFocusTarget.current = null;
+    const clearFocusedAlert = (event: FocusEvent | PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-alert-id]")) {
+        focusedAlert.current = null;
+      }
+    };
+    document.addEventListener("focusin", clearFocusedAlert);
+    document.addEventListener("pointerdown", clearFocusedAlert);
+    return () => {
+      document.removeEventListener("focusin", clearFocusedAlert);
+      document.removeEventListener("pointerdown", clearFocusedAlert);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const pendingTarget = pendingFocusTarget.current;
+    if (pendingTarget) {
+      let target =
+        pendingTarget.id === "status-filter"
+          ? statusFilterRef.current
+          : alertRowRefs.current.get(pendingTarget.id);
+
+      if (!target && pendingTarget.previousIndex !== undefined) {
+        const replacement =
+          visibleAlerts[pendingTarget.previousIndex] ??
+          visibleAlerts[pendingTarget.previousIndex - 1];
+        if (replacement) {
+          setSelectedId(replacement.id);
+          target = alertRowRefs.current.get(replacement.id);
+        } else {
+          target = statusFilterRef.current;
+        }
+      }
+
+      pendingFocusTarget.current = null;
+      target?.focus();
+      return;
+    }
+
+    const previousFocus = focusedAlert.current;
+    if (
+      previousFocus?.previousIndex !== undefined &&
+      !visibleAlerts.some((alert) => alert.id === previousFocus.id)
+    ) {
+      const replacement =
+        visibleAlerts[previousFocus.previousIndex] ??
+        visibleAlerts[previousFocus.previousIndex - 1];
+      focusedAlert.current = null;
+      if (replacement) {
+        setSelectedId(replacement.id);
+        alertRowRefs.current.get(replacement.id)?.focus();
+      } else {
+        statusFilterRef.current?.focus();
+      }
+    }
   }, [visibleAlerts]);
 
   function toggleAcknowledged(alert: SecurityAlert) {
@@ -354,7 +408,9 @@ export function SecurityAlerts() {
       const nextAlert =
         remainingAlerts[currentIndex] ?? remainingAlerts[currentIndex - 1];
       if (nextAlert) setSelectedId(nextAlert.id);
-      pendingFocusTarget.current = nextAlert?.id ?? "status-filter";
+      pendingFocusTarget.current = {
+        id: nextAlert?.id ?? "status-filter",
+      };
     }
     if (wasAcknowledged) next.delete(alert.id);
     else next.add(alert.id);
@@ -528,7 +584,7 @@ export function SecurityAlerts() {
           <div className="border-b border-border xl:border-r xl:border-b-0">
             {visibleAlerts.length ? (
               <div role="list" aria-label="Security alerts">
-                {visibleAlerts.map((alert) => {
+                {visibleAlerts.map((alert, alertIndex) => {
                   const isSelected = alert.id === selectedAlert?.id;
                   const acknowledged = acknowledgedIds.has(alert.id);
                   return (
@@ -543,7 +599,14 @@ export function SecurityAlerts() {
                           if (node) alertRowRefs.current.set(alert.id, node);
                           else alertRowRefs.current.delete(alert.id);
                         }}
+                        data-alert-id={alert.id}
                         aria-pressed={isSelected}
+                        onFocus={() => {
+                          focusedAlert.current = {
+                            id: alert.id,
+                            previousIndex: alertIndex,
+                          };
+                        }}
                         onClick={() => setSelectedId(alert.id)}
                         className={cn(
                           "block min-h-[100px] w-full border-l-2 border-l-transparent px-4 py-3.5 text-left outline-none transition-colors hover:bg-surface-elevated/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
