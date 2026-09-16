@@ -72,6 +72,9 @@ search indexes only public fields. This preview is not tenant-authorized storage
 and must not hold confidential production contacts. Shared persistence must add
 server-side membership checks before replacing the preview. Organization search
 currently covers only implemented pages and locally saved profile information.
+The organization usage page at `/dashboard/organization/settings/usage` previews
+activity and capacity charts with sample data. It does not meter activity, enforce
+limits, or connect to billing.
 
 ## Acceptance bar for the first slice
 

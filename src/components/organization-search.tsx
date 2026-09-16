@@ -109,6 +109,14 @@ export function OrganizationSearch({
                 >
                   Organization settings
                 </CommandItem>
+                <CommandItem
+                  value="Organization usage activity capacity billing"
+                  onSelect={() =>
+                    navigate("/dashboard/organization/settings/usage")
+                  }
+                >
+                  Organization usage
+                </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (
