@@ -25,6 +25,20 @@ describe("Organization connections", () => {
     expect(screen.getByText("Pterodactyl")).toBeTruthy();
     expect(screen.getByText("Cloudflare")).toBeTruthy();
 
+    const sampleBadge = screen.getByText("Sample data");
+    expect(sampleBadge.className).toContain("text-text-muted");
+    expect(sampleBadge.className).not.toContain("text-text-muted/80");
+    for (const category of [
+      "Server management",
+      "Player activity",
+      "Network",
+      "Source control",
+    ]) {
+      const categoryBadge = screen.getByText(category);
+      expect(categoryBadge.className).toContain("text-text-muted");
+      expect(categoryBadge.className).not.toContain("text-text-muted/80");
+    }
+
     const available = screen.getByRole("region", {
       name: "Available connections",
     });

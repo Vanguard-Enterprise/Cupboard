@@ -183,7 +183,7 @@ export function OrganizationConnections() {
           <div className="flex items-center gap-1">
             <Badge
               variant="outline"
-              className="border-border/50 text-text-muted/80"
+              className="border-border/50 text-text-muted"
             >
               Sample data
             </Badge>
@@ -315,7 +315,7 @@ export function OrganizationConnections() {
                   <ServiceIcon icon={service.icon} />
                   <Badge
                     variant="outline"
-                    className="-mt-0.5 -mr-0.5 border-transparent bg-surface-elevated/50 font-normal text-text-muted/80"
+                    className="-mt-0.5 -mr-0.5 border-transparent bg-surface-elevated/50 font-normal text-text-muted"
                   >
                     {service.category}
                   </Badge>
