@@ -329,7 +329,12 @@ export function OrganizationIntegrations() {
   const [webhookDeleteConflict, setWebhookDeleteConflict] = useState<
     "deleted" | "changed" | null
   >(null);
-  const [replaceUnreadableOpen, setReplaceUnreadableOpen] = useState(false);
+  const [unreadableToReplace, setUnreadableToReplace] = useState<string | null>(
+    null,
+  );
+  const [suspendedDraftDialog, setSuspendedDraftDialog] = useState<
+    "credential" | "webhook" | null
+  >(null);
   const credentialNameRef = useRef<HTMLInputElement>(null);
   const webhookNameRef = useRef<HTMLInputElement>(null);
   const webhookUrlRef = useRef<HTMLInputElement>(null);
@@ -377,12 +382,17 @@ export function OrganizationIntegrations() {
     try {
       return parseOrganizationIntegrations(latestRaw);
     } catch {
-      setCredentialDialogOpen(false);
-      setWebhookDialogOpen(false);
+      if (credentialDialogOpen) {
+        setCredentialDialogOpen(false);
+        setSuspendedDraftDialog("credential");
+      } else if (webhookDialogOpen) {
+        setWebhookDialogOpen(false);
+        setSuspendedDraftDialog("webhook");
+      }
       setCredentialToRevoke(null);
       setWebhookToDelete(null);
       setSelectedWebhookId(null);
-      setReplaceUnreadableOpen(true);
+      setUnreadableToReplace(latestRaw);
       setFeedback({
         kind: "alert",
         message: "Saved credential and webhook data could not be loaded.",
@@ -391,11 +401,58 @@ export function OrganizationIntegrations() {
     }
   }
 
+  function restoreSuspendedDraft() {
+    if (suspendedDraftDialog === "credential") {
+      setCredentialDialogOpen(true);
+    } else if (suspendedDraftDialog === "webhook") {
+      setWebhookDialogOpen(true);
+    }
+    setSuspendedDraftDialog(null);
+  }
+
+  function requestUnreadableReplacement() {
+    const latestRaw = integrationsSnapshot();
+    if (latestRaw !== null) {
+      try {
+        parseOrganizationIntegrations(latestRaw);
+      } catch {
+        setUnreadableToReplace(latestRaw);
+        return;
+      }
+    }
+    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    setFeedback({
+      kind: "alert",
+      message: "Saved integration data changed. Review it before replacing.",
+    });
+  }
+
   function replaceUnreadableData() {
+    if (unreadableToReplace === null) return;
+    const latestRaw = integrationsSnapshot();
+    let latestIsUnreadable = false;
+    if (latestRaw !== null) {
+      try {
+        parseOrganizationIntegrations(latestRaw);
+      } catch {
+        latestIsUnreadable = true;
+      }
+    }
+    if (latestRaw !== unreadableToReplace || !latestIsUnreadable) {
+      setUnreadableToReplace(null);
+      restoreSuspendedDraft();
+      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      setFeedback({
+        kind: "alert",
+        message: "Saved integration data changed. Review it before replacing.",
+      });
+      return;
+    }
     try {
       localStorage.removeItem(organizationIntegrationsKey);
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
-      setReplaceUnreadableOpen(false);
+      setUnreadableToReplace(null);
+      restoreSuspendedDraft();
       setFeedback({
         kind: "status",
         message: "Unreadable integration data replaced with sample data.",
@@ -633,7 +690,7 @@ export function OrganizationIntegrations() {
           <Button
             variant="secondary"
             className="h-9 [@media(any-pointer:coarse)]:min-h-11"
-            onClick={() => setReplaceUnreadableOpen(true)}
+            onClick={requestUnreadableReplacement}
           >
             Replace local data
           </Button>
@@ -1175,8 +1232,13 @@ export function OrganizationIntegrations() {
       </Sheet>
 
       <AlertDialog
-        open={replaceUnreadableOpen}
-        onOpenChange={setReplaceUnreadableOpen}
+        open={unreadableToReplace !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setUnreadableToReplace(null);
+            restoreSuspendedDraft();
+          }
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1204,7 +1266,10 @@ export function OrganizationIntegrations() {
             <AlertDialogAction
               variant="destructive"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              onClick={replaceUnreadableData}
+              onClick={(event) => {
+                event.preventDefault();
+                replaceUnreadableData();
+              }}
             >
               Replace local data
             </AlertDialogAction>
