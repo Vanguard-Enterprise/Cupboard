@@ -274,6 +274,7 @@ export function OrganizationIntegrations() {
   );
   const [webhookDialogOpen, setWebhookDialogOpen] = useState(false);
   const [editingWebhookId, setEditingWebhookId] = useState<string | null>(null);
+  const [webhookEditConflict, setWebhookEditConflict] = useState(false);
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(
     null,
   );
@@ -294,6 +295,12 @@ export function OrganizationIntegrations() {
   const webhookUrlRef = useRef<HTMLInputElement>(null);
   const selectedWebhook = data.webhooks.find(
     (webhook) => webhook.id === selectedWebhookId,
+  );
+  const editingWebhook = editingWebhookId
+    ? data.webhooks.find((webhook) => webhook.id === editingWebhookId)
+    : undefined;
+  const webhookEditMissing = Boolean(
+    webhookEditConflict || (editingWebhookId && !editingWebhook),
   );
   const credentialNameValid = credentialName.trim().length > 0;
   const webhookFormValid =
@@ -362,6 +369,7 @@ export function OrganizationIntegrations() {
 
   function openWebhookDialog() {
     setEditingWebhookId(null);
+    setWebhookEditConflict(false);
     setWebhookName("");
     setWebhookUrl("");
     setSelectedEvents([]);
@@ -372,6 +380,7 @@ export function OrganizationIntegrations() {
   function editWebhook(webhook: WebhookEndpoint) {
     setSelectedWebhookId(null);
     setEditingWebhookId(webhook.id);
+    setWebhookEditConflict(false);
     setWebhookName(webhook.name);
     setWebhookUrl(webhook.url);
     setSelectedEvents(webhook.events);
@@ -381,6 +390,14 @@ export function OrganizationIntegrations() {
 
   function createWebhook(event: React.FormEvent) {
     event.preventDefault();
+    const latestData = readOrganizationIntegrations(integrationsSnapshot());
+    const latestEditingWebhook = editingWebhookId
+      ? latestData.webhooks.find((webhook) => webhook.id === editingWebhookId)
+      : undefined;
+    if (editingWebhookId && !latestEditingWebhook) {
+      setWebhookEditConflict(true);
+      return;
+    }
     const name = webhookName.trim();
     const url = webhookUrl.trim();
     const errors = {
@@ -394,11 +411,8 @@ export function OrganizationIntegrations() {
       else if (errors.url) webhookUrlRef.current?.focus();
       return;
     }
-    const editingWebhook = data.webhooks.find(
-      (webhook) => webhook.id === editingWebhookId,
-    );
-    const webhook: WebhookEndpoint = editingWebhook
-      ? { ...editingWebhook, name, url, events: selectedEvents }
+    const webhook: WebhookEndpoint = latestEditingWebhook
+      ? { ...latestEditingWebhook, name, url, events: selectedEvents }
       : {
           id: newId(),
           name,
@@ -408,15 +422,15 @@ export function OrganizationIntegrations() {
           createdAt: today(),
           lastDelivery: null,
         };
-    const webhooks = editingWebhook
-      ? data.webhooks.map((item) =>
-          item.id === editingWebhook.id ? webhook : item,
+    const webhooks = latestEditingWebhook
+      ? latestData.webhooks.map((item) =>
+          item.id === latestEditingWebhook.id ? webhook : item,
         )
-      : [webhook, ...data.webhooks];
+      : [webhook, ...latestData.webhooks];
     if (
       persist(
-        { ...data, webhooks },
-        editingWebhook ? `${name} updated.` : `${name} added.`,
+        { ...latestData, webhooks },
+        latestEditingWebhook ? `${name} updated.` : `${name} added.`,
       )
     ) {
       setWebhookDialogOpen(false);
@@ -696,7 +710,10 @@ export function OrganizationIntegrations() {
         open={webhookDialogOpen}
         onOpenChange={(open) => {
           setWebhookDialogOpen(open);
-          if (!open) setEditingWebhookId(null);
+          if (!open) {
+            setEditingWebhookId(null);
+            setWebhookEditConflict(false);
+          }
         }}
       >
         <DialogContent className="sm:max-w-lg">
@@ -710,6 +727,12 @@ export function OrganizationIntegrations() {
                 : "Cupboard will send the selected events to this endpoint."}
             </DialogDescription>
           </DialogHeader>
+          {webhookEditMissing && (
+            <p role="alert" className="text-sm text-destructive">
+              This webhook was deleted in another tab. Close this dialog without
+              saving.
+            </p>
+          )}
           <form
             id="create-webhook-form"
             onSubmit={createWebhook}
@@ -825,7 +848,7 @@ export function OrganizationIntegrations() {
               type="submit"
               form="create-webhook-form"
               className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              disabled={!webhookFormValid}
+              disabled={!webhookFormValid || webhookEditMissing}
             >
               {editingWebhookId ? "Save changes" : "Add webhook"}
             </Button>

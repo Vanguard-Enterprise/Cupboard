@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationIntegrations } from "./organization-integrations";
@@ -238,6 +245,47 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.getByRole("status").textContent).toBe(
       "Operations bridge deleted.",
     );
+  });
+
+  it("does not recreate a webhook deleted in another tab while editing", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    const editDialog = screen.getByRole("dialog", { name: "Edit webhook" });
+
+    const deleted = structuredClone(defaultOrganizationIntegrations);
+    deleted.webhooks = [];
+    const raw = JSON.stringify(deleted);
+    act(() => {
+      localStorage.setItem(organizationIntegrationsKey, raw);
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: organizationIntegrationsKey,
+          newValue: raw,
+        }),
+      );
+      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    });
+
+    fireEvent.submit(editDialog.querySelector("form")!);
+    expect(
+      await within(editDialog).findByText(
+        "This webhook was deleted in another tab. Close this dialog without saving.",
+      ),
+    ).toBeTruthy();
+    const save = within(editDialog).getByRole("button", {
+      name: "Save changes",
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks,
+    ).toEqual([]);
+    expect(screen.queryByText("Operations relay added.")).toBeNull();
   });
 
   it("surfaces and retries a failed webhook delivery", async () => {
