@@ -19,7 +19,11 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import { profilePath, usagePath } from "@/lib/dashboard-navigation";
+import {
+  notificationsDataPath,
+  profilePath,
+  usagePath,
+} from "@/lib/dashboard-navigation";
 
 export function Workspace({
   children,
@@ -31,14 +35,21 @@ export function Workspace({
   const pathname = usePathname();
   const isProfile = pathname === profilePath;
   const isUsage = pathname === usagePath;
-  const isOrganizationSettings = isProfile || isUsage;
+  const isNotificationsData = pathname === notificationsDataPath;
+  const isOrganizationSettings = isProfile || isUsage || isNotificationsData;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
           activeSection={
-            isProfile ? "organization" : isUsage ? "billing" : undefined
+            isProfile
+              ? "organization"
+              : isUsage
+                ? "billing"
+                : isNotificationsData
+                  ? "preferences"
+                  : undefined
           }
           onSearch={() => setSearchOpen(true)}
         />
@@ -69,7 +80,11 @@ export function Workspace({
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
                       <BreadcrumbPage>
-                        {isProfile ? "Profile" : "Usage"}
+                        {isProfile
+                          ? "Profile"
+                          : isUsage
+                            ? "Usage"
+                            : "Notifications & data"}
                       </BreadcrumbPage>
                     </BreadcrumbItem>
                   </>
