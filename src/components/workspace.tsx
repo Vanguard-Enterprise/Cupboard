@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { usePathname } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { OrganizationProvider } from "@/components/organization-provider";
@@ -20,6 +20,8 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import {
+  accessPath,
+  connectionsPath,
   notificationsDataPath,
   profilePath,
   securityAlertsPath,
@@ -34,28 +36,48 @@ export function Workspace({
   defaultOpen: boolean;
 }) {
   const pathname = usePathname();
-  const isProfile = pathname === profilePath;
-  const isUsage = pathname === usagePath;
-  const isNotificationsData = pathname === notificationsDataPath;
-  const isSecurityAlerts = pathname === securityAlertsPath;
-  const isOrganizationSettings = isProfile || isUsage || isNotificationsData;
-  const isOrganizationPage = isOrganizationSettings || isSecurityAlerts;
+  const currentPage =
+    pathname === profilePath
+      ? {
+          activeSection: "organization",
+          crumbs: ["Organization", "Settings", "Profile"],
+        }
+      : pathname === usagePath
+        ? {
+            activeSection: "billing",
+            crumbs: ["Organization", "Settings", "Usage"],
+          }
+        : pathname === connectionsPath
+          ? {
+              activeSection: "connections",
+              crumbs: ["Organization", "Integrations", "Connections"],
+            }
+          : pathname === accessPath
+            ? {
+                activeSection: "access",
+                crumbs: ["Organization", "Security", "Access & approvals"],
+              }
+            : pathname === securityAlertsPath
+              ? {
+                  activeSection: "security-alerts",
+                  crumbs: ["Organization", "Security", "Alerts"],
+                }
+              : pathname === notificationsDataPath
+                ? {
+                    activeSection: "preferences",
+                    crumbs: [
+                      "Organization",
+                      "Settings",
+                      "Notifications & data",
+                    ],
+                  }
+                : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
-          activeSection={
-            isProfile
-              ? "organization"
-              : isUsage
-                ? "billing"
-                : isNotificationsData
-                  ? "preferences"
-                  : isSecurityAlerts
-                    ? "security-alerts"
-                    : undefined
-          }
+          activeSection={currentPage?.activeSection}
           onSearch={() => setSearchOpen(true)}
         />
         <SidebarInset>
@@ -64,7 +86,7 @@ export function Workspace({
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  {isOrganizationPage ? (
+                  {currentPage ? (
                     <BreadcrumbLink asChild>
                       <Link href="/dashboard">Dashboard</Link>
                     </BreadcrumbLink>
@@ -72,30 +94,18 @@ export function Workspace({
                     <BreadcrumbPage>Dashboard</BreadcrumbPage>
                   )}
                 </BreadcrumbItem>
-                {isOrganizationPage && (
-                  <>
+                {currentPage?.crumbs.map((crumb, index) => (
+                  <Fragment key={crumb}>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
-                      <span>Organization</span>
+                      {index === currentPage.crumbs.length - 1 ? (
+                        <BreadcrumbPage>{crumb}</BreadcrumbPage>
+                      ) : (
+                        <span>{crumb}</span>
+                      )}
                     </BreadcrumbItem>
-                    <BreadcrumbSeparator />
-                    <BreadcrumbItem>
-                      <span>{isSecurityAlerts ? "Security" : "Settings"}</span>
-                    </BreadcrumbItem>
-                    <BreadcrumbSeparator />
-                    <BreadcrumbItem>
-                      <BreadcrumbPage>
-                        {isSecurityAlerts
-                          ? "Alerts"
-                          : isProfile
-                            ? "Profile"
-                            : isUsage
-                              ? "Usage"
-                              : "Notifications & data"}
-                      </BreadcrumbPage>
-                    </BreadcrumbItem>
-                  </>
-                )}
+                  </Fragment>
+                ))}
               </BreadcrumbList>
             </Breadcrumb>
           </header>

@@ -52,7 +52,10 @@ server data is connected. Organization profile settings live at
 `/dashboard/organization/settings/usage` with clearly labeled sample data until
 metering is connected. Security alerts are available at
 `/dashboard/organization/security/alerts` with sample findings and browser-local
-acknowledgements. Organization notification and browser-data settings live at
+acknowledgements. Organization connections are previewed at
+`/dashboard/organization/integrations/connections`; the page uses sample states
+and does not connect external accounts. Organization notification and
+browser-data settings live at
 `/dashboard/organization/settings/notifications-data`; unfinished sidebar items
 have no destination.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
@@ -78,6 +81,11 @@ the current browser without clearing unrelated local storage.
 Security alert acknowledgements use
 `cupboard:organization:local-preview:security-alerts:v1`. They update only the
 sample alerts in the current browser and do not change a live server.
+
+The access and approvals page at
+`/dashboard/organization/security/access` previews member roles, invitations,
+and sensitive-action approval rules. Its data stays in the current browser and
+does not grant access, send invitations, or enforce approvals.
 
 The sidebar remembers its expanded state in the `sidebar_state` cookie for
 seven days, including across refreshes and visits to the login page.
