@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import {
   connectionsPath,
+  notificationsDataPath,
   profilePath,
   usagePath,
 } from "@/lib/dashboard-navigation";
@@ -49,7 +50,12 @@ export function Workspace({
               activeSection: "connections",
               crumbs: ["Organization", "Integrations", "Connections"],
             }
-          : undefined;
+          : pathname === notificationsDataPath
+            ? {
+                activeSection: "preferences",
+                crumbs: ["Organization", "Settings", "Notifications & data"],
+              }
+            : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
