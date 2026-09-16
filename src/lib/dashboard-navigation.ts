@@ -246,6 +246,7 @@ export const dashboardNavigation = [
 
 export const profilePath = "/dashboard/organization/settings/profile";
 export const usagePath = "/dashboard/organization/settings/usage";
+export const accessPath = "/dashboard/organization/security/access";
 export const connectionsPath =
   "/dashboard/organization/integrations/connections";
 export const notificationsDataPath =
@@ -255,6 +256,7 @@ export function navigationHref(id: string): string | undefined {
   if (id === "connections") return connectionsPath;
   if (id === "organization") return profilePath;
   if (id === "billing") return usagePath;
+  if (id === "access") return accessPath;
   if (id === "preferences") return notificationsDataPath;
   return undefined;
 }
