@@ -161,6 +161,10 @@ function AccessEditor({
       ...current,
       members: [...current.members, invitation],
     }));
+    closeInviteDialog();
+  }
+
+  function closeInviteDialog() {
     setInviteEmail("");
     setInviteRole("viewer");
     setInviteError("");
@@ -395,8 +399,8 @@ function AccessEditor({
       <Dialog
         open={inviteOpen}
         onOpenChange={(open) => {
-          setInviteOpen(open);
-          if (!open) setInviteError("");
+          if (open) setInviteOpen(true);
+          else closeInviteDialog();
         }}
       >
         <DialogContent aria-describedby={undefined}>
@@ -461,7 +465,7 @@ function AccessEditor({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setInviteOpen(false)}
+                onClick={closeInviteDialog}
               >
                 Cancel
               </Button>

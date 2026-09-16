@@ -26,6 +26,8 @@ import {
 } from "@/lib/organization-access";
 import { toast } from "sonner";
 
+const scrollIntoView = HTMLElement.prototype.scrollIntoView;
+
 vi.mock("sonner", () => ({
   toast: { success: vi.fn() },
 }));
@@ -48,6 +50,10 @@ function externalSave(settings = defaultOrganizationAccess) {
 }
 
 beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -63,7 +69,17 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
-afterAll(() => vi.unstubAllGlobals());
+afterAll(() => {
+  if (scrollIntoView) {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+  } else {
+    Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  }
+  vi.unstubAllGlobals();
+});
 
 describe("Organization access", () => {
   it("saves access changes directly and resets the dirty state", async () => {
@@ -160,6 +176,53 @@ describe("Organization access", () => {
     fireEvent.change(screen.getByLabelText("Email address"), {
       target: { value: `${"a".repeat(201)}@example.com` },
     });
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Send invitation",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("discards invitation fields when the dialog is canceled or dismissed", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Member access" });
+
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    await user.type(
+      screen.getByLabelText("Email address"),
+      "canceled@example.com",
+    );
+    screen.getByLabelText("Role").focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("option", { name: "Administrator" });
+    await user.keyboard("{Home}{Enter}");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    expect(
+      (screen.getByLabelText("Email address") as HTMLInputElement).value,
+    ).toBe("");
+    expect(screen.getByLabelText("Role").textContent).toContain("Viewer");
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Send invitation",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    await user.type(
+      screen.getByLabelText("Email address"),
+      "dismissed@example.com",
+    );
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("button", { name: "Invite member" }));
+    expect(
+      (screen.getByLabelText("Email address") as HTMLInputElement).value,
+    ).toBe("");
     expect(
       (
         screen.getByRole("button", {
