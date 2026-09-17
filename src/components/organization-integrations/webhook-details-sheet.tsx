@@ -50,13 +50,15 @@ export function WebhookDetailsSheet({
                   variant={
                     webhook.lastDelivery && webhook.lastDelivery.status >= 400
                       ? "destructive"
-                      : "outline"
+                      : webhook.enabled
+                        ? "success"
+                        : "outline"
                   }
                   className={
                     webhook.lastDelivery && webhook.lastDelivery.status >= 400
                       ? undefined
                       : webhook.enabled
-                        ? "border-primary/30 bg-primary/10 text-primary"
+                        ? undefined
                         : "text-muted-foreground"
                   }
                 >

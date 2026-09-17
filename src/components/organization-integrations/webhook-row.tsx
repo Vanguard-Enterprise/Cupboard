@@ -59,13 +59,17 @@ export function WebhookRow({
             <div className="flex flex-wrap items-center gap-2">
               <p className="font-medium text-foreground">{webhook.name}</p>
               <Badge
-                variant={failed ? "destructive" : "outline"}
-                className={
+                variant={
                   failed
-                    ? undefined
+                    ? "destructive"
                     : webhook.enabled
-                      ? "border-primary/30 bg-primary/10 text-primary"
-                      : "text-muted-foreground"
+                      ? "success"
+                      : "outline"
+                }
+                className={
+                  failed || webhook.enabled
+                    ? undefined
+                    : "text-muted-foreground"
                 }
               >
                 <span

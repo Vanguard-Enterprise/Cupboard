@@ -223,8 +223,8 @@ function OutcomeBadge({ outcome }: { outcome: EventOutcome }) {
   }
   return (
     <Badge
-      variant="outline"
-      className="h-5 gap-1 border-primary/30 bg-primary/10 px-1 text-[11px] text-primary [&>svg]:size-2.5!"
+      variant="success"
+      className="h-5 gap-1 px-1 text-[11px] [&>svg]:size-2.5!"
     >
       <CheckCircle2Icon aria-hidden="true" />
       Succeeded
