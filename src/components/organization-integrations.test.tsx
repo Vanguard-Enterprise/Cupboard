@@ -462,7 +462,7 @@ describe("Organization credentials and webhooks", () => {
     expect(
       (
         screen.getAllByRole("button", {
-          name: "Revoke",
+          name: /Credential actions for/,
         })[0] as HTMLButtonElement
       ).disabled,
     ).toBe(true);
@@ -817,8 +817,12 @@ describe("Organization credentials and webhooks", () => {
     const user = userEvent.setup();
     render(<OrganizationIntegrations />);
 
-    const revokeButtons = screen.getAllByRole("button", { name: "Revoke" });
-    await user.click(revokeButtons[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Credential actions for Server operations",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Revoke" }));
     const confirmation = screen.getByRole("alertdialog", {
       name: "Revoke Server operations?",
     });
@@ -849,6 +853,39 @@ describe("Organization credentials and webhooks", () => {
     );
   });
 
+  it("rotates a credential from its action menu without storing the secret", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Credential actions for Server operations",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Rotate key" }));
+
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Rotate Server operations?",
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Rotate key" }),
+    );
+
+    const rotated = screen.getByRole("dialog", {
+      name: "Credential rotated",
+    });
+    const secret =
+      within(rotated).getByTestId("created-credential").textContent!;
+    const stored = localStorage.getItem(organizationIntegrationsKey)!;
+    expect(secret).toMatch(/^cb_live_[A-F0-9]{36}$/);
+    expect(stored).not.toContain(secret);
+    expect(JSON.parse(stored).credentials[0]).toMatchObject({
+      lastUsed: null,
+      prefix: `${secret.slice(0, 12)}...${secret.slice(-4)}`,
+    });
+    expect(screen.getByText("Server operations rotated.")).toBeTruthy();
+  });
+
   it("does not recreate cleared data from a credential revocation", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
@@ -857,7 +894,12 @@ describe("Organization credentials and webhooks", () => {
     );
     render(<OrganizationIntegrations />);
 
-    await user.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Credential actions for Server operations",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Revoke" }));
     const confirmation = screen.getByRole("alertdialog", {
       name: "Revoke Server operations?",
     });
@@ -896,6 +938,43 @@ describe("Organization credentials and webhooks", () => {
     expect(
       within(details).queryByRole("button", { name: "Retry delivery" }),
     ).toBeNull();
+  });
+
+  it("offers icon actions and pauses or resumes a webhook", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    const webhookName = screen.getByText("Operations relay");
+    const row = webhookName.closest(".group")!;
+    expect(row.className).toContain("hover:bg-surface-elevated");
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    for (const action of ["View", "Edit", "Pause", "Delete"]) {
+      const item = screen.getByRole("menuitem", { name: action });
+      expect(item.querySelector("svg")).toBeTruthy();
+    }
+    await user.click(screen.getByRole("menuitem", { name: "Pause" }));
+
+    expect(screen.getByText("Paused")).toBeTruthy();
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
+        .enabled,
+    ).toBe(false);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Operations relay paused.",
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Resume" }));
+    expect(screen.getByText("Active")).toBeTruthy();
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
+        .enabled,
+    ).toBe(true);
   });
 
   it("edits and deletes a webhook through managed actions", async () => {
