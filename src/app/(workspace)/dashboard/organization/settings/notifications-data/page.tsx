@@ -1,6 +1,9 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { OrganizationNotificationsData } from "@/components/organization-notifications-data";
 
-export const metadata = { title: "Notifications and data | Cupboard" };
+export const metadata = {
+  title: implementedPages["preferences"].metadataTitle,
+};
 
 export default function OrganizationNotificationsDataPage() {
   return (

@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  implementedPages,
+  implementedPageEntries,
+  type OrganizationPageEntry,
+} from "@/lib/implemented-pages";
 import Link from "next/link";
 import { Fragment, useState } from "react";
 import { usePathname } from "next/navigation";
@@ -19,16 +24,6 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
-import {
-  accessPath,
-  auditLogPath,
-  connectionsPath,
-  credentialsPath,
-  notificationsDataPath,
-  profilePath,
-  securityAlertsPath,
-  usagePath,
-} from "@/lib/dashboard-navigation";
 
 export function Workspace({
   children,
@@ -38,60 +33,13 @@ export function Workspace({
   defaultOpen: boolean;
 }) {
   const pathname = usePathname();
-  const currentPage =
-    pathname === profilePath
-      ? {
-          activeSection: "organization",
-          crumbs: ["Organization", "Settings", "Profile"],
-        }
-      : pathname === usagePath
-        ? {
-            activeSection: "billing",
-            crumbs: ["Organization", "Settings", "Usage"],
-          }
-        : pathname === connectionsPath
-          ? {
-              activeSection: "connections",
-              crumbs: ["Organization", "Integrations", "Connections"],
-            }
-          : pathname === credentialsPath
-            ? {
-                activeSection: "credentials",
-                crumbs: [
-                  "Organization",
-                  "Integrations",
-                  "Credentials & webhooks",
-                ],
-              }
-            : pathname === securityAlertsPath
-              ? {
-                  activeSection: "security-alerts",
-                  crumbs: ["Organization", "Security", "Alerts"],
-                }
-              : pathname === auditLogPath
-                ? {
-                    activeSection: "audit-log",
-                    crumbs: ["Organization", "Security", "Audit log"],
-                  }
-                : pathname === accessPath
-                  ? {
-                      activeSection: "access",
-                      crumbs: [
-                        "Organization",
-                        "Security",
-                        "Access & approvals",
-                      ],
-                    }
-                  : pathname === notificationsDataPath
-                    ? {
-                        activeSection: "preferences",
-                        crumbs: [
-                          "Organization",
-                          "Settings",
-                          "Notifications & data",
-                        ],
-                      }
-                    : undefined;
+  const entry = implementedPageEntries.find(
+    (entry): entry is OrganizationPageEntry =>
+      entry[1].kind === "organization" && entry[1].href === pathname,
+  );
+  const currentPage = entry
+    ? { activeSection: entry[0], crumbs: entry[1].breadcrumbs }
+    : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
@@ -108,7 +56,9 @@ export function Workspace({
                 <BreadcrumbItem>
                   {currentPage ? (
                     <BreadcrumbLink asChild>
-                      <Link href="/dashboard">Dashboard</Link>
+                      <Link href={implementedPages.dashboard.href}>
+                        Dashboard
+                      </Link>
                     </BreadcrumbLink>
                   ) : (
                     <BreadcrumbPage>Dashboard</BreadcrumbPage>

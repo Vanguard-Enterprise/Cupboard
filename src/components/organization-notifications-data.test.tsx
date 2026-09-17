@@ -1,3 +1,4 @@
+import { implementedPages } from "@/lib/implemented-pages";
 // @vitest-environment jsdom
 import {
   dispatchCrossTab,
@@ -23,10 +24,7 @@ import {
   defaultOrganizationIntegrations,
   organizationIntegrationsKey,
 } from "@/lib/organization-integrations";
-import {
-  navigationHref,
-  notificationsDataPath,
-} from "@/lib/dashboard-navigation";
+import { navigationHref } from "@/lib/dashboard-navigation";
 import {
   defaultOrganizationAccess,
   organizationAccessKey,
@@ -69,8 +67,10 @@ afterEach(() => {
 
 describe("Organization notifications and data", () => {
   it("links the implemented navigation destination", () => {
-    expect(navigationHref("preferences")).toBe(notificationsDataPath);
-    expect(notificationsDataPath).toBe(
+    expect(navigationHref("preferences")).toBe(
+      implementedPages["preferences"].href,
+    );
+    expect(implementedPages["preferences"].href).toBe(
       "/dashboard/organization/settings/notifications-data",
     );
   });

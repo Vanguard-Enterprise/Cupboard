@@ -1,6 +1,9 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { SecurityAlerts } from "@/components/security-alerts";
 
-export const metadata = { title: "Security alerts | Cupboard" };
+export const metadata = {
+  title: implementedPages["security-alerts"].metadataTitle,
+};
 
 export default function SecurityAlertsPage() {
   return (

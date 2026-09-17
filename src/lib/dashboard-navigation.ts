@@ -1,3 +1,5 @@
+import { implementedPages, implementedPageEntries } from "./implemented-pages";
+
 export const dashboardNavigation = [
   {
     title: "Operations",
@@ -196,11 +198,11 @@ export const dashboardNavigation = [
         sections: [
           {
             id: "connections",
-            title: "Connections",
+            title: implementedPages["connections"].navigationLabel,
           },
           {
             id: "credentials",
-            title: "Credentials & webhooks",
+            title: implementedPages["credentials"].navigationLabel,
           },
         ],
       },
@@ -210,15 +212,15 @@ export const dashboardNavigation = [
         sections: [
           {
             id: "security-alerts",
-            title: "Security alerts",
+            title: implementedPages["security-alerts"].navigationLabel,
           },
           {
             id: "audit-log",
-            title: "Audit log",
+            title: implementedPages["audit-log"].navigationLabel,
           },
           {
             id: "access",
-            title: "Access & approvals",
+            title: implementedPages["access"].navigationLabel,
           },
         ],
       },
@@ -228,15 +230,15 @@ export const dashboardNavigation = [
         sections: [
           {
             id: "organization",
-            title: "Organization profile",
+            title: implementedPages["organization"].navigationLabel,
           },
           {
             id: "billing",
-            title: "Billing & usage",
+            title: implementedPages["billing"].navigationLabel,
           },
           {
             id: "preferences",
-            title: "Notifications & data",
+            title: implementedPages["preferences"].navigationLabel,
           },
         ],
       },
@@ -244,26 +246,8 @@ export const dashboardNavigation = [
   },
 ];
 
-export const profilePath = "/dashboard/organization/settings/profile";
-export const usagePath = "/dashboard/organization/settings/usage";
-export const credentialsPath =
-  "/dashboard/organization/integrations/credentials";
-export const securityAlertsPath = "/dashboard/organization/security/alerts";
-export const auditLogPath = "/dashboard/organization/security/audit-log";
-export const accessPath = "/dashboard/organization/security/access";
-export const connectionsPath =
-  "/dashboard/organization/integrations/connections";
-export const notificationsDataPath =
-  "/dashboard/organization/settings/notifications-data";
-
 export function navigationHref(id: string): string | undefined {
-  if (id === "connections") return connectionsPath;
-  if (id === "organization") return profilePath;
-  if (id === "billing") return usagePath;
-  if (id === "credentials") return credentialsPath;
-  if (id === "security-alerts") return securityAlertsPath;
-  if (id === "audit-log") return auditLogPath;
-  if (id === "access") return accessPath;
-  if (id === "preferences") return notificationsDataPath;
-  return undefined;
+  return implementedPageEntries.find(
+    ([key, page]) => key === id && page.kind === "organization",
+  )?.[1].href;
 }

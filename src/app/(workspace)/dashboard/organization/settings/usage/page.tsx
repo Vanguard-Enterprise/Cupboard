@@ -1,6 +1,7 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { OrganizationUsage } from "@/components/organization-usage";
 
-export const metadata = { title: "Organization usage | Cupboard" };
+export const metadata = { title: implementedPages["billing"].metadataTitle };
 
 export default function OrganizationUsagePage() {
   return (

@@ -1,6 +1,9 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { OrganizationConnections } from "@/components/organization-connections";
 
-export const metadata = { title: "Connections | Cupboard" };
+export const metadata = {
+  title: implementedPages["connections"].metadataTitle,
+};
 
 export default function OrganizationConnectionsPage() {
   return (

@@ -1,6 +1,7 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { OrganizationAccess } from "@/components/organization-access";
 
-export const metadata = { title: "Access and approvals | Cupboard" };
+export const metadata = { title: implementedPages["access"].metadataTitle };
 
 export default function OrganizationAccessPage() {
   return (

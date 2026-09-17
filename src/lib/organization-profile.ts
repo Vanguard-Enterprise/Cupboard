@@ -1,3 +1,4 @@
+import { implementedPages } from "./implemented-pages";
 export const organizationProfileKey =
   "cupboard:organization:local-preview:profile:v1";
 export const defaultOrganizationProfile = {
@@ -83,7 +84,7 @@ export function organizationSearchEntries(profile: OrganizationProfile) {
       title: profile.name,
       detail: "Organization profile",
       keywords: profile.description,
-      href: "/dashboard/organization/settings/profile",
+      href: implementedPages.organization.href,
     },
     ...(
       [
@@ -97,7 +98,7 @@ export function organizationSearchEntries(profile: OrganizationProfile) {
         title,
         detail: value,
         keywords: value,
-        href: "/dashboard/organization/settings/profile",
+        href: implementedPages.organization.href,
       })),
   ];
 }

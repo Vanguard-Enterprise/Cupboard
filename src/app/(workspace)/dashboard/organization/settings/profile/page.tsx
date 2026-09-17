@@ -1,6 +1,9 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { OrganizationProfileForm } from "@/components/organization-profile-form";
 
-export const metadata = { title: "Organization profile | Cupboard" };
+export const metadata = {
+  title: implementedPages["organization"].metadataTitle,
+};
 
 export default function OrganizationProfilePage() {
   return (

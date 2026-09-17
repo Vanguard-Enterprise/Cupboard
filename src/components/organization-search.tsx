@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  implementedPages,
+  implementedPageSearchOrder,
+} from "@/lib/implemented-pages";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { SearchIcon } from "lucide-react";
@@ -26,12 +30,6 @@ import {
 } from "@/components/ui/command";
 import { useOrganization } from "@/components/organization-provider";
 import { organizationSearchEntries } from "@/lib/organization-profile";
-import {
-  accessPath,
-  auditLogPath,
-  connectionsPath,
-  notificationsDataPath,
-} from "@/lib/dashboard-navigation";
 
 export function OrganizationSearchButton({ onOpen }: { onOpen: () => void }) {
   const { setOpenMobile } = useSidebar();
@@ -101,68 +99,18 @@ export function OrganizationSearch({
             <CommandList className="max-h-[min(60vh,24rem)]">
               <CommandEmpty>No results found.</CommandEmpty>
               <CommandGroup heading="Pages">
-                <CommandItem
-                  value="Dashboard overview"
-                  onSelect={() => navigate("/dashboard")}
-                >
-                  Dashboard
-                </CommandItem>
-                <CommandItem
-                  value="Organization settings profile contacts"
-                  onSelect={() =>
-                    navigate("/dashboard/organization/settings/profile")
-                  }
-                >
-                  Organization settings
-                </CommandItem>
-                <CommandItem
-                  value="Organization usage activity capacity billing"
-                  onSelect={() =>
-                    navigate("/dashboard/organization/settings/usage")
-                  }
-                >
-                  Organization usage
-                </CommandItem>
-                <CommandItem
-                  value="Organization integrations API credentials webhooks"
-                  onSelect={() =>
-                    navigate("/dashboard/organization/integrations/credentials")
-                  }
-                >
-                  Credentials &amp; webhooks
-                </CommandItem>
-                <CommandItem
-                  value="Security alerts findings risk incidents servers"
-                  onSelect={() =>
-                    navigate("/dashboard/organization/security/alerts")
-                  }
-                >
-                  Security alerts
-                </CommandItem>
-                <CommandItem
-                  value="Organization security audit log events history access"
-                  onSelect={() => navigate(auditLogPath)}
-                >
-                  Audit log
-                </CommandItem>
-                <CommandItem
-                  value="Organization security access approvals members roles invitations"
-                  onSelect={() => navigate(accessPath)}
-                >
-                  Access &amp; approvals
-                </CommandItem>
-                <CommandItem
-                  value="Organization integrations connections external services"
-                  onSelect={() => navigate(connectionsPath)}
-                >
-                  Connections
-                </CommandItem>
-                <CommandItem
-                  value="Organization notifications data preferences browser storage"
-                  onSelect={() => navigate(notificationsDataPath)}
-                >
-                  Notifications &amp; data
-                </CommandItem>
+                {implementedPageSearchOrder.map((id) => {
+                  const page = implementedPages[id];
+                  return (
+                    <CommandItem
+                      key={id}
+                      value={page.searchValue}
+                      onSelect={() => navigate(page.href)}
+                    >
+                      {page.searchLabel}
+                    </CommandItem>
+                  );
+                })}
               </CommandGroup>
               <CommandGroup heading="Organization information">
                 {organizationSearchEntries(profile).map((entry) => (

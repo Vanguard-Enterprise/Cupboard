@@ -1,6 +1,9 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { OrganizationIntegrations } from "@/components/organization-integrations";
 
-export const metadata = { title: "Credentials and webhooks | Cupboard" };
+export const metadata = {
+  title: implementedPages["credentials"].metadataTitle,
+};
 
 export default function CredentialsAndWebhooksPage() {
   return (

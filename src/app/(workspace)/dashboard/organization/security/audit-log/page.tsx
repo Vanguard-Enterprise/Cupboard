@@ -1,6 +1,7 @@
+import { implementedPages } from "@/lib/implemented-pages";
 import { AuditLog } from "@/components/audit-log";
 
-export const metadata = { title: "Audit log | Cupboard" };
+export const metadata = { title: implementedPages["audit-log"].metadataTitle };
 
 export default function AuditLogPage() {
   return (
