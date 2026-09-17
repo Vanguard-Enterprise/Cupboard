@@ -1290,3 +1290,48 @@ describe("Organization credentials and webhooks", () => {
     ).toEqual({ status: 503, deliveredAt: "4 minutes ago" });
   });
 });
+
+it("keeps retry available while unreadable and resets its notice on keyboard close", async () => {
+  const user = userEvent.setup();
+  const data = structuredClone(defaultOrganizationIntegrations);
+  data.webhooks[0].lastDelivery = { status: 503, deliveredAt: "4 minutes ago" };
+  localStorage.setItem(organizationIntegrationsKey, JSON.stringify(data));
+  render(<OrganizationIntegrations />);
+  const row = screen.getByText("Operations relay").closest("button")!;
+  row.focus();
+  await user.keyboard("{Enter}");
+  let details = screen.getByRole("dialog", { name: "Operations relay" });
+  act(() => {
+    localStorage.setItem(organizationIntegrationsKey, "broken");
+    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+  });
+  expect(
+    (within(details).getByRole("button", { name: "Edit" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    (
+      within(details).getByRole("button", {
+        name: "Delete",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  const retry = within(details).getByRole("button", {
+    name: "Retry delivery",
+  }) as HTMLButtonElement;
+  expect(retry.disabled).toBe(false);
+  await user.click(retry);
+  expect(within(details).getByRole("status").textContent).toContain(
+    "isn't available",
+  );
+  act(() => {
+    localStorage.setItem(organizationIntegrationsKey, JSON.stringify(data));
+    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+  });
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  row.focus();
+  await user.keyboard("{Enter}");
+  details = screen.getByRole("dialog", { name: "Operations relay" });
+  expect(within(details).queryByRole("status")).toBeNull();
+});

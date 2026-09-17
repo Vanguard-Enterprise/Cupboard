@@ -2,22 +2,15 @@
 
 import { useRef, useState, useSyncExternalStore } from "react";
 import {
-  CheckCircle2Icon,
   CircleAlertIcon,
   ClipboardIcon,
-  EyeIcon,
   KeyRoundIcon,
-  MoreHorizontalIcon,
-  PauseIcon,
-  PencilIcon,
-  PlayIcon,
   PlusIcon,
   RadioTowerIcon,
   RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -41,21 +34,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
   createCredentialSecret,
   defaultOrganizationIntegrations,
   organizationIntegrationsKey,
@@ -67,6 +45,10 @@ import {
   type WebhookEndpoint,
   type WebhookEvent,
 } from "@/lib/organization-integrations";
+
+import { CredentialRow } from "./organization-integrations/credential-row";
+import { WebhookRow } from "./organization-integrations/webhook-row";
+import { WebhookDetailsSheet } from "./organization-integrations/webhook-details-sheet";
 
 type Feedback = { kind: "status" | "alert"; message: string } | null;
 
@@ -142,201 +124,6 @@ function editableWebhookSnapshot(webhook: WebhookEndpoint): string {
     url: webhook.url,
     events: [...webhook.events].sort(),
   });
-}
-
-function CredentialRow({
-  credential,
-  onRotate,
-  onRevoke,
-  disabled,
-}: {
-  credential: ApiCredential;
-  onRotate: (credential: ApiCredential) => void;
-  onRevoke: (credential: ApiCredential) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="grid gap-3 px-5 py-4 sm:px-6 md:grid-cols-[minmax(0,1.4fr)_10rem_10rem_auto] md:items-center">
-      <div className="min-w-0">
-        <p className="font-medium">{credential.name}</p>
-        <code className="mt-1.5 block font-mono text-xs text-muted-foreground">
-          {credential.prefix}
-        </code>
-      </div>
-      <div className="grid grid-cols-[5rem_1fr] items-baseline gap-2 md:block">
-        <p className="text-xs text-text-muted">Created</p>
-        <p className="text-sm text-muted-foreground md:mt-1">
-          {credential.createdAt}
-        </p>
-      </div>
-      <div className="grid grid-cols-[5rem_1fr] items-baseline gap-2 md:block">
-        <p className="text-xs text-text-muted">Last used</p>
-        <p className="text-sm text-muted-foreground md:mt-1">
-          {credential.lastUsed ?? "Never used"}
-        </p>
-      </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-9 justify-self-start text-text-muted [@media(any-pointer:coarse)]:size-11 md:justify-self-end"
-            aria-label={`Credential actions for ${credential.name}`}
-            disabled={disabled}
-          >
-            <MoreHorizontalIcon aria-hidden="true" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-40">
-          <DropdownMenuItem
-            className="cursor-pointer"
-            onSelect={() => onRotate(credential)}
-          >
-            <RefreshCwIcon aria-hidden="true" />
-            Rotate key
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            variant="destructive"
-            className="cursor-pointer"
-            onSelect={() => onRevoke(credential)}
-          >
-            <Trash2Icon aria-hidden="true" />
-            Revoke
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
-
-function WebhookRow({
-  webhook,
-  onOpen,
-  onEdit,
-  onToggle,
-  onDelete,
-  disabled,
-}: {
-  webhook: WebhookEndpoint;
-  onOpen: (webhook: WebhookEndpoint) => void;
-  onEdit: (webhook: WebhookEndpoint) => void;
-  onToggle: (webhook: WebhookEndpoint) => void;
-  onDelete: (webhook: WebhookEndpoint) => void;
-  disabled: boolean;
-}) {
-  const failed = Boolean(
-    webhook.lastDelivery && webhook.lastDelivery.status >= 400,
-  );
-  const status = !webhook.enabled
-    ? "Paused"
-    : failed
-      ? "Delivery failed"
-      : "Active";
-  const delivery = webhook.lastDelivery
-    ? failed
-      ? `Last delivery failed ${webhook.lastDelivery.deliveredAt}`
-      : `Last delivery ${webhook.lastDelivery.deliveredAt}`
-    : "No deliveries yet";
-  return (
-    <div className="group grid grid-cols-[minmax(0,1fr)_auto] items-center transition-colors hover:bg-surface-elevated focus-within:bg-surface-elevated">
-      <button
-        type="button"
-        className="min-w-0 px-5 py-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 sm:px-6"
-        onClick={() => onOpen(webhook)}
-        disabled={disabled}
-      >
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-medium text-foreground">{webhook.name}</p>
-              <Badge
-                variant={failed ? "destructive" : "outline"}
-                className={
-                  failed
-                    ? undefined
-                    : webhook.enabled
-                      ? "border-primary/30 bg-primary/10 text-primary"
-                      : "text-muted-foreground"
-                }
-              >
-                <span
-                  className={`size-1.5 rounded-full ${failed ? "bg-destructive" : webhook.enabled ? "bg-primary" : "bg-text-muted"}`}
-                />
-                {status}
-              </Badge>
-            </div>
-            <p className="mt-1.5 truncate font-mono text-xs text-muted-foreground">
-              {webhook.url}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-              <span>
-                {webhook.events.length}{" "}
-                {webhook.events.length === 1
-                  ? "subscribed event"
-                  : "subscribed events"}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className={failed ? "text-destructive" : undefined}>
-                {delivery}
-              </span>
-            </div>
-          </div>
-        </div>
-      </button>
-      <div className="pr-4 sm:pr-5">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-9 text-muted-foreground [@media(any-pointer:coarse)]:size-11"
-              aria-label={`Manage ${webhook.name}`}
-              disabled={disabled}
-            >
-              <MoreHorizontalIcon aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-40">
-            <DropdownMenuItem
-              className="cursor-pointer"
-              onSelect={() => onOpen(webhook)}
-            >
-              <EyeIcon aria-hidden="true" />
-              View
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="cursor-pointer"
-              onSelect={() => onEdit(webhook)}
-            >
-              <PencilIcon aria-hidden="true" />
-              Edit
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="cursor-pointer"
-              onSelect={() => onToggle(webhook)}
-            >
-              {webhook.enabled ? (
-                <PauseIcon aria-hidden="true" />
-              ) : (
-                <PlayIcon aria-hidden="true" />
-              )}
-              {webhook.enabled ? "Pause" : "Resume"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              className="cursor-pointer"
-              onSelect={() => onDelete(webhook)}
-            >
-              <Trash2Icon aria-hidden="true" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </div>
-  );
 }
 
 export function OrganizationIntegrations() {
@@ -1298,182 +1085,27 @@ export function OrganizationIntegrations() {
         </DialogContent>
       </Dialog>
 
-      <Sheet
-        open={Boolean(selectedWebhook)}
+      <WebhookDetailsSheet
+        webhook={selectedWebhook}
+        storageUnreadable={storageUnreadable}
+        retryUnavailable={retryUnavailable}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedWebhookId(null);
             setRetryUnavailable(false);
           }
         }}
-      >
-        <SheetContent className="w-full gap-0 sm:max-w-[452px]">
-          {selectedWebhook && (
-            <>
-              <SheetHeader className="border-b px-6 py-5 pr-14">
-                <div className="flex flex-wrap items-center gap-2">
-                  <SheetTitle className="text-lg">
-                    {selectedWebhook.name}
-                  </SheetTitle>
-                  <Badge
-                    variant={
-                      selectedWebhook.lastDelivery &&
-                      selectedWebhook.lastDelivery.status >= 400
-                        ? "destructive"
-                        : "outline"
-                    }
-                    className={
-                      selectedWebhook.lastDelivery &&
-                      selectedWebhook.lastDelivery.status >= 400
-                        ? undefined
-                        : selectedWebhook.enabled
-                          ? "border-primary/30 bg-primary/10 text-primary"
-                          : "text-muted-foreground"
-                    }
-                  >
-                    {selectedWebhook.lastDelivery &&
-                    selectedWebhook.lastDelivery.status >= 400
-                      ? "Delivery failed"
-                      : selectedWebhook.enabled
-                        ? "Active"
-                        : "Paused"}
-                  </Badge>
-                </div>
-                <SheetDescription className="sr-only">
-                  Webhook details and recent delivery activity
-                </SheetDescription>
-              </SheetHeader>
-
-              <div className="flex-1 overflow-y-auto px-6 py-5">
-                <dl className="grid gap-5">
-                  <div>
-                    <dt className="text-xs text-text-muted">Endpoint URL</dt>
-                    <dd className="mt-2 break-all rounded-lg border bg-input-background px-3 py-2 font-mono text-xs text-muted-foreground">
-                      {selectedWebhook.url}
-                    </dd>
-                  </div>
-                  <div className="grid gap-5 sm:grid-cols-2">
-                    <div>
-                      <dt className="text-xs text-text-muted">
-                        Signing secret
-                      </dt>
-                      <dd className="mt-1.5 text-sm text-muted-foreground">
-                        Not configured
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-text-muted">Created</dt>
-                      <dd className="mt-1.5 text-sm text-muted-foreground">
-                        {selectedWebhook.createdAt}
-                      </dd>
-                    </div>
-                  </div>
-                  <div>
-                    <dt className="text-xs text-text-muted">
-                      Subscribed events
-                    </dt>
-                    <dd className="mt-2 flex flex-wrap gap-2">
-                      {selectedWebhook.events.map((event) => (
-                        <Badge key={event} variant="secondary">
-                          {webhookEvents.find((item) => item.id === event)
-                            ?.label ?? event}
-                        </Badge>
-                      ))}
-                    </dd>
-                  </div>
-                </dl>
-
-                <section aria-labelledby="recent-deliveries" className="mt-7">
-                  <h3 id="recent-deliveries" className="text-sm font-medium">
-                    Recent deliveries
-                  </h3>
-                  <div className="mt-3 overflow-hidden rounded-xl border">
-                    {selectedWebhook.lastDelivery ? (
-                      <div className="flex items-center justify-between gap-4 px-4 py-3">
-                        <div className="flex min-w-0 items-center gap-3">
-                          {selectedWebhook.lastDelivery.status >= 400 ? (
-                            <CircleAlertIcon
-                              className="size-4 shrink-0 text-destructive"
-                              aria-hidden="true"
-                            />
-                          ) : (
-                            <CheckCircle2Icon
-                              className="size-4 shrink-0 text-primary"
-                              aria-hidden="true"
-                            />
-                          )}
-                          <div>
-                            <p className="text-sm">
-                              {selectedWebhook.lastDelivery.status >= 400
-                                ? "Delivery failed"
-                                : "Delivered"}
-                            </p>
-                            <p className="mt-1 text-xs text-text-muted">
-                              {selectedWebhook.lastDelivery.deliveredAt}
-                            </p>
-                          </div>
-                        </div>
-                        <code className="rounded-md bg-surface-elevated px-2 py-1 font-mono text-xs text-muted-foreground">
-                          HTTP {selectedWebhook.lastDelivery.status}
-                        </code>
-                      </div>
-                    ) : (
-                      <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-                        No deliveries yet
-                      </p>
-                    )}
-                  </div>
-                  {retryUnavailable && (
-                    <p role="status" className="mt-3 text-xs text-destructive">
-                      Retry delivery isn&apos;t available in this sample-data
-                      preview.
-                    </p>
-                  )}
-                </section>
-              </div>
-
-              <SheetFooter className="border-t px-6 py-4 sm:flex-row">
-                {selectedWebhook.lastDelivery &&
-                  selectedWebhook.lastDelivery.status >= 400 && (
-                    <Button
-                      variant="outline"
-                      className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-                      onClick={() => setRetryUnavailable(true)}
-                    >
-                      <RefreshCwIcon aria-hidden="true" />
-                      Retry delivery
-                    </Button>
-                  )}
-                <Button
-                  variant="outline"
-                  className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-                  onClick={() => editWebhook(selectedWebhook)}
-                  disabled={storageUnreadable}
-                >
-                  <PencilIcon aria-hidden="true" />
-                  Edit
-                </Button>
-                <Button
-                  variant="destructive"
-                  className="h-10 [@media(any-pointer:coarse)]:min-h-11 sm:ml-auto"
-                  onClick={() => {
-                    setSelectedWebhookId(null);
-                    setWebhookDeleteStartedWithMissingKey(
-                      integrationsSnapshot() === null,
-                    );
-                    setWebhookDeleteConflict(null);
-                    setWebhookToDelete(selectedWebhook);
-                  }}
-                  disabled={storageUnreadable}
-                >
-                  <Trash2Icon aria-hidden="true" />
-                  Delete
-                </Button>
-              </SheetFooter>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
+        onRetry={() => setRetryUnavailable(true)}
+        onEdit={editWebhook}
+        onDelete={(webhook) => {
+          setSelectedWebhookId(null);
+          setWebhookDeleteStartedWithMissingKey(
+            integrationsSnapshot() === null,
+          );
+          setWebhookDeleteConflict(null);
+          setWebhookToDelete(webhook);
+        }}
+      />
 
       <AlertDialog
         open={unreadableToReplace !== null}
