@@ -1,9 +1,11 @@
 import Image from "next/image";
 import Link from "next/link";
-import { SignupForm } from "@/components/signup-form";
-import { FieldDescription } from "@/components/ui/field";
 
-export default function SignupPage() {
+export default function AuthLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <div className="grid min-h-svh bg-background text-foreground lg:grid-cols-2">
       <div className="flex flex-col gap-4 p-6 md:p-10">
@@ -16,14 +18,7 @@ export default function SignupPage() {
           </Link>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <div className="w-full max-w-xs">
-            <SignupForm />
-            <div className="mt-6">
-              <FieldDescription className="text-center">
-                Already have an account? <Link href="/login">Sign in</Link>
-              </FieldDescription>
-            </div>
-          </div>
+          <div className="w-full max-w-xs">{children}</div>
         </div>
       </div>
       <div className="relative hidden overflow-hidden bg-background lg:block">
