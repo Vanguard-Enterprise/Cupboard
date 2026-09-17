@@ -1,6 +1,7 @@
 "use client";
 
 import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
+import { createRawPreviewStore } from "@/lib/browser-preview-store";
 import {
   createContext,
   useContext,
@@ -14,34 +15,8 @@ import {
   type OrganizationProfile,
 } from "@/lib/organization-profile";
 
-function subscribe(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationPreviewStorage.profile.key)
-      callback();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener(
-    organizationPreviewStorage.profile.changedEvent,
-    callback,
-  );
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener(
-      organizationPreviewStorage.profile.changedEvent,
-      callback,
-    );
-  };
-}
-function snapshot() {
-  try {
-    return (
-      window.localStorage.getItem(organizationPreviewStorage.profile.key) ?? ""
-    );
-  } catch {
-    return "storage-unavailable";
-  }
-}
-const serverSnapshot = () => null;
+const profileStore = createRawPreviewStore(organizationPreviewStorage.profile);
+
 const OrganizationContext = createContext<{
   profile: OrganizationProfile;
   ready: boolean;
@@ -54,32 +29,36 @@ export function OrganizationProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const raw = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
+  const raw = useSyncExternalStore(
+    profileStore.subscribe,
+    profileStore.getSnapshot,
+    profileStore.getServerSnapshot,
+  );
   const value = useMemo(() => {
     let profile = defaultOrganizationProfile;
-    let storageError = "";
-    if (raw) {
+    let status: "defaults" | "loaded" | "unreadable" | "unavailable" =
+      "defaults";
+    if (raw.status === "unavailable") status = "unavailable";
+    else if (raw.status === "available" && raw.raw) {
       try {
-        profile = parseProfile(raw);
+        profile = parseProfile(raw.raw);
+        status = "loaded";
       } catch {
-        storageError =
-          "Saved organization details could not be loaded. Saving will replace the local copy.";
+        status = "unreadable";
       }
     }
+    const storageError =
+      status === "unreadable" || status === "unavailable"
+        ? "Saved organization details could not be loaded. Saving will replace the local copy."
+        : "";
     return {
       profile,
-      ready: raw !== null,
+      ready: raw.status !== "not-ready",
       storageError,
       save: (next: OrganizationProfile) => {
         if (Object.keys(validateProfile(next)).length)
           throw new Error("Check the highlighted fields.");
-        window.localStorage.setItem(
-          organizationPreviewStorage.profile.key,
-          JSON.stringify(next),
-        );
-        window.dispatchEvent(
-          new Event(organizationPreviewStorage.profile.changedEvent),
-        );
+        profileStore.write(JSON.stringify(next));
       },
     };
   }, [raw]);
