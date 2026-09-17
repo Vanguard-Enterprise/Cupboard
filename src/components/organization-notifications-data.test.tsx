@@ -1,3 +1,4 @@
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import { implementedPages } from "@/lib/implemented-pages";
 // @vitest-environment jsdom
 import {
@@ -11,24 +12,11 @@ import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationNotificationsData } from "./organization-notifications-data";
-import {
-  defaultOrganizationNotifications,
-  organizationNotificationsKey,
-} from "@/lib/organization-notifications";
-import {
-  defaultOrganizationProfile,
-  organizationProfileKey,
-} from "@/lib/organization-profile";
-import { securityAlertStorageKey } from "@/lib/security-alerts";
-import {
-  defaultOrganizationIntegrations,
-  organizationIntegrationsKey,
-} from "@/lib/organization-integrations";
+import { defaultOrganizationNotifications } from "@/lib/organization-notifications";
+import { defaultOrganizationProfile } from "@/lib/organization-profile";
+import { defaultOrganizationIntegrations } from "@/lib/organization-integrations";
 import { navigationHref } from "@/lib/dashboard-navigation";
-import {
-  defaultOrganizationAccess,
-  organizationAccessKey,
-} from "@/lib/organization-access";
+import { defaultOrganizationAccess } from "@/lib/organization-access";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -49,11 +37,13 @@ const notificationSwitch = (name: string) =>
 function externalSave(preferences: typeof defaultOrganizationNotifications) {
   act(() => {
     localStorage.setItem(
-      organizationNotificationsKey,
+      organizationPreviewStorage.notifications.key,
       JSON.stringify(preferences),
     );
     window.dispatchEvent(
-      new StorageEvent("storage", { key: organizationNotificationsKey }),
+      new StorageEvent("storage", {
+        key: organizationPreviewStorage.notifications.key,
+      }),
     );
   });
 }
@@ -133,7 +123,9 @@ describe("Organization notifications and data", () => {
     await user.click(notificationSwitch("Weekly summary"));
     await user.click(saveButton());
     expect(
-      JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.notifications.key)!,
+      ),
     ).toMatchObject({ weeklySummary: true });
     expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
 
@@ -169,7 +161,10 @@ describe("Organization notifications and data", () => {
   });
 
   it("reports unreadable data and replaces it when the operator saves", async () => {
-    localStorage.setItem(organizationNotificationsKey, "not-json");
+    localStorage.setItem(
+      organizationPreviewStorage.notifications.key,
+      "not-json",
+    );
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
 
@@ -180,7 +175,9 @@ describe("Organization notifications and data", () => {
     expect(cancelButton().disabled).toBe(true);
     await user.click(saveButton());
     expect(
-      JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.notifications.key)!,
+      ),
     ).toEqual(defaultOrganizationNotifications);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
@@ -204,24 +201,30 @@ describe("Organization notifications and data", () => {
 
   it("confirms and clears only Cupboard organization preview data", async () => {
     localStorage.setItem(
-      organizationProfileKey,
+      organizationPreviewStorage.profile.key,
       JSON.stringify({ ...defaultOrganizationProfile, name: "Saved org" }),
     );
     localStorage.setItem(
-      organizationNotificationsKey,
+      organizationPreviewStorage.notifications.key,
       JSON.stringify({
         ...defaultOrganizationNotifications,
         weeklySummary: true,
       }),
     );
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
-    localStorage.setItem(securityAlertStorageKey, JSON.stringify(["SEC-2041"]));
+    localStorage.setItem(
+      organizationPreviewStorage.securityAlerts.key,
+      JSON.stringify(["SEC-2041"]),
+    );
     const savedAccess = structuredClone(defaultOrganizationAccess);
     savedAccess.rules[0].enabled = false;
-    localStorage.setItem(organizationAccessKey, JSON.stringify(savedAccess));
+    localStorage.setItem(
+      organizationPreviewStorage.access.key,
+      JSON.stringify(savedAccess),
+    );
     localStorage.setItem("unrelated", "keep me");
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
@@ -235,11 +238,21 @@ describe("Organization notifications and data", () => {
       within(dialog).getByRole("button", { name: "Clear local data" }),
     );
 
-    expect(localStorage.getItem(organizationProfileKey)).toBeNull();
-    expect(localStorage.getItem(organizationNotificationsKey)).toBeNull();
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
-    expect(localStorage.getItem(securityAlertStorageKey)).toBeNull();
-    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.profile.key),
+    ).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.notifications.key),
+    ).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.securityAlerts.key),
+    ).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.access.key),
+    ).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
     expect(screen.getByRole("status").textContent).toBe("Local data cleared.");
     expect(
@@ -252,7 +265,8 @@ describe("storage characterization", () => {
   it.each([null, "", "not-json", '{"invalid":true}'])(
     "preserves defaults and warning for %s",
     (raw) => {
-      if (raw !== null) seedRaw(organizationNotificationsKey, raw);
+      if (raw !== null)
+        seedRaw(organizationPreviewStorage.notifications.key, raw);
       render(<OrganizationNotificationsData />);
       expect(
         notificationSwitch("Weekly summary").getAttribute("data-state"),
@@ -270,7 +284,7 @@ describe("storage characterization", () => {
         ...defaultOrganizationNotifications,
         weeklySummary: true,
       });
-      seedRaw(organizationNotificationsKey, raw);
+      seedRaw(organizationPreviewStorage.notifications.key, raw);
       const restore = failStorage(method);
       render(<OrganizationNotificationsData />);
       expect(screen.getByText(/Saved .* could not be loaded/)).toBeTruthy();
@@ -278,7 +292,9 @@ describe("storage characterization", () => {
         notificationSwitch("Weekly summary").getAttribute("data-state"),
       ).toBe("unchecked");
       restore();
-      act(() => dispatchSameTab("cupboard-notifications-saved"));
+      act(() =>
+        dispatchSameTab(organizationPreviewStorage.notifications.changedEvent),
+      );
       expect(
         notificationSwitch("Weekly summary").getAttribute("data-state"),
       ).toBe("checked");
@@ -295,17 +311,23 @@ describe("storage characterization", () => {
         weeklySummary: true,
       });
       act(() => {
-        seedRaw(organizationNotificationsKey, raw);
+        seedRaw(organizationPreviewStorage.notifications.key, raw);
         dispatchCrossTab({ key: "unrelated", oldValue: null, newValue: raw });
       });
       expect(
         notificationSwitch("Weekly summary").getAttribute("data-state"),
       ).toBe("unchecked");
       act(() => {
-        if (kind === "same") dispatchSameTab("cupboard-notifications-saved");
+        if (kind === "same")
+          dispatchSameTab(
+            organizationPreviewStorage.notifications.changedEvent,
+          );
         else
           dispatchCrossTab({
-            key: kind === "clear" ? null : organizationNotificationsKey,
+            key:
+              kind === "clear"
+                ? null
+                : organizationPreviewStorage.notifications.key,
             oldValue: null,
             newValue: raw,
           });
@@ -314,7 +336,7 @@ describe("storage characterization", () => {
         notificationSwitch("Weekly summary").getAttribute("data-state"),
       ).toBe("checked");
       act(() => {
-        removeRaw(organizationNotificationsKey);
+        removeRaw(organizationPreviewStorage.notifications.key);
         dispatchCrossTab({ key: null, oldValue: raw, newValue: null });
       });
       expect(
@@ -344,9 +366,12 @@ const clearTrace = [
 it.each([0, 1, 2, 3, 4, null])(
   "preserves clear ordering and partial progress at removal %s",
   async (failure) => {
+    expect(
+      Object.values(organizationPreviewStorage).map(({ key }) => key),
+    ).toEqual(clearKeys);
     for (const key of clearKeys) seedRaw(key, "{}");
     seedRaw(
-      organizationNotificationsKey,
+      organizationPreviewStorage.notifications.key,
       JSON.stringify(defaultOrganizationNotifications),
     );
     seedRaw("unrelated", "keep");

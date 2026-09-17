@@ -1,6 +1,4 @@
 import { implementedPages } from "./implemented-pages";
-export const organizationProfileKey =
-  "cupboard:organization:local-preview:profile:v1";
 export const defaultOrganizationProfile = {
   name: "Cupboard",
   description: "",

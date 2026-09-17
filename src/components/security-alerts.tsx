@@ -1,5 +1,6 @@
 "use client";
 
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import {
   useEffect,
   useLayoutEffect,
@@ -39,7 +40,6 @@ import { cn } from "@/lib/utils";
 import {
   initiallyAcknowledgedAlertIds,
   securityAlerts,
-  securityAlertStorageKey,
   type AlertSeverity,
   type SecurityAlert,
 } from "@/lib/security-alerts";
@@ -70,19 +70,33 @@ const storageUnavailable = "storage-unavailable";
 
 function subscribeToAcknowledgements(callback: () => void) {
   const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === securityAlertStorageKey) callback();
+    if (
+      !event.key ||
+      event.key === organizationPreviewStorage.securityAlerts.key
+    )
+      callback();
   };
   window.addEventListener("storage", onStorage);
-  window.addEventListener("cupboard-security-alerts-saved", callback);
+  window.addEventListener(
+    organizationPreviewStorage.securityAlerts.changedEvent,
+    callback,
+  );
   return () => {
     window.removeEventListener("storage", onStorage);
-    window.removeEventListener("cupboard-security-alerts-saved", callback);
+    window.removeEventListener(
+      organizationPreviewStorage.securityAlerts.changedEvent,
+      callback,
+    );
   };
 }
 
 function acknowledgementSnapshot() {
   try {
-    return window.localStorage.getItem(securityAlertStorageKey) ?? "";
+    return (
+      window.localStorage.getItem(
+        organizationPreviewStorage.securityAlerts.key,
+      ) ?? ""
+    );
   } catch {
     return storageUnavailable;
   }
@@ -473,10 +487,12 @@ export function SecurityAlerts() {
     setSaveError("");
     try {
       window.localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify([...next]),
       );
-      window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.securityAlerts.changedEvent),
+      );
       setSessionAcknowledgementOverrides(new Map());
     } catch {
       const nextOverrides = new Map(effectiveSessionOverrides);

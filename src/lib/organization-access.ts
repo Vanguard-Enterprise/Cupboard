@@ -1,7 +1,3 @@
-export const organizationAccessKey =
-  "cupboard:organization:local-preview:access:v1";
-export const organizationAccessChangedEvent = "cupboard-access-saved";
-
 export const roles = ["owner", "administrator", "operator", "viewer"] as const;
 export type OrganizationRole = (typeof roles)[number];
 

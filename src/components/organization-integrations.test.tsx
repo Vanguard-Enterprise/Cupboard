@@ -1,3 +1,4 @@
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 // @vitest-environment jsdom
 import {
   act,
@@ -10,10 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationIntegrations } from "./organization-integrations";
-import {
-  defaultOrganizationIntegrations,
-  organizationIntegrationsKey,
-} from "@/lib/organization-integrations";
+import { defaultOrganizationIntegrations } from "@/lib/organization-integrations";
 
 beforeEach(() => {
   localStorage.clear();
@@ -34,12 +32,14 @@ afterEach(() => {
 });
 
 function clearIntegrationsAsExternalUpdate() {
-  const oldValue = localStorage.getItem(organizationIntegrationsKey);
+  const oldValue = localStorage.getItem(
+    organizationPreviewStorage.integrations.key,
+  );
   act(() => {
-    localStorage.removeItem(organizationIntegrationsKey);
+    localStorage.removeItem(organizationPreviewStorage.integrations.key);
     window.dispatchEvent(
       new StorageEvent("storage", {
-        key: organizationIntegrationsKey,
+        key: organizationPreviewStorage.integrations.key,
         oldValue,
         newValue: null,
       }),
@@ -96,7 +96,9 @@ describe("Organization credentials and webhooks", () => {
 
     const secret = screen.getByTestId("created-credential").textContent!;
     expect(secret).toMatch(/^cb_live_[A-F0-9]{36}$/);
-    const stored = localStorage.getItem(organizationIntegrationsKey)!;
+    const stored = localStorage.getItem(
+      organizationPreviewStorage.integrations.key,
+    )!;
     expect(stored).toContain("Deploy agent");
     expect(stored).not.toContain(secret);
 
@@ -136,7 +138,7 @@ describe("Organization credentials and webhooks", () => {
     });
     concurrent.webhooks[0].name = "Updated elsewhere";
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(concurrent),
     );
 
@@ -147,7 +149,7 @@ describe("Organization credentials and webhooks", () => {
     );
 
     const stored = JSON.parse(
-      localStorage.getItem(organizationIntegrationsKey)!,
+      localStorage.getItem(organizationPreviewStorage.integrations.key)!,
     );
     expect(
       stored.credentials.map((item: { name: string }) => item.name),
@@ -158,7 +160,7 @@ describe("Organization credentials and webhooks", () => {
   it("does not recreate cleared data from an open credential form", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -175,7 +177,9 @@ describe("Organization credentials and webhooks", () => {
         .querySelector('button[type="submit"]')!,
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
     const dialog = screen.getByRole("dialog", {
       name: "Create API credential",
     });
@@ -202,7 +206,7 @@ describe("Organization credentials and webhooks", () => {
       screen.getByRole("textbox", { name: "Credential name" }),
       "Deploy agent",
     );
-    localStorage.setItem(organizationIntegrationsKey, "");
+    localStorage.setItem(organizationPreviewStorage.integrations.key, "");
 
     await user.click(
       screen
@@ -210,7 +214,9 @@ describe("Organization credentials and webhooks", () => {
         .querySelector('button[type="submit"]')!,
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe("");
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBe("");
     expect(
       screen.getByRole("alertdialog", {
         name: "Replace unreadable integration data?",
@@ -236,16 +242,16 @@ describe("Organization credentials and webhooks", () => {
     ).toBe("Deploy agent");
 
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     await user.click(
       within(restored).getByRole("button", { name: "Create credential" }),
     );
     expect(screen.getByTestId("created-credential")).toBeTruthy();
-    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
-      "Deploy agent",
-    );
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toContain("Deploy agent");
   });
 
   it("preserves a webhook draft when integration data becomes unreadable", async () => {
@@ -262,7 +268,10 @@ describe("Organization credentials and webhooks", () => {
       "https://hooks.example.com/incidents",
     );
     await user.click(screen.getByRole("checkbox", { name: "Player reported" }));
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      "unreadable-data",
+    );
 
     await user.click(
       screen
@@ -295,21 +304,21 @@ describe("Organization credentials and webhooks", () => {
     ).toBe("checked");
 
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     await user.click(
       within(restored).getByRole("button", { name: "Add webhook" }),
     );
-    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
-      "Incident relay",
-    );
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toContain("Incident relay");
   });
 
   it("rebases a credential draft after replacing unreadable data", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -319,7 +328,10 @@ describe("Organization credentials and webhooks", () => {
       screen.getByRole("textbox", { name: "Credential name" }),
       "Recovered draft",
     );
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      "unreadable-data",
+    );
     await user.click(
       screen
         .getByRole("dialog", { name: "Create API credential" })
@@ -346,9 +358,9 @@ describe("Organization credentials and webhooks", () => {
       within(restored).getByRole("button", { name: "Create credential" }),
     );
     expect(screen.getByTestId("created-credential")).toBeTruthy();
-    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
-      "Recovered draft",
-    );
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toContain("Recovered draft");
     expect(
       screen.queryByText(
         "Integration data was cleared in another tab. Close and reopen this form before creating a credential.",
@@ -359,7 +371,7 @@ describe("Organization credentials and webhooks", () => {
   it("rebases a new webhook draft after replacing unreadable data", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -377,7 +389,10 @@ describe("Organization credentials and webhooks", () => {
     await user.click(
       within(dialog).getByRole("checkbox", { name: "Player reported" }),
     );
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      "unreadable-data",
+    );
     await user.click(
       within(dialog).getByRole("button", { name: "Add webhook" }),
     );
@@ -394,15 +409,15 @@ describe("Organization credentials and webhooks", () => {
       within(restored).getByRole("button", { name: "Add webhook" }),
     );
     expect(screen.getByText("Recovered webhook")).toBeTruthy();
-    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
-      "https://hooks.example.com/recovered",
-    );
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toContain("https://hooks.example.com/recovered");
   });
 
   it("rebases a sample webhook edit after replacing unreadable data", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -415,7 +430,10 @@ describe("Organization credentials and webhooks", () => {
     const name = within(dialog).getByRole("textbox", { name: "Webhook name" });
     await user.clear(name);
     await user.type(name, "Recovered sample webhook");
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      "unreadable-data",
+    );
     await user.click(
       within(dialog).getByRole("button", { name: "Save changes" }),
     );
@@ -432,14 +450,14 @@ describe("Organization credentials and webhooks", () => {
       within(restored).getByRole("button", { name: "Save changes" }),
     );
     expect(screen.getByText("Recovered sample webhook")).toBeTruthy();
-    expect(localStorage.getItem(organizationIntegrationsKey)).toContain(
-      "Recovered sample webhook",
-    );
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toContain("Recovered sample webhook");
   });
 
   it("requires confirmation before replacing unreadable integration data", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(organizationIntegrationsKey, "");
+    localStorage.setItem(organizationPreviewStorage.integrations.key, "");
     localStorage.setItem("unrelated-preview-data", "keep-me");
     render(<OrganizationIntegrations />);
 
@@ -480,7 +498,9 @@ describe("Organization credentials and webhooks", () => {
     const confirmation = screen.getByRole("alertdialog", {
       name: "Replace unreadable integration data?",
     });
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe("");
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBe("");
     expect(
       within(confirmation)
         .getByRole("button", { name: "Keep data" })
@@ -497,7 +517,9 @@ describe("Organization credentials and webhooks", () => {
         name: "Replace local data",
       }),
     );
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
     expect(localStorage.getItem("unrelated-preview-data")).toBe("keep-me");
     expect(
       screen.queryByText(
@@ -515,7 +537,10 @@ describe("Organization credentials and webhooks", () => {
 
   it("does not replace integration data repaired after confirmation opens", async () => {
     const user = userEvent.setup();
-    localStorage.setItem(organizationIntegrationsKey, "unreadable-data");
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      "unreadable-data",
+    );
     render(<OrganizationIntegrations />);
 
     await user.click(
@@ -524,7 +549,7 @@ describe("Organization credentials and webhooks", () => {
     const repaired = structuredClone(defaultOrganizationIntegrations);
     repaired.credentials[0].name = "Repaired elsewhere";
     const raw = JSON.stringify(repaired);
-    localStorage.setItem(organizationIntegrationsKey, raw);
+    localStorage.setItem(organizationPreviewStorage.integrations.key, raw);
 
     await user.click(
       screen
@@ -534,7 +559,9 @@ describe("Organization credentials and webhooks", () => {
         .querySelector('[data-slot="alert-dialog-action"]')!,
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(raw);
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBe(raw);
     expect(
       screen.getByText(
         "Saved integration data changed. Review it before replacing.",
@@ -571,17 +598,23 @@ describe("Organization credentials and webhooks", () => {
         lastDelivery: null,
       },
     ];
-    localStorage.setItem(organizationIntegrationsKey, JSON.stringify(custom));
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      JSON.stringify(custom),
+    );
     render(<OrganizationIntegrations />);
 
     await user.click(screen.getByText("Custom webhook").closest("button")!);
     const details = screen.getByRole("dialog", { name: "Custom webhook" });
     const malformed = "unreadable-data";
     act(() => {
-      localStorage.setItem(organizationIntegrationsKey, malformed);
+      localStorage.setItem(
+        organizationPreviewStorage.integrations.key,
+        malformed,
+      );
       window.dispatchEvent(
         new StorageEvent("storage", {
-          key: organizationIntegrationsKey,
+          key: organizationPreviewStorage.integrations.key,
           newValue: malformed,
         }),
       );
@@ -610,17 +643,22 @@ describe("Organization credentials and webhooks", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(malformed);
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBe(malformed);
 
     const recovered = structuredClone(custom);
     recovered.credentials[0].name = "Recovered credential";
     recovered.webhooks[0].name = "Recovered webhook";
     const recoveredRaw = JSON.stringify(recovered);
     act(() => {
-      localStorage.setItem(organizationIntegrationsKey, recoveredRaw);
+      localStorage.setItem(
+        organizationPreviewStorage.integrations.key,
+        recoveredRaw,
+      );
       window.dispatchEvent(
         new StorageEvent("storage", {
-          key: organizationIntegrationsKey,
+          key: organizationPreviewStorage.integrations.key,
           newValue: recoveredRaw,
         }),
       );
@@ -763,8 +801,9 @@ describe("Organization credentials and webhooks", () => {
     expect(screen.getByText("Incident bot")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("Incident bot added.");
     expect(
-      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!)
-        .webhooks[0],
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.integrations.key)!,
+      ).webhooks[0],
     ).toMatchObject({
       name: "Incident bot",
       url: "https://hooks.example.com/cupboard",
@@ -775,7 +814,7 @@ describe("Organization credentials and webhooks", () => {
   it("does not recreate cleared data from an open webhook form", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -798,7 +837,9 @@ describe("Organization credentials and webhooks", () => {
       within(dialog).getByRole("button", { name: "Add webhook" }),
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
     expect(
       within(dialog).getByText(
         "Integration data was cleared in another tab. Close and reopen this form before saving.",
@@ -876,7 +917,9 @@ describe("Organization credentials and webhooks", () => {
     });
     const secret =
       within(rotated).getByTestId("created-credential").textContent!;
-    const stored = localStorage.getItem(organizationIntegrationsKey)!;
+    const stored = localStorage.getItem(
+      organizationPreviewStorage.integrations.key,
+    )!;
     expect(secret).toMatch(/^cb_live_[A-F0-9]{36}$/);
     expect(stored).not.toContain(secret);
     expect(JSON.parse(stored).credentials[0]).toMatchObject({
@@ -889,7 +932,7 @@ describe("Organization credentials and webhooks", () => {
   it("does not recreate cleared data from a credential revocation", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -910,7 +953,9 @@ describe("Organization credentials and webhooks", () => {
       }),
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
     expect(
       within(confirmation).getByText(
         "Integration data was cleared in another tab. Close this confirmation before trying again.",
@@ -959,8 +1004,9 @@ describe("Organization credentials and webhooks", () => {
 
     expect(screen.getByText("Paused")).toBeTruthy();
     expect(
-      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
-        .enabled,
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.integrations.key)!,
+      ).webhooks[0].enabled,
     ).toBe(false);
     expect(screen.getByRole("status").textContent).toBe(
       "Operations relay paused.",
@@ -972,8 +1018,9 @@ describe("Organization credentials and webhooks", () => {
     await user.click(screen.getByRole("menuitem", { name: "Resume" }));
     expect(screen.getByText("Active")).toBeTruthy();
     expect(
-      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
-        .enabled,
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.integrations.key)!,
+      ).webhooks[0].enabled,
     ).toBe(true);
   });
 
@@ -1030,7 +1077,7 @@ describe("Organization credentials and webhooks", () => {
   it("does not recreate cleared data from an open webhook edit", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -1045,7 +1092,9 @@ describe("Organization credentials and webhooks", () => {
       within(dialog).getByRole("button", { name: "Save changes" }),
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
     expect(
       within(dialog).getByText(
         "Integration data was cleared in another tab. Close and reopen this form before saving.",
@@ -1063,7 +1112,7 @@ describe("Organization credentials and webhooks", () => {
   it("does not recreate cleared data from a webhook deletion", async () => {
     const user = userEvent.setup();
     localStorage.setItem(
-      organizationIntegrationsKey,
+      organizationPreviewStorage.integrations.key,
       JSON.stringify(defaultOrganizationIntegrations),
     );
     render(<OrganizationIntegrations />);
@@ -1080,7 +1129,9 @@ describe("Organization credentials and webhooks", () => {
       within(confirmation).getByRole("button", { name: "Delete webhook" }),
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBeNull();
     expect(
       within(confirmation).getByText(
         "Integration data was cleared in another tab. Close this confirmation before trying again.",
@@ -1109,13 +1160,15 @@ describe("Organization credentials and webhooks", () => {
     const changed = structuredClone(defaultOrganizationIntegrations);
     changed.webhooks[0].url = "https://new.example.com/hooks/cupboard";
     const raw = JSON.stringify(changed);
-    localStorage.setItem(organizationIntegrationsKey, raw);
+    localStorage.setItem(organizationPreviewStorage.integrations.key, raw);
 
     await user.click(
       within(confirmation).getByRole("button", { name: "Delete webhook" }),
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(raw);
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBe(raw);
     expect(
       within(confirmation).getByText(
         "This webhook changed in another tab. Close and reopen the confirmation before deleting it.",
@@ -1147,13 +1200,15 @@ describe("Organization credentials and webhooks", () => {
     const deleted = structuredClone(defaultOrganizationIntegrations);
     deleted.webhooks = [];
     const raw = JSON.stringify(deleted);
-    localStorage.setItem(organizationIntegrationsKey, raw);
+    localStorage.setItem(organizationPreviewStorage.integrations.key, raw);
 
     await user.click(
       within(confirmation).getByRole("button", { name: "Delete webhook" }),
     );
 
-    expect(localStorage.getItem(organizationIntegrationsKey)).toBe(raw);
+    expect(
+      localStorage.getItem(organizationPreviewStorage.integrations.key),
+    ).toBe(raw);
     expect(
       within(confirmation).getByText(
         "This webhook was already deleted in another tab. Close this confirmation.",
@@ -1178,14 +1233,16 @@ describe("Organization credentials and webhooks", () => {
     deleted.webhooks = [];
     const raw = JSON.stringify(deleted);
     act(() => {
-      localStorage.setItem(organizationIntegrationsKey, raw);
+      localStorage.setItem(organizationPreviewStorage.integrations.key, raw);
       window.dispatchEvent(
         new StorageEvent("storage", {
-          key: organizationIntegrationsKey,
+          key: organizationPreviewStorage.integrations.key,
           newValue: raw,
         }),
       );
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.integrations.changedEvent),
+      );
     });
 
     fireEvent.submit(editDialog.querySelector("form")!);
@@ -1200,7 +1257,9 @@ describe("Organization credentials and webhooks", () => {
     expect(save.disabled).toBe(true);
 
     expect(
-      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks,
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.integrations.key)!,
+      ).webhooks,
     ).toEqual([]);
     expect(screen.queryByText("Operations relay added.")).toBeNull();
   });
@@ -1224,14 +1283,16 @@ describe("Organization credentials and webhooks", () => {
     };
     const raw = JSON.stringify(changed);
     act(() => {
-      localStorage.setItem(organizationIntegrationsKey, raw);
+      localStorage.setItem(organizationPreviewStorage.integrations.key, raw);
       window.dispatchEvent(
         new StorageEvent("storage", {
-          key: organizationIntegrationsKey,
+          key: organizationPreviewStorage.integrations.key,
           newValue: raw,
         }),
       );
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.integrations.changedEvent),
+      );
     });
 
     fireEvent.submit(editDialog.querySelector("form")!);
@@ -1249,7 +1310,7 @@ describe("Organization credentials and webhooks", () => {
     ).toBe(true);
 
     const stored = JSON.parse(
-      localStorage.getItem(organizationIntegrationsKey)!,
+      localStorage.getItem(organizationPreviewStorage.integrations.key)!,
     );
     expect(stored.webhooks[0]).toMatchObject(changed.webhooks[0]);
     expect(screen.queryByText("Operations relay updated.")).toBeNull();
@@ -1262,7 +1323,10 @@ describe("Organization credentials and webhooks", () => {
       status: 503,
       deliveredAt: "4 minutes ago",
     };
-    localStorage.setItem(organizationIntegrationsKey, JSON.stringify(data));
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      JSON.stringify(data),
+    );
 
     render(<OrganizationIntegrations />);
 
@@ -1285,8 +1349,9 @@ describe("Organization credentials and webhooks", () => {
       within(details).getByRole("button", { name: "Retry delivery" }),
     ).toBeTruthy();
     expect(
-      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
-        .lastDelivery,
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.integrations.key)!,
+      ).webhooks[0].lastDelivery,
     ).toEqual({ status: 503, deliveredAt: "4 minutes ago" });
   });
 });
@@ -1295,15 +1360,20 @@ it("keeps retry available while unreadable and resets its notice on keyboard clo
   const user = userEvent.setup();
   const data = structuredClone(defaultOrganizationIntegrations);
   data.webhooks[0].lastDelivery = { status: 503, deliveredAt: "4 minutes ago" };
-  localStorage.setItem(organizationIntegrationsKey, JSON.stringify(data));
+  localStorage.setItem(
+    organizationPreviewStorage.integrations.key,
+    JSON.stringify(data),
+  );
   render(<OrganizationIntegrations />);
   const row = screen.getByText("Operations relay").closest("button")!;
   row.focus();
   await user.keyboard("{Enter}");
   let details = screen.getByRole("dialog", { name: "Operations relay" });
   act(() => {
-    localStorage.setItem(organizationIntegrationsKey, "broken");
-    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    localStorage.setItem(organizationPreviewStorage.integrations.key, "broken");
+    window.dispatchEvent(
+      new Event(organizationPreviewStorage.integrations.changedEvent),
+    );
   });
   expect(
     (within(details).getByRole("button", { name: "Edit" }) as HTMLButtonElement)
@@ -1325,8 +1395,13 @@ it("keeps retry available while unreadable and resets its notice on keyboard clo
     "isn't available",
   );
   act(() => {
-    localStorage.setItem(organizationIntegrationsKey, JSON.stringify(data));
-    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    localStorage.setItem(
+      organizationPreviewStorage.integrations.key,
+      JSON.stringify(data),
+    );
+    window.dispatchEvent(
+      new Event(organizationPreviewStorage.integrations.changedEvent),
+    );
   });
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();

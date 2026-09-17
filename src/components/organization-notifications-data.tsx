@@ -1,5 +1,6 @@
 "use client";
 
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,17 +19,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   defaultOrganizationNotifications,
-  organizationNotificationsKey,
   parseOrganizationNotifications,
   type OrganizationNotifications,
 } from "@/lib/organization-notifications";
-import { organizationIntegrationsKey } from "@/lib/organization-integrations";
-import { organizationProfileKey } from "@/lib/organization-profile";
-import { securityAlertStorageKey } from "@/lib/security-alerts";
-import {
-  organizationAccessChangedEvent,
-  organizationAccessKey,
-} from "@/lib/organization-access";
 
 const notificationOptions = [
   {
@@ -61,23 +54,35 @@ const notificationOptions = [
   description: string;
 }>;
 
-const notificationsChangedEvent = "cupboard-notifications-saved";
-
 function subscribe(callback: () => void) {
   const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationNotificationsKey) callback();
+    if (
+      !event.key ||
+      event.key === organizationPreviewStorage.notifications.key
+    )
+      callback();
   };
   window.addEventListener("storage", onStorage);
-  window.addEventListener(notificationsChangedEvent, callback);
+  window.addEventListener(
+    organizationPreviewStorage.notifications.changedEvent,
+    callback,
+  );
   return () => {
     window.removeEventListener("storage", onStorage);
-    window.removeEventListener(notificationsChangedEvent, callback);
+    window.removeEventListener(
+      organizationPreviewStorage.notifications.changedEvent,
+      callback,
+    );
   };
 }
 
 function snapshot() {
   try {
-    return window.localStorage.getItem(organizationNotificationsKey) ?? "";
+    return (
+      window.localStorage.getItem(
+        organizationPreviewStorage.notifications.key,
+      ) ?? ""
+    );
   } catch {
     return "storage-unavailable";
   }
@@ -106,10 +111,12 @@ function useSavedNotifications() {
       needsReplacement: Boolean(storageError),
       save(next: OrganizationNotifications) {
         window.localStorage.setItem(
-          organizationNotificationsKey,
+          organizationPreviewStorage.notifications.key,
           JSON.stringify(next),
         );
-        window.dispatchEvent(new Event(notificationsChangedEvent));
+        window.dispatchEvent(
+          new Event(organizationPreviewStorage.notifications.changedEvent),
+        );
       },
     };
   }, [raw]);
@@ -267,16 +274,32 @@ export function OrganizationNotificationsData() {
     setClearError("");
     setClearedNotice(false);
     try {
-      window.localStorage.removeItem(organizationProfileKey);
-      window.localStorage.removeItem(organizationNotificationsKey);
-      window.localStorage.removeItem(organizationIntegrationsKey);
-      window.localStorage.removeItem(organizationAccessKey);
-      window.dispatchEvent(new Event("cupboard-profile-saved"));
-      window.dispatchEvent(new Event(notificationsChangedEvent));
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
-      window.localStorage.removeItem(securityAlertStorageKey);
-      window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
-      window.dispatchEvent(new Event(organizationAccessChangedEvent));
+      window.localStorage.removeItem(organizationPreviewStorage.profile.key);
+      window.localStorage.removeItem(
+        organizationPreviewStorage.notifications.key,
+      );
+      window.localStorage.removeItem(
+        organizationPreviewStorage.integrations.key,
+      );
+      window.localStorage.removeItem(organizationPreviewStorage.access.key);
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.profile.changedEvent),
+      );
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.notifications.changedEvent),
+      );
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.integrations.changedEvent),
+      );
+      window.localStorage.removeItem(
+        organizationPreviewStorage.securityAlerts.key,
+      );
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.securityAlerts.changedEvent),
+      );
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.access.changedEvent),
+      );
       setEditorGeneration((value) => value + 1);
       setClearedNotice(true);
     } catch {

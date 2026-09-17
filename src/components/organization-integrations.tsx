@@ -1,5 +1,6 @@
 "use client";
 
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import { useRef, useState, useSyncExternalStore } from "react";
 import {
   CircleAlertIcon,
@@ -36,7 +37,6 @@ import { Label } from "@/components/ui/label";
 import {
   createCredentialSecret,
   defaultOrganizationIntegrations,
-  organizationIntegrationsKey,
   parseOrganizationIntegrations,
   validateWebhookUrl,
   webhookEvents,
@@ -54,19 +54,26 @@ type Feedback = { kind: "status" | "alert"; message: string } | null;
 
 function subscribeToIntegrations(callback: () => void) {
   const handleStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationIntegrationsKey) callback();
+    if (!event.key || event.key === organizationPreviewStorage.integrations.key)
+      callback();
   };
   window.addEventListener("storage", handleStorage);
-  window.addEventListener("cupboard-integrations-saved", callback);
+  window.addEventListener(
+    organizationPreviewStorage.integrations.changedEvent,
+    callback,
+  );
   return () => {
     window.removeEventListener("storage", handleStorage);
-    window.removeEventListener("cupboard-integrations-saved", callback);
+    window.removeEventListener(
+      organizationPreviewStorage.integrations.changedEvent,
+      callback,
+    );
   };
 }
 
 function integrationsSnapshot(): string | null {
   try {
-    return localStorage.getItem(organizationIntegrationsKey);
+    return localStorage.getItem(organizationPreviewStorage.integrations.key);
   } catch {
     return "storage-unavailable";
   }
@@ -242,8 +249,13 @@ export function OrganizationIntegrations() {
 
   function persist(next: OrganizationIntegrations, success: string): boolean {
     try {
-      localStorage.setItem(organizationIntegrationsKey, JSON.stringify(next));
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      localStorage.setItem(
+        organizationPreviewStorage.integrations.key,
+        JSON.stringify(next),
+      );
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.integrations.changedEvent),
+      );
       setFeedback({ kind: "status", message: success });
       return true;
     } catch {
@@ -314,7 +326,9 @@ export function OrganizationIntegrations() {
         return;
       }
     }
-    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    window.dispatchEvent(
+      new Event(organizationPreviewStorage.integrations.changedEvent),
+    );
     setFeedback({
       kind: "alert",
       message: "Saved integration data changed. Review it before replacing.",
@@ -335,7 +349,9 @@ export function OrganizationIntegrations() {
     if (latestRaw !== unreadableToReplace || !latestIsUnreadable) {
       setUnreadableToReplace(null);
       restoreSuspendedDraft();
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.integrations.changedEvent),
+      );
       setFeedback({
         kind: "alert",
         message: "Saved integration data changed. Review it before replacing.",
@@ -343,8 +359,10 @@ export function OrganizationIntegrations() {
       return;
     }
     try {
-      localStorage.removeItem(organizationIntegrationsKey);
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      localStorage.removeItem(organizationPreviewStorage.integrations.key);
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.integrations.changedEvent),
+      );
       setUnreadableToReplace(null);
       if (suspendedDraftDialog === "credential") {
         setCredentialStartedWithMissingKey(true);

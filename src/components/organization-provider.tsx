@@ -1,5 +1,6 @@
 "use client";
 
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import {
   createContext,
   useContext,
@@ -8,7 +9,6 @@ import {
 } from "react";
 import {
   defaultOrganizationProfile,
-  organizationProfileKey,
   parseProfile,
   validateProfile,
   type OrganizationProfile,
@@ -16,18 +16,27 @@ import {
 
 function subscribe(callback: () => void) {
   const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationProfileKey) callback();
+    if (!event.key || event.key === organizationPreviewStorage.profile.key)
+      callback();
   };
   window.addEventListener("storage", onStorage);
-  window.addEventListener("cupboard-profile-saved", callback);
+  window.addEventListener(
+    organizationPreviewStorage.profile.changedEvent,
+    callback,
+  );
   return () => {
     window.removeEventListener("storage", onStorage);
-    window.removeEventListener("cupboard-profile-saved", callback);
+    window.removeEventListener(
+      organizationPreviewStorage.profile.changedEvent,
+      callback,
+    );
   };
 }
 function snapshot() {
   try {
-    return window.localStorage.getItem(organizationProfileKey) ?? "";
+    return (
+      window.localStorage.getItem(organizationPreviewStorage.profile.key) ?? ""
+    );
   } catch {
     return "storage-unavailable";
   }
@@ -65,10 +74,12 @@ export function OrganizationProvider({
         if (Object.keys(validateProfile(next)).length)
           throw new Error("Check the highlighted fields.");
         window.localStorage.setItem(
-          organizationProfileKey,
+          organizationPreviewStorage.profile.key,
           JSON.stringify(next),
         );
-        window.dispatchEvent(new Event("cupboard-profile-saved"));
+        window.dispatchEvent(
+          new Event(organizationPreviewStorage.profile.changedEvent),
+        );
       },
     };
   }, [raw]);

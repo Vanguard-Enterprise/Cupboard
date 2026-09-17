@@ -1,3 +1,4 @@
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 // @vitest-environment jsdom
 import {
   dispatchCrossTab,
@@ -12,10 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationProfileForm } from "./organization-profile-form";
 import { OrganizationProvider } from "./organization-provider";
 import { TooltipProvider } from "./ui/tooltip";
-import {
-  defaultOrganizationProfile,
-  organizationProfileKey,
-} from "@/lib/organization-profile";
+import { defaultOrganizationProfile } from "@/lib/organization-profile";
 
 function mount() {
   return render(
@@ -29,9 +27,14 @@ function mount() {
 function externalSave(name: string) {
   const profile = { ...defaultOrganizationProfile, name };
   act(() => {
-    localStorage.setItem(organizationProfileKey, JSON.stringify(profile));
+    localStorage.setItem(
+      organizationPreviewStorage.profile.key,
+      JSON.stringify(profile),
+    );
     window.dispatchEvent(
-      new StorageEvent("storage", { key: organizationProfileKey }),
+      new StorageEvent("storage", {
+        key: organizationPreviewStorage.profile.key,
+      }),
     );
   });
 }
@@ -169,7 +172,7 @@ describe("Organization profile persistence", () => {
 
     await user.click(saveButton());
     expect(
-      JSON.parse(localStorage.getItem(organizationProfileKey)!),
+      JSON.parse(localStorage.getItem(organizationPreviewStorage.profile.key)!),
     ).toMatchObject({ country: "United Kingdom", region: "Essex" });
   });
 
@@ -184,7 +187,7 @@ describe("Organization profile persistence", () => {
     await user.type(screen.getByLabelText("Public email"), "hello@example.com");
     await user.click(saveButton());
     expect(
-      JSON.parse(localStorage.getItem(organizationProfileKey)!),
+      JSON.parse(localStorage.getItem(organizationPreviewStorage.profile.key)!),
     ).toMatchObject({
       name: "New organization",
       publicEmail: "hello@example.com",
@@ -226,9 +229,10 @@ describe("Organization profile persistence", () => {
     );
     expect(saveButton().disabled).toBe(true);
     await user.click(saveButton());
-    expect(JSON.parse(localStorage.getItem(organizationProfileKey)!).name).toBe(
-      "Other tab",
-    );
+    expect(
+      JSON.parse(localStorage.getItem(organizationPreviewStorage.profile.key)!)
+        .name,
+    ).toBe("Other tab");
     await user.click(cancelButton());
     expect(nameInput().value).toBe("Other tab");
     expect(screen.queryByRole("alert")).toBeNull();
@@ -242,7 +246,9 @@ describe("Organization profile persistence", () => {
     await user.click(saveButton());
     expect(screen.getByText("Enter an organization name.")).toBeTruthy();
     expect(document.activeElement).toBe(nameInput());
-    expect(localStorage.getItem(organizationProfileKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.profile.key),
+    ).toBeNull();
   });
 
   it("reports a storage failure without discarding the draft", async () => {
@@ -263,7 +269,7 @@ describe("storage characterization", () => {
   it.each([null, "", "not-json", '{"invalid":true}'])(
     "preserves defaults and warning for %s",
     (raw) => {
-      if (raw !== null) seedRaw(organizationProfileKey, raw);
+      if (raw !== null) seedRaw(organizationPreviewStorage.profile.key, raw);
       mount();
       expect(nameInput().value).toBe(defaultOrganizationProfile.name);
       expect(Boolean(screen.queryByText(/Saved .* could not be loaded/))).toBe(
@@ -279,13 +285,15 @@ describe("storage characterization", () => {
         ...defaultOrganizationProfile,
         name: "External org",
       });
-      seedRaw(organizationProfileKey, raw);
+      seedRaw(organizationPreviewStorage.profile.key, raw);
       const restore = failStorage(method);
       mount();
       expect(screen.getByText(/Saved .* could not be loaded/)).toBeTruthy();
       expect(nameInput().value).toBe(defaultOrganizationProfile.name);
       restore();
-      act(() => dispatchSameTab("cupboard-profile-saved"));
+      act(() =>
+        dispatchSameTab(organizationPreviewStorage.profile.changedEvent),
+      );
       expect(nameInput().value).toBe("External org");
       expect(screen.queryByText(/Saved .* could not be loaded/)).toBeNull();
     },
@@ -300,22 +308,24 @@ describe("storage characterization", () => {
         name: "External org",
       });
       act(() => {
-        seedRaw(organizationProfileKey, raw);
+        seedRaw(organizationPreviewStorage.profile.key, raw);
         dispatchCrossTab({ key: "unrelated", oldValue: null, newValue: raw });
       });
       expect(nameInput().value).toBe(defaultOrganizationProfile.name);
       act(() => {
-        if (kind === "same") dispatchSameTab("cupboard-profile-saved");
+        if (kind === "same")
+          dispatchSameTab(organizationPreviewStorage.profile.changedEvent);
         else
           dispatchCrossTab({
-            key: kind === "clear" ? null : organizationProfileKey,
+            key:
+              kind === "clear" ? null : organizationPreviewStorage.profile.key,
             oldValue: null,
             newValue: raw,
           });
       });
       expect(nameInput().value).toBe("External org");
       act(() => {
-        removeRaw(organizationProfileKey);
+        removeRaw(organizationPreviewStorage.profile.key);
         dispatchCrossTab({ key: null, oldValue: raw, newValue: null });
       });
       expect(nameInput().value).toBe(defaultOrganizationProfile.name);

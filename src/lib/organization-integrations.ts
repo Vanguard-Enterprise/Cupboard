@@ -1,6 +1,3 @@
-export const organizationIntegrationsKey =
-  "cupboard:organization:local-preview:integrations:v1";
-
 export const webhookEvents = [
   { id: "server.status_changed", label: "Server status changed" },
   { id: "player.reported", label: "Player reported" },

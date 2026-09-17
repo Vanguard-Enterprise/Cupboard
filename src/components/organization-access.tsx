@@ -1,5 +1,6 @@
 "use client";
 
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import {
@@ -35,8 +36,6 @@ import { Switch } from "@/components/ui/switch";
 import {
   defaultOrganizationAccess,
   createInvitationMember,
-  organizationAccessChangedEvent,
-  organizationAccessKey,
   parseOrganizationAccess,
   roleLabels,
   roles,
@@ -54,19 +53,28 @@ const ruleIcons: Record<ApprovalRule["id"], typeof ServerCogIcon> = {
 
 function subscribe(callback: () => void) {
   const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationAccessKey) callback();
+    if (!event.key || event.key === organizationPreviewStorage.access.key)
+      callback();
   };
   window.addEventListener("storage", onStorage);
-  window.addEventListener(organizationAccessChangedEvent, callback);
+  window.addEventListener(
+    organizationPreviewStorage.access.changedEvent,
+    callback,
+  );
   return () => {
     window.removeEventListener("storage", onStorage);
-    window.removeEventListener(organizationAccessChangedEvent, callback);
+    window.removeEventListener(
+      organizationPreviewStorage.access.changedEvent,
+      callback,
+    );
   };
 }
 
 function snapshot() {
   try {
-    return window.localStorage.getItem(organizationAccessKey) ?? "";
+    return (
+      window.localStorage.getItem(organizationPreviewStorage.access.key) ?? ""
+    );
   } catch {
     return "storage-unavailable";
   }
@@ -176,8 +184,13 @@ function AccessEditor({
 
   function saveChanges() {
     try {
-      window.localStorage.setItem(organizationAccessKey, JSON.stringify(draft));
-      window.dispatchEvent(new Event(organizationAccessChangedEvent));
+      window.localStorage.setItem(
+        organizationPreviewStorage.access.key,
+        JSON.stringify(draft),
+      );
+      window.dispatchEvent(
+        new Event(organizationPreviewStorage.access.changedEvent),
+      );
       setStorageError("");
       toast.success("Changes saved");
     } catch {

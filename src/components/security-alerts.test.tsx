@@ -1,9 +1,9 @@
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SecurityAlerts } from "./security-alerts";
-import { securityAlertStorageKey } from "@/lib/security-alerts";
 
 beforeEach(() => {
   localStorage.clear();
@@ -87,7 +87,9 @@ describe("Security alerts", () => {
       "Alert acknowledged.",
     );
     expect(
-      JSON.parse(localStorage.getItem(securityAlertStorageKey)!),
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.securityAlerts.key)!,
+      ),
     ).toContain("SEC-2041");
 
     await user.click(screen.getByRole("button", { name: "Reopen alert" }));
@@ -96,7 +98,9 @@ describe("Security alerts", () => {
       screen.getByRole("button", { name: "Acknowledge alert" }),
     ).toBeTruthy();
     expect(
-      JSON.parse(localStorage.getItem(securityAlertStorageKey)!),
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.securityAlerts.key)!,
+      ),
     ).not.toContain("SEC-2041");
   });
 
@@ -142,11 +146,13 @@ describe("Security alerts", () => {
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017", "SEC-2038"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
 
@@ -159,10 +165,11 @@ describe("Security alerts", () => {
     expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Reopen alert" }));
-    expect(JSON.parse(localStorage.getItem(securityAlertStorageKey)!)).toEqual([
-      "SEC-2017",
-      "SEC-2041",
-    ]);
+    expect(
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.securityAlerts.key)!,
+      ),
+    ).toEqual(["SEC-2017", "SEC-2041"]);
   });
 
   it("preserves a failed reopen while merging cross-tab changes", async () => {
@@ -187,11 +194,13 @@ describe("Security alerts", () => {
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017", "SEC-2038"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
 
@@ -205,9 +214,11 @@ describe("Security alerts", () => {
     );
     expect(screen.getByRole("button", { name: "Reopen alert" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Reopen alert" }));
-    expect(JSON.parse(localStorage.getItem(securityAlertStorageKey)!)).toEqual(
-      [],
-    );
+    expect(
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.securityAlerts.key)!,
+      ),
+    ).toEqual([]);
   });
 
   it("retires a failed override after persisted state catches up", async () => {
@@ -225,22 +236,26 @@ describe("Security alerts", () => {
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017", "SEC-2041"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
     expect(screen.queryByRole("alert")).toBeNull();
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
     expect(
@@ -254,10 +269,11 @@ describe("Security alerts", () => {
       }),
     );
     await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
-    expect(JSON.parse(localStorage.getItem(securityAlertStorageKey)!)).toEqual([
-      "SEC-2017",
-      "SEC-2038",
-    ]);
+    expect(
+      JSON.parse(
+        localStorage.getItem(organizationPreviewStorage.securityAlerts.key)!,
+      ),
+    ).toEqual(["SEC-2017", "SEC-2038"]);
   });
 
   it("moves focus to the next alert when a filtered acknowledgement removes the selection", async () => {
@@ -293,11 +309,13 @@ describe("Security alerts", () => {
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017", "SEC-2041"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
 
@@ -330,11 +348,13 @@ describe("Security alerts", () => {
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017", "SEC-2041"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
 
@@ -360,11 +380,13 @@ describe("Security alerts", () => {
 
     act(() => {
       localStorage.setItem(
-        securityAlertStorageKey,
+        organizationPreviewStorage.securityAlerts.key,
         JSON.stringify(["SEC-2017", "SEC-2041"]),
       );
       window.dispatchEvent(
-        new StorageEvent("storage", { key: securityAlertStorageKey }),
+        new StorageEvent("storage", {
+          key: organizationPreviewStorage.securityAlerts.key,
+        }),
       );
     });
 

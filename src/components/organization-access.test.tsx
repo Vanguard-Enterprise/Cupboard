@@ -1,3 +1,4 @@
+import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 // @vitest-environment jsdom
 import {
   act,
@@ -21,7 +22,6 @@ import { OrganizationAccess } from "./organization-access";
 import { TooltipProvider } from "./ui/tooltip";
 import {
   defaultOrganizationAccess,
-  organizationAccessKey,
   parseOrganizationAccess,
 } from "@/lib/organization-access";
 import { toast } from "sonner";
@@ -42,9 +42,14 @@ function mount() {
 
 function externalSave(settings = defaultOrganizationAccess) {
   act(() => {
-    localStorage.setItem(organizationAccessKey, JSON.stringify(settings));
+    localStorage.setItem(
+      organizationPreviewStorage.access.key,
+      JSON.stringify(settings),
+    );
     window.dispatchEvent(
-      new StorageEvent("storage", { key: organizationAccessKey }),
+      new StorageEvent("storage", {
+        key: organizationPreviewStorage.access.key,
+      }),
     );
   });
 }
@@ -130,7 +135,9 @@ describe("Organization access", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    const stored = JSON.parse(localStorage.getItem(organizationAccessKey)!);
+    const stored = JSON.parse(
+      localStorage.getItem(organizationPreviewStorage.access.key)!,
+    );
     expect(stored.rules[0].enabled).toBe(false);
   });
 
@@ -159,11 +166,13 @@ describe("Organization access", () => {
 
     expect(screen.getByText("new.operator@example.com")).toBeTruthy();
     expect(screen.getByText(/3 active/).textContent).toContain("2 pending");
-    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
+    expect(
+      localStorage.getItem(organizationPreviewStorage.access.key),
+    ).toBeNull();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(
       parseOrganizationAccess(
-        localStorage.getItem(organizationAccessKey)!,
+        localStorage.getItem(organizationPreviewStorage.access.key)!,
       ).members.at(-1)?.email,
     ).toBe("new.operator@example.com");
   });
@@ -255,7 +264,8 @@ describe("Organization access", () => {
     expect(save.disabled).toBe(true);
     await user.click(save);
     expect(
-      JSON.parse(localStorage.getItem(organizationAccessKey)!).rules[3].enabled,
+      JSON.parse(localStorage.getItem(organizationPreviewStorage.access.key)!)
+        .rules[3].enabled,
     ).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -304,7 +314,7 @@ describe("Organization access", () => {
   });
 
   it("replaces malformed stored settings with valid defaults", async () => {
-    localStorage.setItem(organizationAccessKey, "not-json");
+    localStorage.setItem(organizationPreviewStorage.access.key, "not-json");
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Member access" });
@@ -324,7 +334,9 @@ describe("Organization access", () => {
     await user.click(save);
 
     expect(
-      parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!),
+      parseOrganizationAccess(
+        localStorage.getItem(organizationPreviewStorage.access.key)!,
+      ),
     ).toEqual(defaultOrganizationAccess);
     expect(toast.success).toHaveBeenCalledWith("Changes saved");
     expect(screen.queryByRole("alert")).toBeNull();

@@ -14,9 +14,6 @@ export type SecurityAlert = {
   recommendation: string;
 };
 
-export const securityAlertStorageKey =
-  "cupboard:organization:local-preview:security-alerts:v1";
-
 export const initiallyAcknowledgedAlertIds = ["SEC-2017"] as const;
 
 export const securityAlerts: SecurityAlert[] = [
