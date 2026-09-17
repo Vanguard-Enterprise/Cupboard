@@ -77,7 +77,7 @@ describe("raw preview store", () => {
     },
   );
 
-  it.each(["", "{broken", "null", "{}"])(
+  it.each(["", "{broken", "null", "{}", "storage-unavailable"])(
     "exposes raw bytes without decoding %s",
     (raw) => {
       seedRaw(identity.key, raw);

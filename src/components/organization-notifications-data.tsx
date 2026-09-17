@@ -1,5 +1,6 @@
 "use client";
 
+import { createRawPreviewStore } from "@/lib/browser-preview-store";
 import { organizationPreviewStorage } from "@/lib/organization-preview-storage";
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Trash2Icon } from "lucide-react";
@@ -54,69 +55,41 @@ const notificationOptions = [
   description: string;
 }>;
 
-function subscribe(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (
-      !event.key ||
-      event.key === organizationPreviewStorage.notifications.key
-    )
-      callback();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener(
-    organizationPreviewStorage.notifications.changedEvent,
-    callback,
-  );
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener(
-      organizationPreviewStorage.notifications.changedEvent,
-      callback,
-    );
-  };
-}
-
-function snapshot() {
-  try {
-    return (
-      window.localStorage.getItem(
-        organizationPreviewStorage.notifications.key,
-      ) ?? ""
-    );
-  } catch {
-    return "storage-unavailable";
-  }
-}
-
-const serverSnapshot = () => null;
+const notificationsStore = createRawPreviewStore(
+  organizationPreviewStorage.notifications,
+);
 
 function useSavedNotifications() {
-  const raw = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
+  const raw = useSyncExternalStore(
+    notificationsStore.subscribe,
+    notificationsStore.getSnapshot,
+    notificationsStore.getServerSnapshot,
+  );
   return useMemo(() => {
     let preferences = defaultOrganizationNotifications;
-    let storageError = "";
-    if (raw) {
+    let status: "defaults" | "loaded" | "unreadable" | "unavailable" =
+      "defaults";
+    if (raw.status === "unavailable") status = "unavailable";
+    else if (raw.status === "available" && raw.raw) {
       try {
-        preferences = parseOrganizationNotifications(raw);
+        preferences = parseOrganizationNotifications(raw.raw);
+        status = "loaded";
       } catch {
-        storageError =
-          "Saved notification choices could not be loaded. Saving will replace the local copy.";
+        status = "unreadable";
       }
     }
+    const storageError =
+      status === "unreadable" || status === "unavailable"
+        ? "Saved notification choices could not be loaded. Saving will replace the local copy."
+        : "";
 
     return {
       preferences,
-      ready: raw !== null,
+      ready: raw.status !== "not-ready",
       storageError,
       needsReplacement: Boolean(storageError),
       save(next: OrganizationNotifications) {
-        window.localStorage.setItem(
-          organizationPreviewStorage.notifications.key,
-          JSON.stringify(next),
-        );
-        window.dispatchEvent(
-          new Event(organizationPreviewStorage.notifications.changedEvent),
-        );
+        notificationsStore.write(JSON.stringify(next));
       },
     };
   }, [raw]);
