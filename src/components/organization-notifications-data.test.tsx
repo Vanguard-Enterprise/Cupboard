@@ -1,4 +1,11 @@
 // @vitest-environment jsdom
+import {
+  dispatchCrossTab,
+  dispatchSameTab,
+  failStorage,
+  removeRaw,
+  seedRaw,
+} from "@/test/browser-storage";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +64,7 @@ beforeEach(() => localStorage.clear());
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  document.cookie = "sidebar_state=; Max-Age=0";
 });
 
 describe("Organization notifications and data", () => {
@@ -239,3 +247,168 @@ describe("Organization notifications and data", () => {
     ).toBe("unchecked");
   });
 });
+
+describe("storage characterization", () => {
+  it.each([null, "", "not-json", '{"invalid":true}'])(
+    "preserves defaults and warning for %s",
+    (raw) => {
+      if (raw !== null) seedRaw(organizationNotificationsKey, raw);
+      render(<OrganizationNotificationsData />);
+      expect(
+        notificationSwitch("Weekly summary").getAttribute("data-state"),
+      ).toBe("unchecked");
+      expect(Boolean(screen.queryByText(/Saved .* could not be loaded/))).toBe(
+        Boolean(raw),
+      );
+    },
+  );
+
+  it.each(["getItem", "access"] as const)(
+    "recovers from %s failure",
+    (method) => {
+      const raw = JSON.stringify({
+        ...defaultOrganizationNotifications,
+        weeklySummary: true,
+      });
+      seedRaw(organizationNotificationsKey, raw);
+      const restore = failStorage(method);
+      render(<OrganizationNotificationsData />);
+      expect(screen.getByText(/Saved .* could not be loaded/)).toBeTruthy();
+      expect(
+        notificationSwitch("Weekly summary").getAttribute("data-state"),
+      ).toBe("unchecked");
+      restore();
+      act(() => dispatchSameTab("cupboard-notifications-saved"));
+      expect(
+        notificationSwitch("Weekly summary").getAttribute("data-state"),
+      ).toBe("checked");
+      expect(screen.queryByText(/Saved .* could not be loaded/)).toBeNull();
+    },
+  );
+
+  it.each(["same", "key", "clear"])(
+    "observes %s events but ignores unrelated keys",
+    (kind) => {
+      render(<OrganizationNotificationsData />);
+      const raw = JSON.stringify({
+        ...defaultOrganizationNotifications,
+        weeklySummary: true,
+      });
+      act(() => {
+        seedRaw(organizationNotificationsKey, raw);
+        dispatchCrossTab({ key: "unrelated", oldValue: null, newValue: raw });
+      });
+      expect(
+        notificationSwitch("Weekly summary").getAttribute("data-state"),
+      ).toBe("unchecked");
+      act(() => {
+        if (kind === "same") dispatchSameTab("cupboard-notifications-saved");
+        else
+          dispatchCrossTab({
+            key: kind === "clear" ? null : organizationNotificationsKey,
+            oldValue: null,
+            newValue: raw,
+          });
+      });
+      expect(
+        notificationSwitch("Weekly summary").getAttribute("data-state"),
+      ).toBe("checked");
+      act(() => {
+        removeRaw(organizationNotificationsKey);
+        dispatchCrossTab({ key: null, oldValue: raw, newValue: null });
+      });
+      expect(
+        notificationSwitch("Weekly summary").getAttribute("data-state"),
+      ).toBe("unchecked");
+    },
+  );
+});
+
+const clearKeys = [
+  "cupboard:organization:local-preview:profile:v1",
+  "cupboard:organization:local-preview:notifications:v1",
+  "cupboard:organization:local-preview:integrations:v1",
+  "cupboard:organization:local-preview:access:v1",
+  "cupboard:organization:local-preview:security-alerts:v1",
+];
+const clearTrace = [
+  ...clearKeys.slice(0, 4).map((key) => `remove:${key}`),
+  "event:cupboard-profile-saved",
+  "event:cupboard-notifications-saved",
+  "event:cupboard-integrations-saved",
+  `remove:${clearKeys[4]}`,
+  "event:cupboard-security-alerts-saved",
+  "event:cupboard-access-saved",
+];
+
+it.each([0, 1, 2, 3, 4, null])(
+  "preserves clear ordering and partial progress at removal %s",
+  async (failure) => {
+    for (const key of clearKeys) seedRaw(key, "{}");
+    seedRaw(
+      organizationNotificationsKey,
+      JSON.stringify(defaultOrganizationNotifications),
+    );
+    seedRaw("unrelated", "keep");
+    seedRaw("cupboard:organization:local-preview:unregistered:v1", "keep");
+    document.cookie = "sidebar_state=false";
+    const originals = clearKeys.map((key) => localStorage.getItem(key));
+    const user = userEvent.setup();
+    render(<OrganizationNotificationsData />);
+    await user.click(notificationSwitch("Weekly summary"));
+    const editor = notificationSwitch("Weekly summary");
+    const trace: string[] = [];
+    const remove = Storage.prototype.removeItem;
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (
+      this: Storage,
+      key,
+    ) {
+      trace.push(`remove:${key}`);
+      if (failure !== null && key === clearKeys[failure])
+        throw new Error("Unavailable");
+      remove.call(this, key);
+    });
+    const dispatch = window.dispatchEvent.bind(window);
+    vi.spyOn(window, "dispatchEvent").mockImplementation((event) => {
+      if (event.type.startsWith("cupboard-")) trace.push(`event:${event.type}`);
+      return dispatch(event);
+    });
+    await user.click(screen.getByRole("button", { name: "Clear local data" }));
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Clear local data",
+      }),
+    );
+    const expected =
+      failure === null
+        ? clearTrace
+        : clearTrace.slice(
+            0,
+            clearTrace.indexOf(`remove:${clearKeys[failure]}`) + 1,
+          );
+    expect(trace).toEqual(expected);
+    clearKeys.forEach((key, index) =>
+      expect(localStorage.getItem(key)).toBe(
+        failure === null || index < failure ? null : originals[index],
+      ),
+    );
+    expect(localStorage.getItem("unrelated")).toBe("keep");
+    expect(
+      localStorage.getItem(
+        "cupboard:organization:local-preview:unregistered:v1",
+      ),
+    ).toBe("keep");
+    expect(document.cookie).toContain("sidebar_state=false");
+    if (failure !== null) {
+      expect(
+        screen.getByText("Could not clear local data. Please try again."),
+      ).toBeTruthy();
+      expect(screen.queryByText("Local data cleared.")).toBeNull();
+      expect(notificationSwitch("Weekly summary")).toBe(editor);
+      expect(editor.getAttribute("data-state")).toBe("checked");
+    } else {
+      expect(screen.getByText("Local data cleared.")).toBeTruthy();
+      expect(notificationSwitch("Weekly summary")).not.toBe(editor);
+    }
+  },
+);

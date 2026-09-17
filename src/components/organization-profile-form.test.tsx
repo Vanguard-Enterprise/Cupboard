@@ -1,4 +1,11 @@
 // @vitest-environment jsdom
+import {
+  dispatchCrossTab,
+  dispatchSameTab,
+  failStorage,
+  removeRaw,
+  seedRaw,
+} from "@/test/browser-storage";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -250,4 +257,68 @@ describe("Organization profile persistence", () => {
     expect(nameInput().value).toBe("Cupboard draft");
     expect(saveButton().disabled).toBe(false);
   });
+});
+
+describe("storage characterization", () => {
+  it.each([null, "", "not-json", '{"invalid":true}'])(
+    "preserves defaults and warning for %s",
+    (raw) => {
+      if (raw !== null) seedRaw(organizationProfileKey, raw);
+      mount();
+      expect(nameInput().value).toBe(defaultOrganizationProfile.name);
+      expect(Boolean(screen.queryByText(/Saved .* could not be loaded/))).toBe(
+        Boolean(raw),
+      );
+    },
+  );
+
+  it.each(["getItem", "access"] as const)(
+    "recovers from %s failure",
+    (method) => {
+      const raw = JSON.stringify({
+        ...defaultOrganizationProfile,
+        name: "External org",
+      });
+      seedRaw(organizationProfileKey, raw);
+      const restore = failStorage(method);
+      mount();
+      expect(screen.getByText(/Saved .* could not be loaded/)).toBeTruthy();
+      expect(nameInput().value).toBe(defaultOrganizationProfile.name);
+      restore();
+      act(() => dispatchSameTab("cupboard-profile-saved"));
+      expect(nameInput().value).toBe("External org");
+      expect(screen.queryByText(/Saved .* could not be loaded/)).toBeNull();
+    },
+  );
+
+  it.each(["same", "key", "clear"])(
+    "observes %s events but ignores unrelated keys",
+    (kind) => {
+      mount();
+      const raw = JSON.stringify({
+        ...defaultOrganizationProfile,
+        name: "External org",
+      });
+      act(() => {
+        seedRaw(organizationProfileKey, raw);
+        dispatchCrossTab({ key: "unrelated", oldValue: null, newValue: raw });
+      });
+      expect(nameInput().value).toBe(defaultOrganizationProfile.name);
+      act(() => {
+        if (kind === "same") dispatchSameTab("cupboard-profile-saved");
+        else
+          dispatchCrossTab({
+            key: kind === "clear" ? null : organizationProfileKey,
+            oldValue: null,
+            newValue: raw,
+          });
+      });
+      expect(nameInput().value).toBe("External org");
+      act(() => {
+        removeRaw(organizationProfileKey);
+        dispatchCrossTab({ key: null, oldValue: raw, newValue: null });
+      });
+      expect(nameInput().value).toBe(defaultOrganizationProfile.name);
+    },
+  );
 });
