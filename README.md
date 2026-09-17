@@ -89,10 +89,9 @@ Security alert acknowledgements use
 `cupboard:organization:local-preview:security-alerts:v1`. They update only the
 sample alerts in the current browser and do not change a live server.
 
-The access and approvals page at
-`/dashboard/organization/security/access` previews member roles, invitations,
-and sensitive-action approval rules. Its data stays in the current browser and
-does not grant access, send invitations, or enforce approvals.
+The approvals page at `/dashboard/organization/security/access` previews
+sensitive-action approval rules. Its data stays in the current browser and does
+not enforce approvals.
 
 The sidebar remembers its expanded state in the `sidebar_state` cookie for
 seven days, including across refreshes and visits to the login page.

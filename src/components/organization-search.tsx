@@ -146,10 +146,10 @@ export function OrganizationSearch({
                   Audit log
                 </CommandItem>
                 <CommandItem
-                  value="Organization security access approvals members roles invitations"
+                  value="Organization security approvals sensitive actions"
                   onSelect={() => navigate(accessPath)}
                 >
-                  Access &amp; approvals
+                  Approvals
                 </CommandItem>
                 <CommandItem
                   value="Organization integrations connections external services"

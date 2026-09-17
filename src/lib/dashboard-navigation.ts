@@ -218,7 +218,7 @@ export const dashboardNavigation = [
           },
           {
             id: "access",
-            title: "Access & approvals",
+            title: "Approvals",
           },
         ],
       },

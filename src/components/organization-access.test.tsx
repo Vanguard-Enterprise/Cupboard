@@ -1,22 +1,8 @@
 // @vitest-environment jsdom
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { OrganizationAccess } from "./organization-access";
 import { TooltipProvider } from "./ui/tooltip";
 import {
@@ -24,9 +10,6 @@ import {
   organizationAccessKey,
   parseOrganizationAccess,
 } from "@/lib/organization-access";
-import { toast } from "sonner";
-
-const scrollIntoView = HTMLElement.prototype.scrollIntoView;
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn() },
@@ -49,11 +32,13 @@ function externalSave(settings = defaultOrganizationAccess) {
   });
 }
 
-beforeAll(() => {
-  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-    configurable: true,
-    value: vi.fn(),
-  });
+beforeEach(() => {
+  localStorage.clear();
+  vi.clearAllMocks();
+  HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  HTMLElement.prototype.setPointerCapture = vi.fn();
+  HTMLElement.prototype.releasePointerCapture = vi.fn();
+  Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -63,53 +48,53 @@ beforeAll(() => {
     },
   );
 });
-beforeEach(() => localStorage.clear());
+
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-afterAll(() => {
-  if (scrollIntoView) {
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-      configurable: true,
-      value: scrollIntoView,
-    });
-  } else {
-    Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
-  }
-  vi.unstubAllGlobals();
-});
 
-describe("Organization access", () => {
-  it("saves access changes directly and resets the dirty state", async () => {
-    const user = userEvent.setup();
+describe("Organization approvals", () => {
+  it("shows only approval rules in a responsive control layout", async () => {
     mount();
 
     expect(
-      await screen.findByRole("heading", { name: "Member access" }),
+      await screen.findByRole("heading", { name: "Approval rules" }),
     ).toBeTruthy();
-    expect(screen.getByText(/3 active/).textContent).toContain("1 pending");
-    const ownerRole = screen.getByLabelText("Role for Demo operator");
-    expect(ownerRole.tagName).toBe("SPAN");
-    expect(ownerRole.textContent).toBe("Owner");
+    expect(screen.queryByText("Member access", { selector: "h2" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Invite member" })).toBeNull();
+
+    const serverRule = screen.getByTestId("approval-rule-server-lifecycle");
+    expect(serverRule.className).toContain("grid");
+    expect(serverRule.className).toContain("sm:grid-cols-");
+
+    for (const name of ["Cancel", "Save changes"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.className).toContain("h-11");
+      expect(button.className).toContain("w-full");
+    }
+  });
+
+  it("saves rule changes", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Approval rules" });
+
     const cancel = screen.getByRole("button", {
       name: "Cancel",
     }) as HTMLButtonElement;
+    const save = screen.getByRole("button", {
+      name: "Save changes",
+    }) as HTMLButtonElement;
     expect(cancel.disabled).toBe(true);
-    expect(cancel.getAttribute("data-variant")).toBe("secondary");
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Save changes",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+    expect(save.disabled).toBe(true);
+
     const disabledApprovers = screen.getByLabelText(
       "Approvers for Billing",
     ) as HTMLButtonElement;
     expect(disabledApprovers.disabled).toBe(true);
-    expect(disabledApprovers.className).toContain("disabled:opacity-25");
+    expect(disabledApprovers.className).toContain("disabled:opacity-40");
 
     await user.click(
       screen.getByRole("switch", {
@@ -117,12 +102,50 @@ describe("Organization access", () => {
       }),
     );
     expect(cancel.disabled).toBe(false);
+    expect(save.disabled).toBe(false);
+    await user.click(save);
+
+    const stored = parseOrganizationAccess(
+      localStorage.getItem(organizationAccessKey)!,
+    );
+    expect(stored.rules[0].enabled).toBe(false);
+    expect(toast.success).toHaveBeenCalledWith("Approval settings saved.");
+    expect(cancel.disabled).toBe(true);
+    expect(save.disabled).toBe(true);
+  });
+
+  it("changes the required approver count with the source-owned select", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Approval rules" });
+
+    await user.click(screen.getByLabelText("Approvers for Server lifecycle"));
+    await user.click(screen.getByRole("option", { name: "2 people" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(screen.queryByText("Changes saved in this browser.")).toBeNull();
-    expect(toast.success).toHaveBeenCalledWith("Changes saved");
-    expect(cancel.disabled).toBe(true);
+    expect(
+      parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!)
+        .rules[0].approvals,
+    ).toBe(2);
+  });
+
+  it("preserves a dirty draft when another tab saves", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Approval rules" });
+    const serverRule = screen.getByRole("switch", {
+      name: "Require approval for Server lifecycle",
+    }) as HTMLButtonElement;
+    await user.click(serverRule);
+
+    const external = structuredClone(defaultOrganizationAccess);
+    external.rules[2].enabled = true;
+    externalSave(external);
+
+    expect(serverRule.getAttribute("data-state")).toBe("unchecked");
+    expect(screen.getByRole("alert").textContent).toContain(
+      "changed in another tab",
+    );
     expect(
       (
         screen.getByRole("button", {
@@ -130,145 +153,19 @@ describe("Organization access", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    const stored = JSON.parse(localStorage.getItem(organizationAccessKey)!);
-    expect(stored.rules[0].enabled).toBe(false);
-  });
-
-  it("validates and stages an invitation before saving", async () => {
-    const user = userEvent.setup();
-    mount();
-    await screen.findByRole("heading", { name: "Member access" });
-
-    await user.click(screen.getByRole("button", { name: "Invite member" }));
-    expect(screen.getByRole("heading", { name: "Invite member" })).toBeTruthy();
-    expect(
-      screen.queryByText(/pending invitation to this local preview/i),
-    ).toBeNull();
-    const sendInvitation = screen.getByRole("button", {
-      name: "Send invitation",
-    }) as HTMLButtonElement;
-    expect(sendInvitation.disabled).toBe(true);
-    await user.type(screen.getByLabelText("Email address"), "invalid");
-    expect(sendInvitation.disabled).toBe(true);
-
-    const email = screen.getByLabelText("Email address");
-    await user.clear(email);
-    await user.type(email, "new.operator@example.com");
-    expect(sendInvitation.disabled).toBe(false);
-    await user.click(sendInvitation);
-
-    expect(screen.getByText("new.operator@example.com")).toBeTruthy();
-    expect(screen.getByText(/3 active/).textContent).toContain("2 pending");
-    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    expect(
-      parseOrganizationAccess(
-        localStorage.getItem(organizationAccessKey)!,
-      ).members.at(-1)?.email,
-    ).toBe("new.operator@example.com");
-  });
-
-  it("rejects an address whose generated member cannot be reloaded", async () => {
-    const user = userEvent.setup();
-    mount();
-    await screen.findByRole("heading", { name: "Member access" });
-    await user.click(screen.getByRole("button", { name: "Invite member" }));
-    fireEvent.change(screen.getByLabelText("Email address"), {
-      target: { value: `${"a".repeat(201)}@example.com` },
-    });
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Send invitation",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-  });
-
-  it("discards invitation fields when the dialog is canceled or dismissed", async () => {
-    const user = userEvent.setup();
-    mount();
-    await screen.findByRole("heading", { name: "Member access" });
-
-    await user.click(screen.getByRole("button", { name: "Invite member" }));
-    await user.type(
-      screen.getByLabelText("Email address"),
-      "canceled@example.com",
-    );
-    screen.getByLabelText("Role").focus();
-    await user.keyboard("{Enter}");
-    await screen.findByRole("option", { name: "Administrator" });
-    await user.keyboard("{Home}{Enter}");
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-
-    await user.click(screen.getByRole("button", { name: "Invite member" }));
-    expect(
-      (screen.getByLabelText("Email address") as HTMLInputElement).value,
-    ).toBe("");
-    expect(screen.getByLabelText("Role").textContent).toContain("Viewer");
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Send invitation",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-
-    await user.type(
-      screen.getByLabelText("Email address"),
-      "dismissed@example.com",
-    );
-    await user.click(screen.getByRole("button", { name: "Close" }));
-    await user.click(screen.getByRole("button", { name: "Invite member" }));
-    expect(
-      (screen.getByLabelText("Email address") as HTMLInputElement).value,
-    ).toBe("");
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Send invitation",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-  });
-
-  it("preserves a dirty draft when another tab saves", async () => {
-    const user = userEvent.setup();
-    mount();
-    await screen.findByRole("heading", { name: "Member access" });
-    const serverRule = screen.getByRole("switch", {
-      name: "Require approval for Server lifecycle",
-    }) as HTMLButtonElement;
-    await user.click(serverRule);
-
-    const external = structuredClone(defaultOrganizationAccess);
-    external.rules[3].enabled = true;
-    externalSave(external);
-
-    expect(serverRule.getAttribute("data-state")).toBe("unchecked");
-    expect(screen.getByRole("alert").textContent).toContain(
-      "changed in another tab",
-    );
-    const save = screen.getByRole("button", {
-      name: "Save changes",
-    }) as HTMLButtonElement;
-    expect(save.disabled).toBe(true);
-    await user.click(save);
-    expect(
-      JSON.parse(localStorage.getItem(organizationAccessKey)!).rules[3].enabled,
-    ).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(serverRule.getAttribute("data-state")).toBe("checked");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("loads another tab's save immediately when the draft is clean", async () => {
+  it("loads another tab's save when the draft is clean", async () => {
     mount();
-    await screen.findByRole("heading", { name: "Member access" });
+    await screen.findByRole("heading", { name: "Approval rules" });
     const external = structuredClone(defaultOrganizationAccess);
     external.rules[0].enabled = false;
     externalSave(external);
+
     expect(
       screen
         .getByRole("switch", {
@@ -282,7 +179,7 @@ describe("Organization access", () => {
   it("keeps the draft when browser storage fails", async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Member access" });
+    await screen.findByRole("heading", { name: "Approval rules" });
     await user.click(
       screen.getByRole("switch", { name: "Require approval for Billing" }),
     );
@@ -292,7 +189,9 @@ describe("Organization access", () => {
 
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(screen.getByRole("alert").textContent).toContain("Could not save");
+    const storageAlert = screen.getByRole("alert");
+    expect(storageAlert.getAttribute("data-slot")).toBe("alert");
+    expect(storageAlert.textContent).toContain("Could not save");
     expect(toast.success).not.toHaveBeenCalled();
     expect(
       (
@@ -307,18 +206,14 @@ describe("Organization access", () => {
     localStorage.setItem(organizationAccessKey, "not-json");
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Member access" });
+    await screen.findByRole("heading", { name: "Approval rules" });
 
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be loaded",
     );
-    const cancel = screen.getByRole("button", {
-      name: "Cancel",
-    }) as HTMLButtonElement;
     const save = screen.getByRole("button", {
       name: "Save changes",
     }) as HTMLButtonElement;
-    expect(cancel.disabled).toBe(true);
     expect(save.disabled).toBe(false);
 
     await user.click(save);
@@ -326,7 +221,7 @@ describe("Organization access", () => {
     expect(
       parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!),
     ).toEqual(defaultOrganizationAccess);
-    expect(toast.success).toHaveBeenCalledWith("Changes saved");
+    expect(toast.success).toHaveBeenCalledWith("Approval settings saved.");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(save.disabled).toBe(true);
   });

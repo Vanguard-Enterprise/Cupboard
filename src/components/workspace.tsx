@@ -76,11 +76,7 @@ export function Workspace({
                 : pathname === accessPath
                   ? {
                       activeSection: "access",
-                      crumbs: [
-                        "Organization",
-                        "Security",
-                        "Access & approvals",
-                      ],
+                      crumbs: ["Organization", "Security", "Approvals"],
                     }
                   : pathname === notificationsDataPath
                     ? {
