@@ -114,6 +114,9 @@ describe("Organization users", () => {
     await screen.findByRole("heading", { name: "Users" });
     await user.click(screen.getByRole("button", { name: "Invite user" }));
     const dialog = screen.getByRole("dialog", { name: "Invite user" });
+    expect(
+      within(dialog).getByText(/does not send an invitation or grant/i),
+    ).toBeTruthy();
     expect(within(dialog).queryByLabelText("User status")).toBeNull();
     await user.type(within(dialog).getByLabelText("Name"), "Alex Morgan");
     await user.type(within(dialog).getByLabelText("Email"), "alex@example.com");

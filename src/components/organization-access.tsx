@@ -112,6 +112,13 @@ function AccessEditor({
     }
   }
 
+  function cancelChanges() {
+    setDraft(saved);
+    setConflict(false);
+    setStorageError(initialStorageError);
+    setSaveMessage("");
+  }
+
   return (
     <form
       className="space-y-5"
@@ -229,6 +236,15 @@ function AccessEditor({
               </AlertDescription>
             </Alert>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full px-4 sm:h-9 sm:w-auto"
+            disabled={!dirty || conflict}
+            onClick={cancelChanges}
+          >
+            Cancel
+          </Button>
           <Button
             type="submit"
             className="h-11 w-full px-4 sm:h-9 sm:w-auto"

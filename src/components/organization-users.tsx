@@ -889,6 +889,7 @@ export function OrganizationUsers() {
             <DialogTitle>Invite user</DialogTitle>
             <DialogDescription>
               Create a browser-local invitation and choose its starting role.
+              Cupboard does not send an invitation or grant organization access.
             </DialogDescription>
           </DialogHeader>
           <UserFields

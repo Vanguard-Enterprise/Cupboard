@@ -73,7 +73,10 @@ describe("Organization approvals", () => {
     expect(serverApprovers.className).toContain("sm:h-10");
 
     expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    const cancel = screen.getByRole("button", {
+      name: "Cancel",
+    }) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(true);
     const save = screen.getByRole("button", { name: "Save changes" });
     expect(save.className).toContain("h-11");
     expect(save.className).toContain("w-full");
@@ -107,6 +110,30 @@ describe("Organization approvals", () => {
       "Approval settings saved.",
     );
     expect(save.disabled).toBe(true);
+  });
+
+  it("cancels unsaved approval changes", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Approval rules" });
+    const billing = screen.getByLabelText("Approvals required for Billing");
+    const cancel = screen.getByRole("button", {
+      name: "Cancel",
+    }) as HTMLButtonElement;
+    const save = screen.getByRole("button", {
+      name: "Save changes",
+    }) as HTMLButtonElement;
+
+    await user.click(billing);
+    await user.click(screen.getByRole("option", { name: "2" }));
+    expect(billing.textContent).toContain("2");
+    expect(cancel.disabled).toBe(false);
+
+    await user.click(cancel);
+    expect(billing.textContent).toContain("None");
+    expect(cancel.disabled).toBe(true);
+    expect(save.disabled).toBe(true);
+    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
   });
 
   it("saves a rule with no approval requirement", async () => {
