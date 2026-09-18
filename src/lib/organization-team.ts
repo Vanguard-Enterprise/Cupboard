@@ -210,7 +210,8 @@ export function parseOrganizationTeam(raw: string): OrganizationTeamSettings {
       !statuses.has(candidate.status as OrganizationUserStatus) ||
       !(
         candidate.lastActiveAt === null ||
-        typeof candidate.lastActiveAt === "string"
+        (typeof candidate.lastActiveAt === "string" &&
+          Number.isFinite(Date.parse(candidate.lastActiveAt)))
       )
     )
       throw new Error("Invalid user");

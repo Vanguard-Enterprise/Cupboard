@@ -17,6 +17,12 @@ describe("organization team settings", () => {
     expect(() => parseOrganizationTeam(JSON.stringify(invalid))).toThrow();
   });
 
+  it("rejects invalid last-active timestamps", () => {
+    const invalid = structuredClone(defaultOrganizationTeam);
+    invalid.users[0].lastActiveAt = "not-a-date";
+    expect(() => parseOrganizationTeam(JSON.stringify(invalid))).toThrow();
+  });
+
   it("rejects duplicate user emails and role names", () => {
     const duplicateEmail = structuredClone(defaultOrganizationTeam);
     duplicateEmail.users[1].email = duplicateEmail.users[0].email;

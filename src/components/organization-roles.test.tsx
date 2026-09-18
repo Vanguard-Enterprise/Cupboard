@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { OrganizationRoles } from "./organization-roles";
 import { TooltipProvider } from "./ui/tooltip";
 import {
+  defaultOrganizationTeam,
   organizationTeamKey,
   parseOrganizationTeam,
 } from "@/lib/organization-team";
@@ -17,6 +18,14 @@ function mount() {
     <TooltipProvider>
       <OrganizationRoles />
     </TooltipProvider>,
+  );
+}
+
+function publishTeam(settings: typeof defaultOrganizationTeam) {
+  const raw = JSON.stringify(settings);
+  localStorage.setItem(organizationTeamKey, raw);
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: organizationTeamKey, newValue: raw }),
   );
 }
 
@@ -116,6 +125,9 @@ describe("Organization roles", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "Edit role" }));
     const dialog = screen.getByRole("dialog", { name: "Edit role" });
+    expect(
+      within(dialog).getByText(/do not grant or restrict access/i),
+    ).toBeTruthy();
     await user.click(
       within(dialog).getByRole("checkbox", { name: "Manage integrations" }),
     );
@@ -136,6 +148,72 @@ describe("Organization roles", () => {
     const deleteItem = screen.getByRole("menuitem", { name: "Delete role" });
     expect(deleteItem.getAttribute("data-disabled")).not.toBeNull();
     expect(toast.success).toHaveBeenCalledWith("Role updated.");
+  });
+
+  it("rejects an edit when the role changed in another tab", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Roles" });
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Operator",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit role" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit role" });
+
+    const external = structuredClone(defaultOrganizationTeam);
+    external.roles.find(({ id }) => id === "operator")!.description =
+      "Updated elsewhere";
+    act(() => publishTeam(external));
+    await user.click(within(dialog).getByRole("button", { name: "Save role" }));
+
+    expect(within(dialog).getByRole("alert").textContent).toContain(
+      "changed in another tab",
+    );
+    expect(
+      parseOrganizationTeam(
+        localStorage.getItem(organizationTeamKey)!,
+      ).roles.find(({ id }) => id === "operator")?.description,
+    ).toBe("Updated elsewhere");
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("rejects an edit when the role was removed in another tab", async () => {
+    const initial = structuredClone(defaultOrganizationTeam);
+    initial.roles.push({
+      id: "support",
+      name: "Support",
+      description: "Handles support requests.",
+      permissions: ["servers.view"],
+      system: false,
+    });
+    localStorage.setItem(organizationTeamKey, JSON.stringify(initial));
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Roles" });
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Support",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit role" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit role" });
+
+    const external = structuredClone(initial);
+    external.roles = external.roles.filter(({ id }) => id !== "support");
+    act(() => publishTeam(external));
+    await user.click(within(dialog).getByRole("button", { name: "Save role" }));
+
+    expect(within(dialog).getByRole("alert").textContent).toContain(
+      "removed in another tab",
+    );
+    expect(
+      parseOrganizationTeam(
+        localStorage.getItem(organizationTeamKey)!,
+      ).roles.some(({ id }) => id === "support"),
+    ).toBe(false);
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("offers all role actions from the mobile menu", async () => {

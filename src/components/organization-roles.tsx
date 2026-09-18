@@ -79,6 +79,20 @@ const emptyDraft: RoleDraft = {
   permissions: [],
 };
 
+function matchesEditableRole(
+  current: OrganizationRole,
+  original: OrganizationRole,
+) {
+  return (
+    current.name === original.name &&
+    current.description === original.description &&
+    current.permissions.length === original.permissions.length &&
+    current.permissions.every(
+      (permission, index) => permission === original.permissions[index],
+    )
+  );
+}
+
 function PermissionBadges({ permissions }: { permissions: PermissionId[] }) {
   const definitions = permissionDefinitions.filter(({ id }) =>
     permissions.includes(id),
@@ -267,6 +281,21 @@ export function OrganizationRoles() {
   }
 
   function saveRole() {
+    if (editing) {
+      const currentRole = settings.roles.find(({ id }) => id === editing.id);
+      if (!currentRole) {
+        setFormError(
+          "This role was removed in another tab. Close this dialog to continue.",
+        );
+        return;
+      }
+      if (!matchesEditableRole(currentRole, editing)) {
+        setFormError(
+          "This role changed in another tab. Close and reopen the dialog before saving.",
+        );
+        return;
+      }
+    }
     const normalizedName = draft.name.trim();
     if (!normalizedName) {
       setFormError("Enter a role name.");
@@ -597,7 +626,8 @@ export function OrganizationRoles() {
           <DialogHeader>
             <DialogTitle>{editing ? "Edit role" : "Add role"}</DialogTitle>
             <DialogDescription>
-              Choose what this role can see and change.
+              Choose the permissions saved with this role. These browser-local
+              permissions do not grant or restrict access.
             </DialogDescription>
           </DialogHeader>
           <RoleFields

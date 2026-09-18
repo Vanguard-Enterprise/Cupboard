@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { OrganizationUsers } from "./organization-users";
 import { TooltipProvider } from "./ui/tooltip";
 import {
+  defaultOrganizationTeam,
   organizationTeamKey,
   parseOrganizationTeam,
 } from "@/lib/organization-team";
@@ -17,6 +18,14 @@ function mount() {
     <TooltipProvider>
       <OrganizationUsers />
     </TooltipProvider>,
+  );
+}
+
+function publishTeam(settings: typeof defaultOrganizationTeam) {
+  const raw = JSON.stringify(settings);
+  localStorage.setItem(organizationTeamKey, raw);
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: organizationTeamKey, newValue: raw }),
   );
 }
 
@@ -166,6 +175,65 @@ describe("Organization users", () => {
     );
     stored = parseOrganizationTeam(localStorage.getItem(organizationTeamKey)!);
     expect(stored.users.some(({ id }) => id === "user-maya-chen")).toBe(false);
+  });
+
+  it("rejects an edit when the user changed in another tab", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Maya Chen",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit user" });
+    await user.clear(within(dialog).getByLabelText("Name"));
+    await user.type(within(dialog).getByLabelText("Name"), "Local edit");
+
+    const external = structuredClone(defaultOrganizationTeam);
+    external.users.find(({ id }) => id === "user-maya-chen")!.name =
+      "Updated elsewhere";
+    act(() => publishTeam(external));
+    await user.click(within(dialog).getByRole("button", { name: "Save user" }));
+
+    expect(within(dialog).getByRole("alert").textContent).toContain(
+      "changed in another tab",
+    );
+    expect(
+      parseOrganizationTeam(
+        localStorage.getItem(organizationTeamKey)!,
+      ).users.find(({ id }) => id === "user-maya-chen")?.name,
+    ).toBe("Updated elsewhere");
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("rejects an edit when the user was removed in another tab", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Maya Chen",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit user" });
+
+    const external = structuredClone(defaultOrganizationTeam);
+    external.users = external.users.filter(({ id }) => id !== "user-maya-chen");
+    act(() => publishTeam(external));
+    await user.click(within(dialog).getByRole("button", { name: "Save user" }));
+
+    expect(within(dialog).getByRole("alert").textContent).toContain(
+      "removed in another tab",
+    );
+    expect(
+      parseOrganizationTeam(
+        localStorage.getItem(organizationTeamKey)!,
+      ).users.some(({ id }) => id === "user-maya-chen"),
+    ).toBe(false);
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("keeps current-operator protections after an email change", async () => {

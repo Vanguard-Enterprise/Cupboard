@@ -104,6 +104,18 @@ function formatLastActive(value: string | null) {
   }).format(new Date(value));
 }
 
+function matchesEditableUser(
+  current: OrganizationUser,
+  original: OrganizationUser,
+) {
+  return (
+    current.name === original.name &&
+    current.email === original.email &&
+    current.roleId === original.roleId &&
+    current.status === original.status
+  );
+}
+
 function UserStatusBadge({ status }: { status: OrganizationUserStatus }) {
   if (status === "active") {
     return (
@@ -383,6 +395,19 @@ export function OrganizationUsers() {
 
   function updateUser() {
     if (!editing || !editDraft) return;
+    const currentUser = settings.users.find(({ id }) => id === editing.id);
+    if (!currentUser) {
+      setEditError(
+        "This user was removed in another tab. Close this dialog to continue.",
+      );
+      return;
+    }
+    if (!matchesEditableUser(currentUser, editing)) {
+      setEditError(
+        "This user changed in another tab. Close and reopen the dialog before saving.",
+      );
+      return;
+    }
     const error = validateDraft(editDraft, editing.id);
     setEditError(error);
     if (error) return;
