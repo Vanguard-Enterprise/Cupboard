@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
+import { flushSync } from "react-dom";
 import {
   CopyPlusIcon,
   MoreHorizontalIcon,
@@ -72,6 +73,8 @@ import {
 
 type RoleSort = "name" | "users" | "permissions";
 type RoleDraft = Pick<OrganizationRole, "name" | "description" | "permissions">;
+type RoleDraftField = keyof RoleDraft;
+type RoleDraftIssue = { field: RoleDraftField; message: string };
 
 const emptyDraft: RoleDraft = {
   name: "",
@@ -114,12 +117,14 @@ function PermissionBadges({ permissions }: { permissions: PermissionId[] }) {
 function RoleFields({
   draft,
   error,
+  errorField,
   editingSystemRole,
   lockPermissions,
   onChange,
 }: {
   draft: RoleDraft;
   error: string;
+  errorField: RoleDraftField | null;
   editingSystemRole: boolean;
   lockPermissions: boolean;
   onChange: (draft: RoleDraft) => void;
@@ -127,7 +132,7 @@ function RoleFields({
   const groups = ["Servers", "Community", "Organization"] as const;
   return (
     <div className="grid gap-5">
-      {error ? (
+      {error && !errorField ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
@@ -137,24 +142,49 @@ function RoleFields({
         <Input
           id="role-name"
           value={draft.name}
+          aria-invalid={errorField === "name"}
+          aria-describedby={
+            errorField === "name" ? "role-name-error" : undefined
+          }
           disabled={editingSystemRole}
           className="h-11 sm:h-10"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
           autoFocus={!editingSystemRole}
         />
+        {errorField === "name" ? (
+          <p id="role-name-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
       </div>
       <div className="grid gap-2">
         <Label htmlFor="role-description">Description</Label>
         <Textarea
           id="role-description"
           value={draft.description}
+          aria-invalid={errorField === "description"}
+          aria-describedby={
+            errorField === "description" ? "role-description-error" : undefined
+          }
           className="min-h-[88px] resize-none"
           onChange={(event) =>
             onChange({ ...draft, description: event.target.value })
           }
         />
+        {errorField === "description" ? (
+          <p id="role-description-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
       </div>
-      <fieldset disabled={lockPermissions} className="grid gap-4">
+      <fieldset
+        disabled={lockPermissions}
+        aria-invalid={errorField === "permissions"}
+        aria-describedby={
+          errorField === "permissions" ? "role-permissions-error" : undefined
+        }
+        className="grid gap-4"
+      >
         <legend className="text-sm font-medium">Permissions</legend>
         {groups.map((group) => (
           <div key={group} className="grid gap-2">
@@ -170,8 +200,15 @@ function RoleFields({
                       className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-input-background p-3 has-disabled:cursor-not-allowed has-disabled:opacity-60"
                     >
                       <Checkbox
+                        id={`role-permission-${permission.id}`}
                         disabled={lockPermissions}
                         checked={checked}
+                        aria-invalid={errorField === "permissions"}
+                        aria-describedby={
+                          errorField === "permissions"
+                            ? "role-permissions-error"
+                            : undefined
+                        }
                         onCheckedChange={(nextChecked) =>
                           onChange({
                             ...draft,
@@ -198,6 +235,11 @@ function RoleFields({
             </div>
           </div>
         ))}
+        {errorField === "permissions" ? (
+          <p id="role-permissions-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
       </fieldset>
       {lockPermissions ? (
         <p className="text-xs leading-5 text-muted-foreground">
@@ -218,7 +260,11 @@ export function OrganizationRoles() {
   const [editing, setEditing] = useState<OrganizationRole | null>(null);
   const [draft, setDraft] = useState<RoleDraft>(emptyDraft);
   const [formError, setFormError] = useState("");
+  const [formErrorField, setFormErrorField] = useState<RoleDraftField | null>(
+    null,
+  );
   const [deleting, setDeleting] = useState<OrganizationRole | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   const userCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const user of settings.users)
@@ -267,6 +313,7 @@ export function OrganizationRoles() {
   function openRoleDialog(role?: OrganizationRole) {
     clearStorageError();
     setFormError("");
+    setFormErrorField(null);
     setEditing(role ?? null);
     setDraft(
       role
@@ -280,6 +327,18 @@ export function OrganizationRoles() {
     setDialogOpen(true);
   }
 
+  function focusRoleIssue(issue: RoleDraftIssue) {
+    flushSync(() => {
+      setFormError(issue.message);
+      setFormErrorField(issue.field);
+    });
+    const fieldId =
+      issue.field === "permissions"
+        ? `role-permission-${permissionDefinitions[0].id}`
+        : `role-${issue.field}`;
+    document.getElementById(fieldId)?.focus();
+  }
+
   function saveRole() {
     if (editing) {
       const currentRole = settings.roles.find(({ id }) => id === editing.id);
@@ -287,26 +346,34 @@ export function OrganizationRoles() {
         setFormError(
           "This role was removed in another tab. Close this dialog to continue.",
         );
+        setFormErrorField(null);
         return;
       }
       if (!matchesEditableRole(currentRole, editing)) {
         setFormError(
           "This role changed in another tab. Close and reopen the dialog before saving.",
         );
+        setFormErrorField(null);
         return;
       }
     }
     const normalizedName = draft.name.trim();
     if (!normalizedName) {
-      setFormError("Enter a role name.");
+      focusRoleIssue({ field: "name", message: "Enter a role name." });
       return;
     }
     if (!draft.description.trim()) {
-      setFormError("Describe what this role is for.");
+      focusRoleIssue({
+        field: "description",
+        message: "Describe what this role is for.",
+      });
       return;
     }
     if (!draft.permissions.length) {
-      setFormError("Choose at least one permission.");
+      focusRoleIssue({
+        field: "permissions",
+        message: "Choose at least one permission.",
+      });
       return;
     }
     if (
@@ -316,9 +383,14 @@ export function OrganizationRoles() {
           role.name.toLowerCase() === normalizedName.toLowerCase(),
       )
     ) {
-      setFormError("A role with this name already exists.");
+      focusRoleIssue({
+        field: "name",
+        message: "A role with this name already exists.",
+      });
       return;
     }
+    setFormError("");
+    setFormErrorField(null);
 
     const nextRole: OrganizationRole = editing
       ? {
@@ -350,6 +422,7 @@ export function OrganizationRoles() {
     clearStorageError();
     setEditing(null);
     setFormError("");
+    setFormErrorField(null);
     setDraft({
       name: `${role.name} copy`,
       description: role.description,
@@ -358,9 +431,37 @@ export function OrganizationRoles() {
     setDialogOpen(true);
   }
 
-  function deleteRole() {
-    if (!deleting || deleting.system || (userCounts.get(deleting.id) ?? 0) > 0)
+  function openDeleteRole(role: OrganizationRole) {
+    clearStorageError();
+    setDeleteError("");
+    setDeleting(role);
+  }
+
+  function deleteRole(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    if (!deleting) return;
+    const currentRole = settings.roles.find(({ id }) => id === deleting.id);
+    if (!currentRole) {
+      setDeleteError(
+        "This role was already deleted in another tab. Close this confirmation.",
+      );
       return;
+    }
+    if (!matchesEditableRole(currentRole, deleting)) {
+      setDeleteError(
+        "This role changed in another tab. Close and reopen the confirmation before deleting it.",
+      );
+      return;
+    }
+    const assignedUsers = userCounts.get(deleting.id) ?? 0;
+    if (currentRole.system || assignedUsers > 0) {
+      setDeleteError(
+        assignedUsers > 0
+          ? `This role is now assigned to ${assignedUsers} ${assignedUsers === 1 ? "user" : "users"}. Reassign ${assignedUsers === 1 ? "that user" : "those users"} before deleting the role.`
+          : "Built-in roles cannot be deleted.",
+      );
+      return;
+    }
     if (
       save({
         ...settings,
@@ -368,6 +469,7 @@ export function OrganizationRoles() {
       })
     ) {
       toast.success(`${deleting.name} deleted.`);
+      setDeleteError("");
       setDeleting(null);
     }
   }
@@ -516,7 +618,7 @@ export function OrganizationRoles() {
                                 <DropdownMenuItem
                                   variant="destructive"
                                   disabled={role.system || count > 0}
-                                  onSelect={() => setDeleting(role)}
+                                  onSelect={() => openDeleteRole(role)}
                                 >
                                   <Trash2Icon /> Delete role
                                 </DropdownMenuItem>
@@ -583,7 +685,7 @@ export function OrganizationRoles() {
                             disabled={
                               role.system || (userCounts.get(role.id) ?? 0) > 0
                             }
-                            onSelect={() => setDeleting(role)}
+                            onSelect={() => openDeleteRole(role)}
                           >
                             <Trash2Icon /> Delete role
                           </DropdownMenuItem>
@@ -633,11 +735,13 @@ export function OrganizationRoles() {
           <RoleFields
             draft={draft}
             error={formError || storageError}
+            errorField={formErrorField}
             editingSystemRole={Boolean(editing?.system)}
             lockPermissions={editing?.id === "owner"}
             onChange={(nextDraft) => {
               setDraft(nextDraft);
               setFormError("");
+              setFormErrorField(null);
             }}
           />
           <DialogFooter className="sticky bottom-0">
@@ -656,7 +760,10 @@ export function OrganizationRoles() {
       <AlertDialog
         open={deleting !== null}
         onOpenChange={(open) => {
-          if (!open) setDeleting(null);
+          if (!open) {
+            setDeleting(null);
+            setDeleteError("");
+          }
         }}
       >
         <AlertDialogContent>
@@ -667,6 +774,11 @@ export function OrganizationRoles() {
               undo this action.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {deleteError || storageError ? (
+            <Alert variant="destructive">
+              <AlertDescription>{deleteError || storageError}</AlertDescription>
+            </Alert>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Keep role</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={deleteRole}>

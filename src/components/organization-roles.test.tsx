@@ -114,6 +114,99 @@ describe("Organization roles", () => {
     );
   });
 
+  it("focuses and describes each invalid role field", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Roles" });
+    await user.click(screen.getByRole("button", { name: "Add role" }));
+    const dialog = screen.getByRole("dialog", { name: "Add role" });
+    const create = within(dialog).getByRole("button", { name: "Create role" });
+
+    await user.click(create);
+    const name = within(dialog).getByLabelText("Role name");
+    expect(document.activeElement).toBe(name);
+    expect(name.getAttribute("aria-invalid")).toBe("true");
+    expect(name.getAttribute("aria-describedby")).toBe("role-name-error");
+    expect(within(dialog).getByText("Enter a role name.")).toBeTruthy();
+
+    await user.type(name, "Support lead");
+    await user.click(create);
+    const description = within(dialog).getByLabelText("Description");
+    expect(document.activeElement).toBe(description);
+    expect(description.getAttribute("aria-invalid")).toBe("true");
+    expect(description.getAttribute("aria-describedby")).toBe(
+      "role-description-error",
+    );
+    expect(
+      within(dialog).getByText("Describe what this role is for."),
+    ).toBeTruthy();
+
+    await user.type(description, "Handles support requests.");
+    await user.click(create);
+    const firstPermission = within(dialog).getByRole("checkbox", {
+      name: "View servers",
+    });
+    expect(document.activeElement).toBe(firstPermission);
+    expect(firstPermission.getAttribute("aria-invalid")).toBe("true");
+    expect(firstPermission.getAttribute("aria-describedby")).toBe(
+      "role-permissions-error",
+    );
+    expect(
+      within(dialog).getByText("Choose at least one permission."),
+    ).toBeTruthy();
+  });
+
+  it("keeps deletion open when a role gains users in another tab", async () => {
+    const initial = structuredClone(defaultOrganizationTeam);
+    initial.roles.push({
+      id: "support",
+      name: "Support",
+      description: "Handles support requests.",
+      permissions: ["servers.view"],
+      system: false,
+    });
+    localStorage.setItem(organizationTeamKey, JSON.stringify(initial));
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Roles" });
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Support",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Delete role" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Delete Support?",
+    });
+
+    const external = structuredClone(initial);
+    external.users.push({
+      id: "user-external",
+      name: "External user",
+      email: "external@example.com",
+      roleId: "support",
+      status: "active",
+      lastActiveAt: null,
+    });
+    act(() => publishTeam(external));
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Delete role" }),
+    );
+
+    expect(
+      screen.getByRole("alertdialog", { name: "Delete Support?" }),
+    ).toBeTruthy();
+    expect(within(confirmation).getByRole("alert").textContent).toContain(
+      "now assigned to 1 user",
+    );
+    expect(
+      parseOrganizationTeam(
+        localStorage.getItem(organizationTeamKey)!,
+      ).roles.some(({ id }) => id === "support"),
+    ).toBe(true);
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it("edits permissions and prevents deleting built-in roles", async () => {
     const user = userEvent.setup();
     mount();
