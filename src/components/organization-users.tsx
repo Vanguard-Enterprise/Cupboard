@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
+  FilterIcon,
   MoreHorizontalIcon,
   PlusIcon,
   Trash2Icon,
@@ -32,8 +33,10 @@ import {
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -231,6 +234,10 @@ export function OrganizationUsers() {
   const { ready, settings, storageError, clearStorageError, save } =
     useOrganizationTeam();
   const [query, setQuery] = useState("");
+  const [roleFilters, setRoleFilters] = useState<Set<string>>(new Set());
+  const [statusFilters, setStatusFilters] = useState<
+    Set<OrganizationUserStatus>
+  >(new Set());
   const [sort, setSort] = useState<UserSort>("name");
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -253,9 +260,16 @@ export function OrganizationUsers() {
     const normalized = query.trim().toLowerCase();
     const filtered = settings.users.filter((user) => {
       const role = rolesById.get(user.roleId)?.name ?? "Unknown role";
-      return `${user.name} ${user.email} ${role} ${statusLabels[user.status]}`
-        .toLowerCase()
-        .includes(normalized);
+      const matchesQuery =
+        !normalized ||
+        `${user.name} ${user.email} ${role} ${statusLabels[user.status]}`
+          .toLowerCase()
+          .includes(normalized);
+      const matchesRole =
+        roleFilters.size === 0 || roleFilters.has(user.roleId);
+      const matchesStatus =
+        statusFilters.size === 0 || statusFilters.has(user.status);
+      return matchesQuery && matchesRole && matchesStatus;
     });
     return filtered.toSorted((left, right) => {
       let result = 0;
@@ -272,7 +286,15 @@ export function OrganizationUsers() {
         );
       return direction === "asc" ? result : -result;
     });
-  }, [direction, query, rolesById, settings.users, sort]);
+  }, [
+    direction,
+    query,
+    roleFilters,
+    rolesById,
+    settings.users,
+    sort,
+    statusFilters,
+  ]);
 
   if (!ready) {
     return (
@@ -288,6 +310,29 @@ export function OrganizationUsers() {
       setSort(next);
       setDirection("asc");
     }
+  }
+
+  function toggleRoleFilter(roleId: string) {
+    setRoleFilters((current) => {
+      const next = new Set(current);
+      if (next.has(roleId)) next.delete(roleId);
+      else next.add(roleId);
+      return next;
+    });
+  }
+
+  function toggleStatusFilter(status: OrganizationUserStatus) {
+    setStatusFilters((current) => {
+      const next = new Set(current);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  }
+
+  function clearFilters() {
+    setRoleFilters(new Set());
+    setStatusFilters(new Set());
   }
 
   function validateDraft(draft: UserDraft, currentId?: string) {
@@ -369,6 +414,7 @@ export function OrganizationUsers() {
   }
 
   const resultLabel = `${users.length} ${users.length === 1 ? "user" : "users"}`;
+  const activeFilterCount = roleFilters.size + statusFilters.size;
 
   return (
     <>
@@ -395,13 +441,76 @@ export function OrganizationUsers() {
           aria-label="Organization users"
           className="overflow-hidden rounded-xl border border-border bg-card"
         >
-          <div className="flex flex-col gap-3 border-b border-border p-3 sm:flex-row sm:items-center">
-            <TeamSearch
-              id="user-search"
-              label="Search users"
-              value={query}
-              onChange={setQuery}
-            />
+          <div className="flex flex-wrap items-center gap-3 border-b border-border p-3">
+            <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+              <TeamSearch
+                id="user-search"
+                label="Search users"
+                value={query}
+                onChange={setQuery}
+                className="sm:w-72 sm:flex-none lg:w-80"
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 bg-input-background lg:h-9"
+                    aria-label={`Filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`}
+                  >
+                    <FilterIcon aria-hidden="true" />
+                    Filters
+                    {activeFilterCount ? (
+                      <Badge
+                        variant="secondary"
+                        className="ml-0.5 min-w-5 justify-center px-1.5"
+                        aria-hidden="true"
+                      >
+                        {activeFilterCount}
+                      </Badge>
+                    ) : null}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuLabel>Role</DropdownMenuLabel>
+                  {settings.roles.map((role) => (
+                    <DropdownMenuCheckboxItem
+                      key={role.id}
+                      checked={roleFilters.has(role.id)}
+                      onCheckedChange={() => toggleRoleFilter(role.id)}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {role.name}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Status</DropdownMenuLabel>
+                  {(
+                    Object.entries(statusLabels) as [
+                      OrganizationUserStatus,
+                      string,
+                    ][]
+                  ).map(([status, label]) => (
+                    <DropdownMenuCheckboxItem
+                      key={status}
+                      checked={statusFilters.has(status)}
+                      onCheckedChange={() => toggleStatusFilter(status)}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      {label}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                  {activeFilterCount ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={clearFilters}>
+                        Clear filters
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
             <Select
               value={`${sort}:${direction}`}
               onValueChange={(value) => {
@@ -415,7 +524,7 @@ export function OrganizationUsers() {
             >
               <SelectTrigger
                 aria-label="Sort users"
-                className="h-11 w-full bg-input-background md:hidden"
+                className="h-11 w-full bg-input-background sm:w-48 md:hidden"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -427,7 +536,10 @@ export function OrganizationUsers() {
                 <SelectItem value="lastActive:desc">Recently active</SelectItem>
               </SelectContent>
             </Select>
-            <p className="shrink-0 px-1 text-xs text-text-muted" role="status">
+            <p
+              className="ml-auto shrink-0 px-1 text-xs text-text-muted"
+              role="status"
+            >
               {resultLabel}
             </p>
           </div>
@@ -595,14 +707,23 @@ export function OrganizationUsers() {
             <div className="px-6 py-12 text-center">
               <h2 className="text-base font-semibold">No matching users</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Try another name, email, role, or status.
+                {activeFilterCount
+                  ? "Try another search or remove a filter."
+                  : "Try another name, email, role, or status."}
               </p>
               <Button
                 variant="outline"
                 className="mt-4 h-11 sm:h-9"
-                onClick={() => setQuery("")}
+                onClick={() => {
+                  setQuery("");
+                  clearFilters();
+                }}
               >
-                Clear search
+                {activeFilterCount && query
+                  ? "Clear all"
+                  : activeFilterCount
+                    ? "Clear filters"
+                    : "Clear search"}
               </Button>
             </div>
           )}
