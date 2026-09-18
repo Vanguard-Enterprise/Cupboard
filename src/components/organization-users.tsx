@@ -76,6 +76,12 @@ type UserDraft = Pick<OrganizationUser, "name" | "email" | "roleId" | "status">;
 type UserDraftField = "name" | "email" | "roleId";
 type UserDraftIssue = { field: UserDraftField; message: string };
 const currentOperatorId = "user-demo-operator";
+const emptyInviteDraft: UserDraft = {
+  name: "",
+  email: "",
+  roleId: "viewer",
+  status: "invited",
+};
 
 const statusLabels: Record<OrganizationUserStatus, string> = {
   active: "Active",
@@ -290,12 +296,7 @@ export function OrganizationUsers() {
   const [sort, setSort] = useState<UserSort>("name");
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteDraft, setInviteDraft] = useState<UserDraft>({
-    name: "",
-    email: "",
-    roleId: "viewer",
-    status: "invited",
-  });
+  const [inviteDraft, setInviteDraft] = useState<UserDraft>(emptyInviteDraft);
   const [inviteError, setInviteError] = useState("");
   const [inviteErrorField, setInviteErrorField] =
     useState<UserDraftField | null>(null);
@@ -445,12 +446,7 @@ export function OrganizationUsers() {
     };
     if (save({ ...settings, users: [...settings.users, nextUser] })) {
       setInviteOpen(false);
-      setInviteDraft({
-        name: "",
-        email: "",
-        roleId: "viewer",
-        status: "invited",
-      });
+      setInviteDraft(emptyInviteDraft);
       toast.success(`Invitation created for ${nextUser.email}.`);
     }
   }
@@ -877,7 +873,17 @@ export function OrganizationUsers() {
         </section>
       </div>
 
-      <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
+      <Dialog
+        open={inviteOpen}
+        onOpenChange={(open) => {
+          setInviteOpen(open);
+          if (!open) {
+            setInviteDraft(emptyInviteDraft);
+            setInviteError("");
+            setInviteErrorField(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Invite user</DialogTitle>

@@ -184,6 +184,34 @@ describe("Organization users", () => {
     ).toBeTruthy();
   });
 
+  it("discards a canceled invitation draft", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    await user.click(screen.getByRole("button", { name: "Invite user" }));
+    const dialog = screen.getByRole("dialog", { name: "Invite user" });
+    await user.type(within(dialog).getByLabelText("Name"), "Canceled user");
+    await user.type(
+      within(dialog).getByLabelText("Email"),
+      "canceled@example.com",
+    );
+    await user.click(within(dialog).getByLabelText("User role"));
+    await user.click(screen.getByRole("option", { name: "Operator" }));
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("button", { name: "Invite user" }));
+    const reopened = screen.getByRole("dialog", { name: "Invite user" });
+    expect(
+      (within(reopened).getByLabelText("Name") as HTMLInputElement).value,
+    ).toBe("");
+    expect(
+      (within(reopened).getByLabelText("Email") as HTMLInputElement).value,
+    ).toBe("");
+    expect(within(reopened).getByLabelText("User role").textContent).toContain(
+      "Viewer",
+    );
+  });
+
   it("updates and removes a user", async () => {
     const user = userEvent.setup();
     mount();

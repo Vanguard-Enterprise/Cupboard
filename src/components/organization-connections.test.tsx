@@ -107,7 +107,13 @@ describe("Organization connections", () => {
     });
     setupCloudflare.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    const setupDialog = screen.getByRole("dialog");
+    expect(setupDialog).toBeTruthy();
+    const describedBy = setupDialog.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toContain(
+      "sample data",
+    );
     const dialogTitle = screen.getByText("Connect Cloudflare");
     expect(document.activeElement).toBe(dialogTitle);
     expect(dialogTitle.className).toContain("focus-visible:ring-2");

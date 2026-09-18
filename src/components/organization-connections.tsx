@@ -346,7 +346,6 @@ export function OrganizationConnections() {
       >
         {selected && (
           <DialogContent
-            aria-describedby={undefined}
             className="gap-3 sm:max-w-sm"
             showCloseButton={false}
             onOpenAutoFocus={(event) => {
