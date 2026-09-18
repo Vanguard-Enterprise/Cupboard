@@ -137,6 +137,53 @@ describe("Organization users", () => {
     );
   });
 
+  it("focuses and describes the first invalid field in user dialogs", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    await user.click(screen.getByRole("button", { name: "Invite user" }));
+    const inviteDialog = screen.getByRole("dialog", { name: "Invite user" });
+    await user.click(
+      within(inviteDialog).getByRole("button", { name: "Create invitation" }),
+    );
+
+    const inviteName = within(inviteDialog).getByLabelText("Name");
+    expect(document.activeElement).toBe(inviteName);
+    expect(inviteName.getAttribute("aria-invalid")).toBe("true");
+    expect(inviteName.getAttribute("aria-describedby")).toBe(
+      "team-user-name-error",
+    );
+    expect(
+      within(inviteDialog).getByText("Enter the user's name."),
+    ).toBeTruthy();
+
+    await user.click(
+      within(inviteDialog).getByRole("button", { name: "Cancel" }),
+    );
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Maya Chen",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    const editDialog = screen.getByRole("dialog", { name: "Edit user" });
+    const email = within(editDialog).getByLabelText("Email");
+    await user.clear(email);
+    await user.type(email, "invalid");
+    await user.click(
+      within(editDialog).getByRole("button", { name: "Save user" }),
+    );
+
+    expect(document.activeElement).toBe(email);
+    expect(email.getAttribute("aria-invalid")).toBe("true");
+    expect(email.getAttribute("aria-describedby")).toBe(
+      "team-user-email-error",
+    );
+    expect(
+      within(editDialog).getByText("Enter a valid email address."),
+    ).toBeTruthy();
+  });
+
   it("updates and removes a user", async () => {
     const user = userEvent.setup();
     mount();
@@ -148,6 +195,9 @@ describe("Organization users", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
     const editDialog = screen.getByRole("dialog", { name: "Edit user" });
+    expect(
+      within(editDialog).getByText(/do not grant, suspend, or revoke access/i),
+    ).toBeTruthy();
     await user.click(within(editDialog).getByLabelText("User role"));
     await user.click(screen.getByRole("option", { name: "Administrator" }));
     await user.click(within(editDialog).getByLabelText("User status"));

@@ -1016,6 +1016,11 @@ describe("Organization credentials and webhooks", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const editDialog = screen.getByRole("dialog", { name: "Edit webhook" });
+    expect(
+      within(editDialog).getByText(
+        "Update the sample endpoint and selected events in this browser. This preview does not send webhooks.",
+      ),
+    ).toBeTruthy();
     const name = within(editDialog).getByRole("textbox", {
       name: "Webhook name",
     });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   FilterIcon,
   MoreHorizontalIcon,
@@ -72,6 +73,8 @@ import type {
 
 type UserSort = "name" | "role" | "status" | "lastActive";
 type UserDraft = Pick<OrganizationUser, "name" | "email" | "roleId" | "status">;
+type UserDraftField = "name" | "email" | "roleId";
+type UserDraftIssue = { field: UserDraftField; message: string };
 const currentOperatorId = "user-demo-operator";
 
 const statusLabels: Record<OrganizationUserStatus, string> = {
@@ -144,6 +147,7 @@ function UserFields({
   draft,
   roles,
   error,
+  errorField,
   lockAccess,
   showStatus = true,
   onChange,
@@ -151,13 +155,14 @@ function UserFields({
   draft: UserDraft;
   roles: OrganizationRole[];
   error: string;
+  errorField: UserDraftField | null;
   lockAccess?: boolean;
   showStatus?: boolean;
   onChange: (draft: UserDraft) => void;
 }) {
   return (
     <div className="grid gap-4">
-      {error ? (
+      {error && !errorField ? (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
@@ -167,10 +172,19 @@ function UserFields({
         <Input
           id="team-user-name"
           value={draft.name}
+          aria-invalid={errorField === "name"}
+          aria-describedby={
+            errorField === "name" ? "team-user-name-error" : undefined
+          }
           className="h-11 sm:h-10"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
           autoFocus
         />
+        {errorField === "name" ? (
+          <p id="team-user-name-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
       </div>
       <div className="grid gap-2">
         <Label htmlFor="team-user-email">Email</Label>
@@ -178,11 +192,20 @@ function UserFields({
           id="team-user-email"
           type="email"
           value={draft.email}
+          aria-invalid={errorField === "email"}
+          aria-describedby={
+            errorField === "email" ? "team-user-email-error" : undefined
+          }
           className="h-11 sm:h-10"
           onChange={(event) =>
             onChange({ ...draft, email: event.target.value })
           }
         />
+        {errorField === "email" ? (
+          <p id="team-user-email-error" className="text-sm text-destructive">
+            {error}
+          </p>
+        ) : null}
       </div>
       <div className={`grid gap-2 ${showStatus ? "sm:grid-cols-2" : ""}`}>
         <div className="grid gap-2">
@@ -195,6 +218,10 @@ function UserFields({
             <SelectTrigger
               id="team-user-role"
               aria-label="User role"
+              aria-invalid={errorField === "roleId"}
+              aria-describedby={
+                errorField === "roleId" ? "team-user-role-error" : undefined
+              }
               className="h-11 w-full bg-input-background sm:h-10"
             >
               <SelectValue />
@@ -207,6 +234,11 @@ function UserFields({
               ))}
             </SelectContent>
           </Select>
+          {errorField === "roleId" ? (
+            <p id="team-user-role-error" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
         </div>
         {showStatus ? (
           <div className="grid gap-2">
@@ -265,9 +297,14 @@ export function OrganizationUsers() {
     status: "invited",
   });
   const [inviteError, setInviteError] = useState("");
+  const [inviteErrorField, setInviteErrorField] =
+    useState<UserDraftField | null>(null);
   const [editing, setEditing] = useState<OrganizationUser | null>(null);
   const [editDraft, setEditDraft] = useState<UserDraft | null>(null);
   const [editError, setEditError] = useState("");
+  const [editErrorField, setEditErrorField] = useState<UserDraftField | null>(
+    null,
+  );
   const [removing, setRemoving] = useState<OrganizationUser | null>(null);
   const rolesById = useMemo(
     () => new Map(settings.roles.map((role) => [role.id, role])),
@@ -352,10 +389,14 @@ export function OrganizationUsers() {
     setStatusFilters(new Set());
   }
 
-  function validateDraft(draft: UserDraft, currentId?: string) {
-    if (!draft.name.trim()) return "Enter the user's name.";
+  function validateDraft(
+    draft: UserDraft,
+    currentId?: string,
+  ): UserDraftIssue | null {
+    if (!draft.name.trim())
+      return { field: "name", message: "Enter the user's name." };
     if (!/^\S+@\S+\.\S+$/.test(draft.email.trim()))
-      return "Enter a valid email address.";
+      return { field: "email", message: "Enter a valid email address." };
     if (
       settings.users.some(
         (user) =>
@@ -363,16 +404,36 @@ export function OrganizationUsers() {
           user.email.toLowerCase() === draft.email.trim().toLowerCase(),
       )
     )
-      return "A user with this email already exists.";
+      return {
+        field: "email",
+        message: "A user with this email already exists.",
+      };
     if (!settings.roles.some((role) => role.id === draft.roleId))
-      return "Choose an available role.";
-    return "";
+      return { field: "roleId", message: "Choose an available role." };
+    return null;
+  }
+
+  function focusDraftIssue(
+    issue: UserDraftIssue,
+    setError: (message: string) => void,
+    setErrorField: (field: UserDraftField | null) => void,
+  ) {
+    flushSync(() => {
+      setError(issue.message);
+      setErrorField(issue.field);
+    });
+    const fieldId = issue.field === "roleId" ? "role" : issue.field;
+    document.getElementById(`team-user-${fieldId}`)?.focus();
   }
 
   function createUser() {
-    const error = validateDraft(inviteDraft);
-    setInviteError(error);
-    if (error) return;
+    const issue = validateDraft(inviteDraft);
+    if (issue) {
+      focusDraftIssue(issue, setInviteError, setInviteErrorField);
+      return;
+    }
+    setInviteError("");
+    setInviteErrorField(null);
     const nextUser: OrganizationUser = {
       id: `user-${Date.now()}`,
       name: inviteDraft.name.trim(),
@@ -400,17 +461,23 @@ export function OrganizationUsers() {
       setEditError(
         "This user was removed in another tab. Close this dialog to continue.",
       );
+      setEditErrorField(null);
       return;
     }
     if (!matchesEditableUser(currentUser, editing)) {
       setEditError(
         "This user changed in another tab. Close and reopen the dialog before saving.",
       );
+      setEditErrorField(null);
       return;
     }
-    const error = validateDraft(editDraft, editing.id);
-    setEditError(error);
-    if (error) return;
+    const issue = validateDraft(editDraft, editing.id);
+    if (issue) {
+      focusDraftIssue(issue, setEditError, setEditErrorField);
+      return;
+    }
+    setEditError("");
+    setEditErrorField(null);
     const lockAccess = editing.id === currentOperatorId;
     const next = settings.users.map((user) =>
       user.id === editing.id
@@ -455,6 +522,7 @@ export function OrganizationUsers() {
           onClick={() => {
             clearStorageError();
             setInviteError("");
+            setInviteErrorField(null);
             setInviteOpen(true);
           }}
         >
@@ -663,6 +731,7 @@ export function OrganizationUsers() {
                                 onSelect={() => {
                                   clearStorageError();
                                   setEditError("");
+                                  setEditErrorField(null);
                                   setEditing(user);
                                   setEditDraft({
                                     name: user.name,
@@ -728,6 +797,7 @@ export function OrganizationUsers() {
                             onSelect={() => {
                               clearStorageError();
                               setEditError("");
+                              setEditErrorField(null);
                               setEditing(user);
                               setEditDraft({
                                 name: user.name,
@@ -793,10 +863,12 @@ export function OrganizationUsers() {
             draft={inviteDraft}
             roles={settings.roles}
             error={inviteError || storageError}
+            errorField={inviteErrorField}
             showStatus={false}
             onChange={(draft) => {
               setInviteDraft(draft);
               setInviteError("");
+              setInviteErrorField(null);
             }}
           />
           <DialogFooter>
@@ -818,6 +890,7 @@ export function OrganizationUsers() {
           if (!open) {
             setEditing(null);
             setEditDraft(null);
+            setEditErrorField(null);
           }
         }}
       >
@@ -825,7 +898,9 @@ export function OrganizationUsers() {
           <DialogHeader>
             <DialogTitle>Edit user</DialogTitle>
             <DialogDescription>
-              Update this user&apos;s identity, role, or status.
+              Update this user&apos;s identity, role, or status. Changes are
+              saved only in this browser and do not grant, suspend, or revoke
+              access.
             </DialogDescription>
           </DialogHeader>
           {editDraft ? (
@@ -833,10 +908,12 @@ export function OrganizationUsers() {
               draft={editDraft}
               roles={settings.roles}
               error={editError || storageError}
+              errorField={editErrorField}
               lockAccess={editing?.id === currentOperatorId}
               onChange={(draft) => {
                 setEditDraft(draft);
                 setEditError("");
+                setEditErrorField(null);
               }}
             />
           ) : null}

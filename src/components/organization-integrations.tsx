@@ -1145,7 +1145,7 @@ export function OrganizationIntegrations() {
             </DialogTitle>
             <DialogDescription>
               {editingWebhookId
-                ? "Update the endpoint and subscribed events."
+                ? "Update the sample endpoint and selected events in this browser. This preview does not send webhooks."
                 : "Save a sample endpoint and selected events in this browser. This preview does not send webhooks."}
             </DialogDescription>
           </DialogHeader>
