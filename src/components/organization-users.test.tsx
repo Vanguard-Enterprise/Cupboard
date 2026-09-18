@@ -51,6 +51,9 @@ describe("Organization users", () => {
     expect(screen.queryByText(/^Local preview/)).toBeNull();
     const search = screen.getByLabelText("Search users");
     expect(search.className).toContain("h-11");
+    expect(search.className).toContain("focus:placeholder:text-transparent");
+    expect(search.getAttribute("placeholder")).toBe("Search users");
+    expect(search.parentElement?.className).toContain("sm:w-72");
     await user.type(search, "noah");
     expect(screen.getAllByText("Noah Williams").length).toBeGreaterThan(0);
     expect(screen.queryByText("Maya Chen")).toBeNull();
@@ -59,6 +62,41 @@ describe("Organization users", () => {
     await user.click(screen.getByRole("button", { name: /Sort by User/ }));
     const rows = within(screen.getByRole("table")).getAllByRole("row");
     expect(rows[1].textContent).toContain("Priya Shah");
+  });
+
+  it("filters users by role and status", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+    const menu = screen.getByRole("menu");
+    await user.click(
+      within(menu).getByRole("menuitemcheckbox", { name: "Viewer" }),
+    );
+
+    expect(screen.getAllByText("Noah Williams").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Lena Ortiz").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Maya Chen")).toBeNull();
+    expect(
+      screen.getByRole("menu", { name: "Filters, 1 active" }),
+    ).toBeTruthy();
+
+    await user.click(
+      within(menu).getByRole("menuitemcheckbox", { name: "Suspended" }),
+    );
+
+    expect(screen.getAllByText("Lena Ortiz").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Noah Williams")).toBeNull();
+    expect(
+      screen.getByRole("menu", { name: "Filters, 2 active" }),
+    ).toBeTruthy();
+
+    await user.click(
+      within(menu).getByRole("menuitem", { name: "Clear filters" }),
+    );
+    expect(screen.getAllByText("Maya Chen").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Filters" })).toBeTruthy();
   });
 
   it("creates an invitation and persists its role", async () => {

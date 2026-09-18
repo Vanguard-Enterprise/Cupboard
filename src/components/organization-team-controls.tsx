@@ -6,6 +6,7 @@ import {
   ArrowUpIcon,
   SearchIcon,
 } from "lucide-react";
+import { cn } from "cn";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -16,18 +17,17 @@ export function TeamSearch({
   label,
   value,
   onChange,
+  className,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
+  className?: string;
 }) {
   return (
-    <div className="relative min-w-0 flex-1">
-      <label
-        htmlFor={id}
-        className="pointer-events-none absolute top-1/2 left-9 z-10 -translate-y-1/2 text-xs font-medium text-text-muted"
-      >
+    <div className={cn("relative min-w-0 flex-1", className)}>
+      <label htmlFor={id} className="sr-only">
         {label}
       </label>
       <SearchIcon
@@ -36,9 +36,11 @@ export function TeamSearch({
       />
       <Input
         id={id}
+        aria-label={label}
         value={value}
+        placeholder={label}
         onChange={(event) => onChange(event.target.value)}
-        className="h-11 pr-3 pl-28 lg:h-9"
+        className="h-11 pr-3 pl-9 placeholder:text-text-muted focus:placeholder:text-transparent lg:h-9"
       />
     </div>
   );
