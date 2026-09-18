@@ -19,6 +19,7 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -366,6 +367,11 @@ export function OrganizationConnections() {
                     : `Connect ${selected.service.name}`}
                 </DialogTitle>
               </div>
+              <DialogDescription>
+                {selected.kind === "connected"
+                  ? "This status is sample data. Cupboard has not checked or changed this account."
+                  : "These requirements are sample data. Cupboard will not request credentials or connect this account."}
+              </DialogDescription>
             </DialogHeader>
 
             {selected.kind === "connected" && (

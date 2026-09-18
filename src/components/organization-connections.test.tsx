@@ -115,6 +115,11 @@ describe("Organization connections", () => {
     expect(screen.getByText("Requirements")).toBeTruthy();
     expect(screen.getByText("Scoped API token")).toBeTruthy();
     expect(screen.getByText("Selected zone access")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "These requirements are sample data. Cupboard will not request credentials or connect this account.",
+      ),
+    ).toBeTruthy();
     expect(screen.queryByText("Preview data")).toBeNull();
     expect(screen.queryByText(/preview/i)).toBeNull();
     const close = screen.getByRole("button", { name: "Close" });
@@ -140,6 +145,11 @@ describe("Organization connections", () => {
 
     await user.click(screen.getByText("Community roles and moderation events"));
     expect(screen.getByText("Discord connection")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This status is sample data. Cupboard has not checked or changed this account.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByText("Access")).toBeTruthy();
     expect(screen.getAllByText("Sync healthy")).toHaveLength(2);
     expect(screen.getByText("Read server and role details")).toBeTruthy();
