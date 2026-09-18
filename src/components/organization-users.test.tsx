@@ -286,6 +286,41 @@ describe("Organization users", () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  it("keeps removal open when another tab already removed the user", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Maya Chen",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Remove user" }));
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Remove Maya Chen?",
+    });
+
+    const external = structuredClone(defaultOrganizationTeam);
+    external.users = external.users.filter(({ id }) => id !== "user-maya-chen");
+    act(() => publishTeam(external));
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Remove user" }),
+    );
+
+    expect(
+      screen.getByRole("alertdialog", { name: "Remove Maya Chen?" }),
+    ).toBeTruthy();
+    expect(within(confirmation).getByRole("alert").textContent).toContain(
+      "already removed in another tab",
+    );
+    expect(
+      parseOrganizationTeam(
+        localStorage.getItem(organizationTeamKey)!,
+      ).users.some(({ id }) => id === "user-maya-chen"),
+    ).toBe(false);
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it("keeps current-operator protections after an email change", async () => {
     const user = userEvent.setup();
     mount();

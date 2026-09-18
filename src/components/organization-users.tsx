@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { flushSync } from "react-dom";
 import {
   FilterIcon,
@@ -306,6 +306,7 @@ export function OrganizationUsers() {
     null,
   );
   const [removing, setRemoving] = useState<OrganizationUser | null>(null);
+  const [removeError, setRemoveError] = useState("");
   const rolesById = useMemo(
     () => new Map(settings.roles.map((role) => [role.id, role])),
     [settings.roles],
@@ -497,8 +498,32 @@ export function OrganizationUsers() {
     }
   }
 
-  function removeUser() {
-    if (!removing || removing.id === currentOperatorId) return;
+  function openRemoveUser(user: OrganizationUser) {
+    clearStorageError();
+    setRemoveError("");
+    setRemoving(user);
+  }
+
+  function removeUser(event: MouseEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    if (!removing) return;
+    const currentUser = settings.users.find(({ id }) => id === removing.id);
+    if (!currentUser) {
+      setRemoveError(
+        "This user was already removed in another tab. Close this confirmation.",
+      );
+      return;
+    }
+    if (!matchesEditableUser(currentUser, removing)) {
+      setRemoveError(
+        "This user changed in another tab. Close and reopen the confirmation before removing them.",
+      );
+      return;
+    }
+    if (currentUser.id === currentOperatorId) {
+      setRemoveError("The current operator cannot be removed.");
+      return;
+    }
     if (
       save({
         ...settings,
@@ -506,6 +531,7 @@ export function OrganizationUsers() {
       })
     ) {
       toast.success(`${removing.name} removed.`);
+      setRemoveError("");
       setRemoving(null);
     }
   }
@@ -747,7 +773,7 @@ export function OrganizationUsers() {
                               <DropdownMenuItem
                                 variant="destructive"
                                 disabled={user.id === currentOperatorId}
-                                onSelect={() => setRemoving(user)}
+                                onSelect={() => openRemoveUser(user)}
                               >
                                 <Trash2Icon /> Remove user
                               </DropdownMenuItem>
@@ -813,7 +839,7 @@ export function OrganizationUsers() {
                           <DropdownMenuItem
                             variant="destructive"
                             disabled={user.id === currentOperatorId}
-                            onSelect={() => setRemoving(user)}
+                            onSelect={() => openRemoveUser(user)}
                           >
                             <Trash2Icon /> Remove user
                           </DropdownMenuItem>
@@ -933,7 +959,10 @@ export function OrganizationUsers() {
       <AlertDialog
         open={removing !== null}
         onOpenChange={(open) => {
-          if (!open) setRemoving(null);
+          if (!open) {
+            setRemoving(null);
+            setRemoveError("");
+          }
         }}
       >
         <AlertDialogContent>
@@ -944,6 +973,11 @@ export function OrganizationUsers() {
               undo this action.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {removeError || storageError ? (
+            <Alert variant="destructive">
+              <AlertDescription>{removeError || storageError}</AlertDescription>
+            </Alert>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Keep user</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={removeUser}>

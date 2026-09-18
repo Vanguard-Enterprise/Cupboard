@@ -823,7 +823,7 @@ export function OrganizationIntegrations() {
           item.id === latestWebhook.id ? { ...item, enabled } : item,
         ),
       },
-      `${latestWebhook.name} ${enabled ? "resumed" : "paused"}.`,
+      `${latestWebhook.name} ${enabled ? "resumed" : "paused"} in this browser preview. Live delivery is unchanged.`,
     );
   }
 

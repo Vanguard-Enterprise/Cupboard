@@ -970,7 +970,9 @@ describe("Organization credentials and webhooks", () => {
       JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
         .enabled,
     ).toBe(false);
-    expect(toast.success).toHaveBeenCalledWith("Operations relay paused.");
+    expect(toast.success).toHaveBeenCalledWith(
+      "Operations relay paused in this browser preview. Live delivery is unchanged.",
+    );
 
     await user.click(
       screen.getByRole("button", { name: "Manage Operations relay" }),
@@ -981,7 +983,9 @@ describe("Organization credentials and webhooks", () => {
       JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
         .enabled,
     ).toBe(true);
-    expect(toast.success).toHaveBeenCalledWith("Operations relay resumed.");
+    expect(toast.success).toHaveBeenCalledWith(
+      "Operations relay resumed in this browser preview. Live delivery is unchanged.",
+    );
   });
 
   it("applies the webhook state named by a stale menu action", async () => {
@@ -1004,7 +1008,9 @@ describe("Organization credentials and webhooks", () => {
       JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
         .enabled,
     ).toBe(false);
-    expect(toast.success).toHaveBeenCalledWith("Operations relay paused.");
+    expect(toast.success).toHaveBeenCalledWith(
+      "Operations relay paused in this browser preview. Live delivery is unchanged.",
+    );
   });
 
   it("edits and deletes a webhook through managed actions", async () => {
