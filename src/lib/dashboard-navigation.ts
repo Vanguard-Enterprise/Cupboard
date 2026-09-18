@@ -167,12 +167,12 @@ export const dashboardNavigation = [
         icon: "members",
         sections: [
           {
-            id: "members",
-            title: "Members & invitations",
+            id: "team-users",
+            title: "Users",
           },
           {
-            id: "teams",
-            title: "Teams & roles",
+            id: "team-roles",
+            title: "Roles",
           },
         ],
       },
@@ -255,6 +255,8 @@ export const connectionsPath =
   "/dashboard/organization/integrations/connections";
 export const notificationsDataPath =
   "/dashboard/organization/settings/notifications-data";
+export const usersPath = "/dashboard/organization/team/users";
+export const rolesPath = "/dashboard/organization/team/roles";
 
 export function navigationHref(id: string): string | undefined {
   if (id === "connections") return connectionsPath;
@@ -265,5 +267,7 @@ export function navigationHref(id: string): string | undefined {
   if (id === "audit-log") return auditLogPath;
   if (id === "access") return accessPath;
   if (id === "preferences") return notificationsDataPath;
+  if (id === "team-users") return usersPath;
+  if (id === "team-roles") return rolesPath;
   return undefined;
 }

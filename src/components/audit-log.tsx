@@ -561,7 +561,7 @@ export function AuditLog() {
         }}
       >
         <SheetContent
-          className="w-full gap-0 data-[side=right]:sm:max-w-[28.75rem]"
+          className="m-0 w-full gap-0 data-[side=right]:right-0! data-[side=right]:sm:max-w-[28.75rem]"
           closeButtonClassName="size-11 lg:size-7"
           overlayClassName="supports-backdrop-filter:backdrop-blur-[1px]"
         >

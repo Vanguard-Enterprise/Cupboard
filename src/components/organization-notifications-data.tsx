@@ -31,6 +31,10 @@ import {
   organizationAccessChangedEvent,
   organizationAccessKey,
 } from "@/lib/organization-access";
+import {
+  organizationTeamChangedEvent,
+  organizationTeamKey,
+} from "@/lib/organization-team";
 
 const notificationOptions = [
   {
@@ -257,12 +261,14 @@ export function OrganizationNotificationsData() {
       window.localStorage.removeItem(organizationNotificationsKey);
       window.localStorage.removeItem(organizationIntegrationsKey);
       window.localStorage.removeItem(organizationAccessKey);
+      window.localStorage.removeItem(organizationTeamKey);
       window.dispatchEvent(new Event("cupboard-profile-saved"));
       window.dispatchEvent(new Event(notificationsChangedEvent));
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
       window.localStorage.removeItem(securityAlertStorageKey);
       window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
       window.dispatchEvent(new Event(organizationAccessChangedEvent));
+      window.dispatchEvent(new Event(organizationTeamChangedEvent));
       setEditorGeneration((value) => value + 1);
       toast.success("Local data cleared.");
     } catch {
@@ -298,8 +304,9 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Organization profile, notification, access, credential, webhook,
-              and security alert acknowledgement data stored in this browser.
+              Organization profile, team, notification, access, credential,
+              webhook, and security alert acknowledgement data stored in this
+              browser.
             </p>
           </div>
           <AlertDialog>
@@ -322,9 +329,9 @@ export function OrganizationNotificationsData() {
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This removes all organization preview data saved in this
-                  browser, including approval settings, credentials, webhooks,
-                  and security alert acknowledgements. You cannot undo this
-                  action.
+                  browser, including users, roles, approval settings,
+                  credentials, webhooks, and security alert acknowledgements.
+                  You cannot undo this action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

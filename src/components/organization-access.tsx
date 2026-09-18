@@ -4,7 +4,6 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import {
   KeyRoundIcon,
-  RotateCcwIcon,
   ServerCogIcon,
   ShieldCheckIcon,
   WalletCardsIcon,
@@ -19,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import {
   defaultOrganizationAccess,
   organizationAccessChangedEvent,
@@ -131,20 +129,14 @@ function AccessEditor({
         className="overflow-hidden rounded-xl border border-border bg-card"
       >
         <div className="border-b border-border px-4 py-5 sm:px-6">
-          <div className="flex items-start gap-3">
+          <div className="flex items-center gap-3">
             <ShieldCheckIcon
-              className="mt-0.5 size-5 shrink-0 text-primary"
+              className="size-5 shrink-0 text-primary"
               aria-hidden="true"
             />
-            <div>
-              <h2 id="approval-heading" className="text-lg font-semibold">
-                Approval rules
-              </h2>
-              <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                Choose which sensitive actions need approval and how many people
-                must approve them.
-              </p>
-            </div>
+            <h2 id="approval-heading" className="text-lg font-semibold">
+              Approval rules
+            </h2>
           </div>
         </div>
         <div className="divide-y divide-border">
@@ -154,7 +146,7 @@ function AccessEditor({
               <div
                 key={rule.id}
                 data-testid={`approval-rule-${rule.id}`}
-                className="grid gap-5 px-4 py-5 sm:grid-cols-[minmax(0,1fr)_13rem] sm:items-start sm:px-6"
+                className="grid gap-4 px-4 py-5 sm:grid-cols-[minmax(0,1fr)_6rem] sm:items-center sm:gap-5 sm:px-6"
               >
                 <div className="flex min-w-0 items-start gap-3">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated text-muted-foreground">
@@ -167,82 +159,61 @@ function AccessEditor({
                     </p>
                   </div>
                 </div>
-                <div className="grid gap-3">
-                  <div className="flex min-h-11 items-center justify-between gap-4 rounded-lg border border-border bg-input-background px-3">
-                    <Label
-                      htmlFor={`${rule.id}-enabled`}
-                      className="cursor-pointer text-sm font-normal"
+                <div className="flex items-center justify-between gap-3 sm:justify-end">
+                  <Label
+                    htmlFor={`${rule.id}-approvers`}
+                    className="text-sm font-normal text-muted-foreground sm:sr-only"
+                  >
+                    Approvals required
+                  </Label>
+                  <Select
+                    value={String(rule.approvals)}
+                    onValueChange={(value) =>
+                      updateRule(rule.id, {
+                        approvals: Number(value) as 0 | 1 | 2,
+                      })
+                    }
+                  >
+                    <SelectTrigger
+                      id={`${rule.id}-approvers`}
+                      aria-label={`Approvals required for ${rule.title}`}
+                      className="h-11 w-24 border-border bg-input-background sm:h-10"
                     >
-                      Require approval
-                    </Label>
-                    <Switch
-                      id={`${rule.id}-enabled`}
-                      checked={rule.enabled}
-                      onCheckedChange={(enabled) =>
-                        updateRule(rule.id, { enabled })
-                      }
-                      aria-label={`Require approval for ${rule.title}`}
-                      className="data-checked:ring-1 data-checked:ring-primary/35"
-                    />
-                  </div>
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-border bg-input-background px-3 py-2">
-                    <Label
-                      htmlFor={`${rule.id}-approvers`}
-                      className="text-sm font-normal"
-                    >
-                      Approvers
-                    </Label>
-                    <Select
-                      value={String(rule.approvals)}
-                      disabled={!rule.enabled}
-                      onValueChange={(value) =>
-                        updateRule(rule.id, {
-                          approvals: Number(value) as 1 | 2,
-                        })
-                      }
-                    >
-                      <SelectTrigger
-                        id={`${rule.id}-approvers`}
-                        aria-label={`Approvers for ${rule.title}`}
-                        className="h-9 w-32 border-border bg-surface-elevated disabled:opacity-40"
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent position="popper" align="end">
-                        <SelectItem value="1">1 person</SelectItem>
-                        <SelectItem value="2">2 people</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" align="end">
+                      <SelectItem value="0">None</SelectItem>
+                      <SelectItem value="1">1</SelectItem>
+                      <SelectItem value="2">2</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             );
           })}
         </div>
-        <div className="grid grid-cols-2 gap-3 border-t border-border px-4 py-4 sm:flex sm:flex-wrap sm:items-center sm:justify-end sm:px-6">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-4 py-4 sm:px-6">
           {conflict && (
             <Alert
               variant="destructive"
-              className="col-span-2 sm:mr-auto sm:w-auto sm:max-w-full"
+              className="mr-auto w-full sm:w-auto sm:max-w-full"
             >
-              <AlertDescription>
-                Approval settings changed in another tab. Cancel to load the
-                latest version.
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>Approval settings changed in another tab.</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDraft(saved);
+                    setConflict(false);
+                  }}
+                >
+                  Load latest
+                </Button>
               </AlertDescription>
             </Alert>
           )}
-          <Button
-            type="button"
-            variant="secondary"
-            className="h-11 w-full px-4 sm:h-9 sm:w-auto"
-            disabled={!dirty && !conflict}
-            onClick={() => {
-              setDraft(saved);
-              setConflict(false);
-            }}
-          >
-            <RotateCcwIcon /> Cancel
-          </Button>
           <Button
             type="submit"
             className="h-11 w-full px-4 sm:h-9 sm:w-auto"

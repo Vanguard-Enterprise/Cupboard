@@ -96,11 +96,13 @@ and data page at
 in the current browser and can clear Cupboard's organization preview data there.
 It does not send notifications or delete shared server data.
 The approvals page at `/dashboard/organization/security/access` previews
-sensitive-action approval rules in local browser storage. Member management
-belongs in the future Members & teams section. These controls do not enforce
-approval policy. Shared persistence must check tenant membership and
-authorization in the data-access path before this preview can become an
-access-control boundary.
+sensitive-action approval rules in local browser storage. The Members & teams
+pages at `/dashboard/organization/team/users` and
+`/dashboard/organization/team/roles` preview searchable, sortable membership and
+permission management in the current browser. They do not send invitations or
+grant access. These controls do not enforce approval or role policy. Shared
+persistence must check tenant membership and authorization in the data-access
+path before either preview can become an access-control boundary.
 
 ## Acceptance bar for the first slice
 

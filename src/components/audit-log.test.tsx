@@ -74,6 +74,8 @@ describe("Audit log", () => {
     const dialog = screen.getByRole("dialog", {
       name: "Replaced RCON credential",
     });
+    expect(dialog.className).toContain("data-[side=right]:right-0!");
+    expect(dialog.className).toContain("m-0");
     expect(dialog.className).toContain("data-[side=right]:sm:max-w-[28.75rem]");
     expect(
       document.querySelector<HTMLElement>('[data-slot="sheet-overlay"]')

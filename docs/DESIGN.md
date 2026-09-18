@@ -179,6 +179,11 @@ forms, persistent failures, and conflicts. Use a toast for brief confirmation
 that does not need to remain on screen. Skeletons should resemble the content
 that will replace them. Use a spinner only when there is no useful shape to show.
 
+Do not label pages with preview, prototype, sample-data, or implementation-status
+banners, badges, tags, or notices. Record development status in project
+documentation. If a limitation changes the result of an action, explain it in
+that action's dialog or supporting copy instead of adding page-level chrome.
+
 Disable an action while the same request is running and keep its label specific,
 such as "Testing connection...". Do not claim success until the server has
 verified the result. If the outcome is uncertain, say so and provide the next

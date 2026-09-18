@@ -63,8 +63,10 @@ connections are previewed at
 `/dashboard/organization/integrations/connections`; the page uses sample states
 and does not connect external accounts. Organization notification and
 browser-data settings live at
-`/dashboard/organization/settings/notifications-data`; unfinished sidebar
-items have no destination.
+`/dashboard/organization/settings/notifications-data`. Organization users and
+roles are managed from `/dashboard/organization/team/users` and
+`/dashboard/organization/team/roles`; both pages support search, sorting, and
+browser-local management while shared identity storage is unavailable.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
 organization details, and public contacts. Private contacts are excluded.
 
@@ -84,6 +86,11 @@ use real confidential details until authentication and shared storage exist.
 Notification choices are also browser-local and do not send messages yet. The
 Notifications & data page can clear all organization preview data from
 the current browser without clearing unrelated local storage.
+
+User membership, invitations, roles, and permissions use
+`cupboard:organization:local-preview:team:v1`. This data is a UI preview only:
+it does not invite anyone or grant access to a live organization. Production
+membership must enforce organization ownership and authorization on the server.
 
 Security alert acknowledgements use
 `cupboard:organization:local-preview:security-alerts:v1`. They update only the

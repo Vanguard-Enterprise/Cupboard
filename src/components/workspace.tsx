@@ -26,8 +26,10 @@ import {
   credentialsPath,
   notificationsDataPath,
   profilePath,
+  rolesPath,
   securityAlertsPath,
   usagePath,
+  usersPath,
 } from "@/lib/dashboard-navigation";
 
 export function Workspace({
@@ -88,12 +90,25 @@ export function Workspace({
                         ],
                       }
                     : undefined;
+  const teamPage =
+    pathname === usersPath
+      ? {
+          activeSection: "team-users",
+          crumbs: ["Organization", "Members & teams", "Users"],
+        }
+      : pathname === rolesPath
+        ? {
+            activeSection: "team-roles",
+            crumbs: ["Organization", "Members & teams", "Roles"],
+          }
+        : undefined;
+  const page = currentPage ?? teamPage;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
-          activeSection={currentPage?.activeSection}
+          activeSection={page?.activeSection}
           onSearch={() => setSearchOpen(true)}
         />
         <SidebarInset>
@@ -102,7 +117,7 @@ export function Workspace({
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  {currentPage ? (
+                  {page ? (
                     <BreadcrumbLink asChild>
                       <Link href="/dashboard">Dashboard</Link>
                     </BreadcrumbLink>
@@ -110,11 +125,11 @@ export function Workspace({
                     <BreadcrumbPage>Dashboard</BreadcrumbPage>
                   )}
                 </BreadcrumbItem>
-                {currentPage?.crumbs.map((crumb, index) => (
+                {page?.crumbs.map((crumb, index) => (
                   <Fragment key={crumb}>
                     <BreadcrumbSeparator />
                     <BreadcrumbItem>
-                      {index === currentPage.crumbs.length - 1 ? (
+                      {index === page.crumbs.length - 1 ? (
                         <BreadcrumbPage>{crumb}</BreadcrumbPage>
                       ) : (
                         <span>{crumb}</span>

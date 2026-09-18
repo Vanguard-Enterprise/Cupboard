@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("Organization approvals", () => {
-  it("shows only approval rules in a responsive control layout", async () => {
+  it("shows approval counts in a responsive column", async () => {
     mount();
 
     expect(
@@ -68,81 +68,77 @@ describe("Organization approvals", () => {
     const serverRule = screen.getByTestId("approval-rule-server-lifecycle");
     expect(serverRule.className).toContain("grid");
     expect(serverRule.className).toContain("sm:grid-cols-");
+    const approvalLabels = screen.getAllByText("Approvals required");
+    expect(approvalLabels).toHaveLength(3);
+    expect(approvalLabels[0].className).toContain("sm:sr-only");
+    const serverApprovers = screen.getByLabelText(
+      "Approvals required for Server lifecycle",
+    );
+    expect(serverApprovers.className).toContain("h-11");
+    expect(serverApprovers.className).toContain("sm:h-10");
 
-    for (const name of ["Cancel", "Save changes"]) {
-      const button = screen.getByRole("button", { name });
-      expect(button.className).toContain("h-11");
-      expect(button.className).toContain("w-full");
-    }
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    const save = screen.getByRole("button", { name: "Save changes" });
+    expect(save.className).toContain("h-11");
+    expect(save.className).toContain("w-full");
   });
 
-  it("saves rule changes", async () => {
+  it("saves approver changes", async () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Approval rules" });
 
-    const cancel = screen.getByRole("button", {
-      name: "Cancel",
-    }) as HTMLButtonElement;
     const save = screen.getByRole("button", {
       name: "Save changes",
     }) as HTMLButtonElement;
-    expect(cancel.disabled).toBe(true);
     expect(save.disabled).toBe(true);
 
-    const disabledApprovers = screen.getByLabelText(
-      "Approvers for Billing",
-    ) as HTMLButtonElement;
-    expect(disabledApprovers.disabled).toBe(true);
-    expect(disabledApprovers.className).toContain("disabled:opacity-40");
-
-    await user.click(
-      screen.getByRole("switch", {
-        name: "Require approval for Server lifecycle",
-      }),
-    );
-    expect(cancel.disabled).toBe(false);
+    await user.click(screen.getByLabelText("Approvals required for Billing"));
+    await user.click(screen.getByRole("option", { name: "2" }));
     expect(save.disabled).toBe(false);
     await user.click(save);
 
     const stored = parseOrganizationAccess(
       localStorage.getItem(organizationAccessKey)!,
     );
-    expect(stored.rules[0].enabled).toBe(false);
+    expect(stored.rules[2].approvals).toBe(2);
     expect(toast.success).toHaveBeenCalledWith("Approval settings saved.");
-    expect(cancel.disabled).toBe(true);
     expect(save.disabled).toBe(true);
   });
 
-  it("changes the required approver count with the source-owned select", async () => {
+  it("saves a rule with no approval requirement", async () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Approval rules" });
 
-    await user.click(screen.getByLabelText("Approvers for Server lifecycle"));
-    await user.click(screen.getByRole("option", { name: "2 people" }));
+    await user.click(
+      screen.getByLabelText("Approvals required for Server lifecycle"),
+    );
+    await user.click(screen.getByRole("option", { name: "None" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(
       parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!)
         .rules[0].approvals,
-    ).toBe(2);
+    ).toBe(0);
   });
 
   it("preserves a dirty draft when another tab saves", async () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Approval rules" });
-    const serverRule = screen.getByRole("switch", {
-      name: "Require approval for Server lifecycle",
-    }) as HTMLButtonElement;
-    await user.click(serverRule);
+    const serverApprovers = screen.getByLabelText(
+      "Approvals required for Server lifecycle",
+    );
+    await user.click(serverApprovers);
+    await user.click(screen.getByRole("option", { name: "2" }));
 
     const external = structuredClone(defaultOrganizationAccess);
-    external.rules[2].enabled = true;
+    external.rules[1].approvals = 1;
     externalSave(external);
 
-    expect(serverRule.getAttribute("data-state")).toBe("unchecked");
+    expect(serverApprovers.textContent).toContain("2");
     expect(screen.getByRole("alert").textContent).toContain(
       "changed in another tab",
     );
@@ -154,8 +150,8 @@ describe("Organization approvals", () => {
       ).disabled,
     ).toBe(true);
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(serverRule.getAttribute("data-state")).toBe("checked");
+    await user.click(screen.getByRole("button", { name: "Load latest" }));
+    expect(serverApprovers.textContent).toContain("1");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -163,16 +159,13 @@ describe("Organization approvals", () => {
     mount();
     await screen.findByRole("heading", { name: "Approval rules" });
     const external = structuredClone(defaultOrganizationAccess);
-    external.rules[0].enabled = false;
+    external.rules[0].approvals = 2;
     externalSave(external);
 
     expect(
-      screen
-        .getByRole("switch", {
-          name: "Require approval for Server lifecycle",
-        })
-        .getAttribute("data-state"),
-    ).toBe("unchecked");
+      screen.getByLabelText("Approvals required for Server lifecycle")
+        .textContent,
+    ).toContain("2");
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -180,9 +173,8 @@ describe("Organization approvals", () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Approval rules" });
-    await user.click(
-      screen.getByRole("switch", { name: "Require approval for Billing" }),
-    );
+    await user.click(screen.getByLabelText("Approvals required for Billing"));
+    await user.click(screen.getByRole("option", { name: "2" }));
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("Storage unavailable");
     });

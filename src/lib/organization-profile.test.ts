@@ -126,6 +126,8 @@ describe("organization profile", () => {
       )
       .filter(Boolean);
     expect(links).toEqual([
+      "/dashboard/organization/team/users",
+      "/dashboard/organization/team/roles",
       "/dashboard/organization/integrations/connections",
       "/dashboard/organization/integrations/credentials",
       "/dashboard/organization/security/alerts",

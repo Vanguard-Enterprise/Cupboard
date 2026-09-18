@@ -6,8 +6,7 @@ export type ApprovalRule = {
   id: "server-lifecycle" | "credentials" | "billing";
   title: string;
   description: string;
-  enabled: boolean;
-  approvals: 1 | 2;
+  approvals: 0 | 1 | 2;
 };
 
 export type OrganizationAccessSettings = {
@@ -20,22 +19,19 @@ export const defaultOrganizationAccess: OrganizationAccessSettings = {
       id: "server-lifecycle",
       title: "Server lifecycle",
       description: "Restart, stop, update, or wipe a live server.",
-      enabled: true,
       approvals: 1,
     },
     {
       id: "credentials",
       title: "Credentials",
       description: "Reveal, replace, or remove stored secrets or webhooks.",
-      enabled: true,
       approvals: 2,
     },
     {
       id: "billing",
       title: "Billing",
       description: "Change plan, payment method, or billing contact.",
-      enabled: false,
-      approvals: 1,
+      approvals: 0,
     },
   ],
 };
@@ -55,16 +51,11 @@ export function parseOrganizationAccess(
     if (!rule || typeof rule !== "object") throw new Error("Invalid rule");
     const candidate = rule as Record<string, unknown>;
     const source = defaultRules.get(candidate.id as ApprovalRule["id"]);
-    if (
-      !source ||
-      typeof candidate.enabled !== "boolean" ||
-      ![1, 2].includes(candidate.approvals as number)
-    )
+    if (!source || ![0, 1, 2].includes(candidate.approvals as number))
       throw new Error("Invalid rule");
     return {
       ...source,
-      enabled: candidate.enabled,
-      approvals: candidate.approvals as 1 | 2,
+      approvals: candidate.approvals as 0 | 1 | 2,
     };
   });
   if (
