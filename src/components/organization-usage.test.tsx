@@ -9,7 +9,7 @@ describe("Organization usage", () => {
     const user = userEvent.setup();
     render(<OrganizationUsage />);
 
-    expect(screen.getByText("Sample data")).toBeTruthy();
+    expect(screen.queryByText(/sample data/i)).toBeNull();
     expect(screen.getByText("Managed servers")).toBeTruthy();
     expect(
       screen.getByRole("img", {

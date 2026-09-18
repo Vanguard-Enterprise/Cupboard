@@ -18,7 +18,9 @@ import {
   ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -280,11 +282,6 @@ function AlertDetail({
           >
             {acknowledged ? "Reopen alert" : "Acknowledge alert"}
           </Button>
-          {acknowledged && (
-            <p role="status" className="text-xs text-text-muted">
-              Alert acknowledged.
-            </p>
-          )}
         </div>
       </footer>
     </article>
@@ -478,6 +475,9 @@ export function SecurityAlerts() {
       );
       window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
       setSessionAcknowledgementOverrides(new Map());
+      toast.success(
+        willBeAcknowledged ? "Alert acknowledged." : "Alert reopened.",
+      );
     } catch {
       const nextOverrides = new Map(effectiveSessionOverrides);
       if (persistedState.ids.has(alert.id) === willBeAcknowledged) {
@@ -770,12 +770,11 @@ export function SecurityAlerts() {
           )}
         </div>
         {storageError && (
-          <p
-            role="alert"
-            className="border-t border-border px-4 py-2.5 text-xs text-destructive sm:px-5"
-          >
-            {storageError}
-          </p>
+          <div className="border-t border-border px-4 py-2.5 sm:px-5">
+            <Alert variant="destructive">
+              <AlertDescription>{storageError}</AlertDescription>
+            </Alert>
+          </div>
         )}
       </section>
     </div>

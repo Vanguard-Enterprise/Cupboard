@@ -24,6 +24,10 @@ This repository is a clean rebuild for one developer working with coding agents.
 - Never use browser-native menus in the product interface. Use the source-owned
   select, combobox, dropdown, context-menu, command-menu, and popover components
   in `src/components/ui`; add a missing shared component there before using it.
+- Never add preview, prototype, sample-data, or implementation-status banners,
+  badges, tags, or notices to product pages. Keep development status in project
+  documentation. Explain a limitation inside an affected action only when the
+  operator needs it to decide what to do.
 - Add an abstraction after two real implementations need it, not before.
 - Delete abandoned paths instead of keeping compatibility layers for unreleased
   code.

@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { OrganizationNotificationsData } from "./organization-notifications-data";
 import {
   defaultOrganizationNotifications,
@@ -24,6 +25,14 @@ import {
   defaultOrganizationAccess,
   organizationAccessKey,
 } from "@/lib/organization-access";
+import {
+  defaultOrganizationTeam,
+  organizationTeamKey,
+} from "@/lib/organization-team";
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn() },
+}));
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -53,7 +62,10 @@ function externalSave(preferences: typeof defaultOrganizationNotifications) {
   });
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  vi.clearAllMocks();
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -83,7 +95,7 @@ describe("Organization notifications and data", () => {
     expect(screen.getByText("Organization data")).toBeTruthy();
     expect(
       screen.getByText(
-        "Organization profile, notification, access, credential, webhook, and security alert acknowledgement data stored in this browser.",
+        "Organization profile, team, notification, access, credential, webhook, and security alert acknowledgement data stored in this browser.",
       ),
     ).toBeTruthy();
     for (const name of [
@@ -96,7 +108,12 @@ describe("Organization notifications and data", () => {
       expect(preference.getAttribute("data-size")).toBe("lg");
       expect(preference.getAttribute("data-state")).toBe("unchecked");
     }
-    expect(screen.getAllByText(/Does not send email yet/)).toHaveLength(4);
+    expect(
+      screen.getByText(
+        "Saved in this browser. Cupboard does not send notifications yet.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Server outages and incidents.")).toBeTruthy();
   });
 
   it("saves, restores, and cancels notification choices", async () => {
@@ -127,7 +144,9 @@ describe("Organization notifications and data", () => {
     expect(
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toMatchObject({ weeklySummary: true });
-    expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Preferences saved.",
+    );
 
     view.unmount();
     render(<OrganizationNotificationsData />);
@@ -146,9 +165,9 @@ describe("Organization notifications and data", () => {
       securityAlerts: false,
     });
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "changed in another tab",
-    );
+    const conflictAlert = screen.getByRole("alert");
+    expect(conflictAlert.getAttribute("data-slot")).toBe("alert");
+    expect(conflictAlert.textContent).toContain("changed in another tab");
     expect(saveButton().disabled).toBe(true);
     await user.click(cancelButton());
     expect(
@@ -165,9 +184,9 @@ describe("Organization notifications and data", () => {
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "could not be loaded",
-    );
+    const unreadableAlert = screen.getByRole("alert");
+    expect(unreadableAlert.getAttribute("data-slot")).toBe("alert");
+    expect(unreadableAlert.textContent).toContain("could not be loaded");
     expect(saveButton().disabled).toBe(false);
     expect(cancelButton().disabled).toBe(true);
     await user.click(saveButton());
@@ -175,7 +194,9 @@ describe("Organization notifications and data", () => {
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toEqual(defaultOrganizationNotifications);
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Preferences saved.",
+    );
   });
 
   it("keeps an unsaved choice when browser storage rejects a save", async () => {
@@ -187,7 +208,10 @@ describe("Organization notifications and data", () => {
     });
 
     await user.click(saveButton());
-    expect(screen.getByRole("alert").textContent).toContain("Could not save");
+    const saveAlert = screen.getByRole("alert");
+    expect(saveAlert.getAttribute("data-slot")).toBe("alert");
+    expect(saveAlert.textContent).toContain("Could not save");
+    expect(screen.queryByRole("status")).toBeNull();
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("checked");
@@ -212,8 +236,12 @@ describe("Organization notifications and data", () => {
     );
     localStorage.setItem(securityAlertStorageKey, JSON.stringify(["SEC-2041"]));
     const savedAccess = structuredClone(defaultOrganizationAccess);
-    savedAccess.rules[0].enabled = false;
+    savedAccess.rules[0].approvals = 2;
     localStorage.setItem(organizationAccessKey, JSON.stringify(savedAccess));
+    localStorage.setItem(
+      organizationTeamKey,
+      JSON.stringify(defaultOrganizationTeam),
+    );
     localStorage.setItem("unrelated", "keep me");
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
@@ -232,8 +260,9 @@ describe("Organization notifications and data", () => {
     expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
     expect(localStorage.getItem(securityAlertStorageKey)).toBeNull();
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
+    expect(localStorage.getItem(organizationTeamKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
-    expect(screen.getByRole("status").textContent).toBe("Local data cleared.");
+    expect(toast.success).toHaveBeenCalledWith("Local data cleared.");
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("unchecked");

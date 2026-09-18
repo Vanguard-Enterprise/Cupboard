@@ -2,8 +2,10 @@
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Trash2Icon } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,31 +31,31 @@ import {
   organizationAccessChangedEvent,
   organizationAccessKey,
 } from "@/lib/organization-access";
+import {
+  organizationTeamChangedEvent,
+  organizationTeamKey,
+} from "@/lib/organization-team";
 
 const notificationOptions = [
   {
     key: "serverIncidents",
     title: "Server incidents",
-    description:
-      "Does not send email yet. Preference for server outages and incidents.",
+    description: "Server outages and incidents.",
   },
   {
     key: "securityAlerts",
     title: "Security alerts",
-    description:
-      "Does not send email yet. Preference for access and security changes.",
+    description: "Access and security changes.",
   },
   {
     key: "moderationActivity",
     title: "Moderation activity",
-    description:
-      "Does not send email yet. Preference for moderation cases needing attention.",
+    description: "Moderation cases needing attention.",
   },
   {
     key: "weeklySummary",
     title: "Weekly summary",
-    description:
-      "Does not send email yet. Preference for a weekly organization summary.",
+    description: "A weekly organization summary.",
   },
 ] as const satisfies ReadonlyArray<{
   key: keyof OrganizationNotifications;
@@ -128,13 +130,10 @@ function NotificationPreferencesEditor({
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [savedNotice, setSavedNotice] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
 
   if (saved !== baseline) {
     setBaseline(saved);
-    if (JSON.stringify(draft) !== JSON.stringify(saved)) {
-      setSavedNotice(false);
-    }
     if (JSON.stringify(draft) === JSON.stringify(baseline)) {
       setDraft(saved);
       setConflict(false);
@@ -151,10 +150,10 @@ function NotificationPreferencesEditor({
         event.preventDefault();
         if ((!dirty && !needsReplacement) || conflict) return;
         setSaveError("");
-        setSavedNotice(false);
+        setSaveMessage("");
         try {
           save(draft);
-          setSavedNotice(true);
+          setSaveMessage("Preferences saved.");
         } catch {
           setSaveError("Could not save your choices. Please try again.");
         }
@@ -171,6 +170,9 @@ function NotificationPreferencesEditor({
           >
             Notification preferences
           </h2>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            Saved in this browser. Cupboard does not send notifications yet.
+          </p>
         </div>
         <div className="divide-y divide-border/60 px-6 sm:px-8">
           {notificationOptions.map((option) => (
@@ -196,7 +198,7 @@ function NotificationPreferencesEditor({
                 onCheckedChange={(checked) => {
                   setDraft({ ...draft, [option.key]: checked });
                   setSaveError("");
-                  setSavedNotice(false);
+                  setSaveMessage("");
                 }}
                 aria-label={option.title}
                 className="data-checked:ring-1 data-checked:ring-primary/50 data-unchecked:bg-border-strong dark:data-unchecked:bg-border-strong"
@@ -205,21 +207,28 @@ function NotificationPreferencesEditor({
           ))}
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-6 py-4 sm:px-8">
-          {savedNotice && !dirty && (
-            <p role="status" className="mr-auto text-sm text-muted-foreground">
-              Preferences saved.
-            </p>
-          )}
           {conflict && (
-            <p role="alert" className="w-full text-sm text-destructive">
-              These choices changed in another tab. Cancel to load the latest
-              version before editing again.
-            </p>
+            <Alert variant="destructive" className="w-full">
+              <AlertDescription>
+                These choices changed in another tab. Cancel to load the latest
+                version before editing again.
+              </AlertDescription>
+            </Alert>
           )}
           {saveError && (
-            <p role="alert" className="mr-auto text-sm text-destructive">
-              {saveError}
-            </p>
+            <Alert variant="destructive" className="mr-auto w-auto max-w-full">
+              <AlertDescription>{saveError}</AlertDescription>
+            </Alert>
+          )}
+          {saveMessage && (
+            <Alert
+              role="status"
+              className="mr-auto w-auto max-w-full border-primary/25 bg-primary/5"
+            >
+              <AlertDescription className="text-primary">
+                {saveMessage}
+              </AlertDescription>
+            </Alert>
           )}
           <Button
             type="button"
@@ -230,7 +239,7 @@ function NotificationPreferencesEditor({
               setDraft(saved);
               setConflict(false);
               setSaveError("");
-              setSavedNotice(false);
+              setSaveMessage("");
             }}
           >
             Cancel
@@ -252,7 +261,6 @@ export function OrganizationNotificationsData() {
   const { preferences, ready, save, storageError, needsReplacement } =
     useSavedNotifications();
   const [clearError, setClearError] = useState("");
-  const [clearedNotice, setClearedNotice] = useState(false);
   const [editorGeneration, setEditorGeneration] = useState(0);
 
   if (!ready) {
@@ -265,20 +273,21 @@ export function OrganizationNotificationsData() {
 
   function clearLocalData() {
     setClearError("");
-    setClearedNotice(false);
     try {
       window.localStorage.removeItem(organizationProfileKey);
       window.localStorage.removeItem(organizationNotificationsKey);
       window.localStorage.removeItem(organizationIntegrationsKey);
       window.localStorage.removeItem(organizationAccessKey);
+      window.localStorage.removeItem(organizationTeamKey);
       window.dispatchEvent(new Event("cupboard-profile-saved"));
       window.dispatchEvent(new Event(notificationsChangedEvent));
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
       window.localStorage.removeItem(securityAlertStorageKey);
       window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
       window.dispatchEvent(new Event(organizationAccessChangedEvent));
+      window.dispatchEvent(new Event(organizationTeamChangedEvent));
       setEditorGeneration((value) => value + 1);
-      setClearedNotice(true);
+      toast.success("Local data cleared.");
     } catch {
       setClearError("Could not clear local data. Please try again.");
     }
@@ -287,9 +296,9 @@ export function OrganizationNotificationsData() {
   return (
     <div className="space-y-6">
       {storageError && (
-        <p role="alert" className="text-sm text-destructive">
-          {storageError}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{storageError}</AlertDescription>
+        </Alert>
       )}
 
       <NotificationPreferencesEditor
@@ -312,8 +321,9 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Organization profile, notification, access, credential, webhook,
-              and security alert acknowledgement data stored in this browser.
+              Organization profile, team, notification, access, credential,
+              webhook, and security alert acknowledgement data stored in this
+              browser.
             </p>
           </div>
           <AlertDialog>
@@ -323,7 +333,6 @@ export function OrganizationNotificationsData() {
                 className="h-11 shrink-0 border border-destructive/15 bg-transparent text-destructive/75 hover:border-destructive/50 hover:bg-destructive/15 hover:text-destructive sm:h-9 dark:bg-transparent dark:hover:bg-destructive/15"
                 onClick={() => {
                   setClearError("");
-                  setClearedNotice(false);
                 }}
               >
                 Clear local data
@@ -337,8 +346,9 @@ export function OrganizationNotificationsData() {
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This removes all organization preview data saved in this
-                  browser, including access settings, credentials, webhooks, and
-                  security alert acknowledgements. You cannot undo this action.
+                  browser, including users, roles, approval settings,
+                  credentials, webhooks, and security alert acknowledgements.
+                  You cannot undo this action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -353,18 +363,11 @@ export function OrganizationNotificationsData() {
             </AlertDialogContent>
           </AlertDialog>
         </div>
-        {(clearedNotice || clearError) && (
+        {clearError && (
           <div className="border-t border-border px-6 py-3 sm:px-8">
-            {clearedNotice && (
-              <p role="status" className="text-sm text-muted-foreground">
-                Local data cleared.
-              </p>
-            )}
-            {clearError && (
-              <p role="alert" className="text-sm text-destructive">
-                {clearError}
-              </p>
-            )}
+            <Alert variant="destructive">
+              <AlertDescription>{clearError}</AlertDescription>
+            </Alert>
           </div>
         )}
       </section>

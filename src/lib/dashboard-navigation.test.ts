@@ -6,7 +6,9 @@ import {
   credentialsPath,
   navigationHref,
   profilePath,
+  rolesPath,
   usagePath,
+  usersPath,
 } from "./dashboard-navigation";
 
 describe("dashboard navigation", () => {
@@ -17,5 +19,7 @@ describe("dashboard navigation", () => {
     expect(navigationHref("credentials")).toBe(credentialsPath);
     expect(navigationHref("access")).toBe(accessPath);
     expect(navigationHref("audit-log")).toBe(auditLogPath);
+    expect(navigationHref("team-users")).toBe(usersPath);
+    expect(navigationHref("team-roles")).toBe(rolesPath);
   });
 });

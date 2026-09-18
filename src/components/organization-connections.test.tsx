@@ -19,18 +19,19 @@ function mount() {
 }
 
 describe("Organization connections", () => {
-  it("labels preview data and filters available connections", async () => {
+  it("filters available connections", async () => {
     const user = userEvent.setup();
     mount();
 
     expect(screen.queryByText("Preview only")).toBeNull();
     expect(screen.getByText("Needs attention")).toBeTruthy();
+    expect(screen.queryByText("Pterodactyl")).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Available" }));
     expect(screen.getByText("Pterodactyl")).toBeTruthy();
     expect(screen.getByText("Cloudflare")).toBeTruthy();
 
-    const sampleBadge = screen.getByText("Sample data");
-    expect(sampleBadge.className).toContain("text-text-muted");
-    expect(sampleBadge.className).not.toContain("text-text-muted/80");
+    expect(screen.queryByText(/sample data/i)).toBeNull();
     for (const category of [
       "Server management",
       "Player activity",
@@ -54,21 +55,10 @@ describe("Organization connections", () => {
       expect(card.className).toContain("h-[184px]");
     }
 
-    await user.hover(screen.getByRole("button", { name: "About sample data" }));
-    expect(
-      await screen.findByText(/no external accounts are connected/i),
-    ).toBeTruthy();
-
-    const browse = screen.getByRole("button", { name: "Browse connections" });
-    await user.click(browse);
-
     const search = screen.getByRole("searchbox", {
       name: "Search available connections",
     });
-    const searchLabel = screen.getByText("Search available connections");
-    expect(searchLabel.getAttribute("for")).toBe("connection-search");
-    expect(searchLabel.className).not.toContain("sr-only");
-    expect(document.activeElement).toBe(search);
+    expect(screen.queryByText("Search available connections")).toBeNull();
     await user.type(search, "network");
 
     expect(screen.getByText("Cloudflare")).toBeTruthy();
@@ -96,6 +86,7 @@ describe("Organization connections", () => {
     const user = userEvent.setup();
     mount();
 
+    await user.click(screen.getByRole("tab", { name: "Available" }));
     await user.type(
       screen.getByRole("searchbox", {
         name: "Search available connections",
@@ -110,12 +101,19 @@ describe("Organization connections", () => {
     const user = userEvent.setup();
     mount();
 
+    await user.click(screen.getByRole("tab", { name: "Available" }));
     const setupCloudflare = screen.getByRole("button", {
       name: "Set up Cloudflare",
     });
     setupCloudflare.focus();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    const setupDialog = screen.getByRole("dialog");
+    expect(setupDialog).toBeTruthy();
+    const describedBy = setupDialog.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent).toContain(
+      "sample data",
+    );
     const dialogTitle = screen.getByText("Connect Cloudflare");
     expect(document.activeElement).toBe(dialogTitle);
     expect(dialogTitle.className).toContain("focus-visible:ring-2");
@@ -123,11 +121,18 @@ describe("Organization connections", () => {
     expect(screen.getByText("Requirements")).toBeTruthy();
     expect(screen.getByText("Scoped API token")).toBeTruthy();
     expect(screen.getByText("Selected zone access")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "These requirements are sample data. Cupboard will not request credentials or connect this account.",
+      ),
+    ).toBeTruthy();
     expect(screen.queryByText("Preview data")).toBeNull();
     expect(screen.queryByText(/preview/i)).toBeNull();
     const close = screen.getByRole("button", { name: "Close" });
     expect(close.getAttribute("data-variant")).toBe("secondary");
     await user.click(close);
+
+    await user.click(screen.getByRole("tab", { name: "Connected" }));
 
     expect(
       screen.getByRole("button", {
@@ -146,6 +151,11 @@ describe("Organization connections", () => {
 
     await user.click(screen.getByText("Community roles and moderation events"));
     expect(screen.getByText("Discord connection")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This status is sample data. Cupboard has not checked or changed this account.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByText("Access")).toBeTruthy();
     expect(screen.getAllByText("Sync healthy")).toHaveLength(2);
     expect(screen.getByText("Read server and role details")).toBeTruthy();

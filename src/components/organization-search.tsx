@@ -31,6 +31,8 @@ import {
   auditLogPath,
   connectionsPath,
   notificationsDataPath,
+  rolesPath,
+  usersPath,
 } from "@/lib/dashboard-navigation";
 
 export function OrganizationSearchButton({ onOpen }: { onOpen: () => void }) {
@@ -146,10 +148,22 @@ export function OrganizationSearch({
                   Audit log
                 </CommandItem>
                 <CommandItem
-                  value="Organization security access approvals members roles invitations"
+                  value="Organization security approvals sensitive actions"
                   onSelect={() => navigate(accessPath)}
                 >
-                  Access &amp; approvals
+                  Approvals
+                </CommandItem>
+                <CommandItem
+                  value="Organization team users members invitations access"
+                  onSelect={() => navigate(usersPath)}
+                >
+                  Users
+                </CommandItem>
+                <CommandItem
+                  value="Organization team roles permissions access"
+                  onSelect={() => navigate(rolesPath)}
+                >
+                  Roles
                 </CommandItem>
                 <CommandItem
                   value="Organization integrations connections external services"
