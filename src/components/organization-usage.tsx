@@ -136,9 +136,6 @@ export function OrganizationUsage() {
             <h2 id="activity-heading" className="text-lg font-semibold">
               Organization activity
             </h2>
-            <span className="ml-1 text-[10px] font-medium text-text-muted">
-              Sample data
-            </span>
           </div>
           <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
             <div className="flex items-center gap-5 text-sm text-muted-foreground">

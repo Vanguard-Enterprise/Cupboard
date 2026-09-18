@@ -2,11 +2,17 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { SecurityAlerts } from "./security-alerts";
 import { securityAlertStorageKey } from "@/lib/security-alerts";
 
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn() },
+}));
+
 beforeEach(() => {
   localStorage.clear();
+  vi.clearAllMocks();
   Element.prototype.scrollIntoView = vi.fn();
   HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
   HTMLElement.prototype.setPointerCapture = vi.fn();
@@ -83,14 +89,13 @@ describe("Security alerts", () => {
     render(<SecurityAlerts />);
 
     await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
-    expect(screen.getByRole("status").textContent).toContain(
-      "Alert acknowledged.",
-    );
+    expect(toast.success).toHaveBeenCalledWith("Alert acknowledged.");
     expect(
       JSON.parse(localStorage.getItem(securityAlertStorageKey)!),
     ).toContain("SEC-2041");
 
     await user.click(screen.getByRole("button", { name: "Reopen alert" }));
+    expect(toast.success).toHaveBeenCalledWith("Alert reopened.");
     expect(screen.queryByRole("status")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Acknowledge alert" }),
@@ -122,9 +127,10 @@ describe("Security alerts", () => {
     expect(document.activeElement).toBe(
       screen.getByRole("combobox", { name: "Filter by status" }),
     );
-    expect(screen.getByRole("alert").textContent).toContain(
-      "could not be saved",
-    );
+    const storageAlert = screen.getByRole("alert");
+    expect(storageAlert.getAttribute("data-slot")).toBe("alert");
+    expect(storageAlert.textContent).toContain("could not be saved");
+    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("merges a failed acknowledgement with later cross-tab changes", async () => {

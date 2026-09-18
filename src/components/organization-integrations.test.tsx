@@ -9,14 +9,20 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { OrganizationIntegrations } from "./organization-integrations";
 import {
   defaultOrganizationIntegrations,
   organizationIntegrationsKey,
 } from "@/lib/organization-integrations";
 
+vi.mock("sonner", () => ({
+  toast: { info: vi.fn(), success: vi.fn() },
+}));
+
 beforeEach(() => {
   localStorage.clear();
+  vi.clearAllMocks();
   vi.stubGlobal(
     "ResizeObserver",
     class ResizeObserver {
@@ -448,6 +454,7 @@ describe("Organization credentials and webhooks", () => {
         "Saved integration data could not be loaded. Showing the last loaded data; changes are disabled.",
       ),
     ).toBeTruthy();
+    expect(screen.getByRole("alert").getAttribute("data-slot")).toBe("alert");
     expect(
       (
         screen.getByRole("button", {
@@ -462,7 +469,7 @@ describe("Organization credentials and webhooks", () => {
     expect(
       (
         screen.getAllByRole("button", {
-          name: "Revoke",
+          name: /Credential actions for/,
         })[0] as HTMLButtonElement
       ).disabled,
     ).toBe(true);
@@ -499,6 +506,9 @@ describe("Organization credentials and webhooks", () => {
     );
     expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
     expect(localStorage.getItem("unrelated-preview-data")).toBe("keep-me");
+    expect(toast.success).toHaveBeenCalledWith(
+      "Unreadable integration data replaced with sample data.",
+    );
     expect(
       screen.queryByText(
         "Saved integration data could not be loaded. Showing the last loaded data; changes are disabled.",
@@ -541,11 +551,9 @@ describe("Organization credentials and webhooks", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("Repaired elsewhere")).toBeTruthy();
-    expect(
-      screen.queryByText(
-        "Unreadable integration data replaced with sample data.",
-      ),
-    ).toBeNull();
+    expect(toast.success).not.toHaveBeenCalledWith(
+      "Unreadable integration data replaced with sample data.",
+    );
   });
 
   it("keeps the last valid integration data visible while storage is unreadable", async () => {
@@ -761,7 +769,7 @@ describe("Organization credentials and webhooks", () => {
     await user.click(addButton);
 
     expect(screen.getByText("Incident bot")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("Incident bot added.");
+    expect(toast.success).toHaveBeenCalledWith("Incident bot added.");
     expect(
       JSON.parse(localStorage.getItem(organizationIntegrationsKey)!)
         .webhooks[0],
@@ -817,8 +825,12 @@ describe("Organization credentials and webhooks", () => {
     const user = userEvent.setup();
     render(<OrganizationIntegrations />);
 
-    const revokeButtons = screen.getAllByRole("button", { name: "Revoke" });
-    await user.click(revokeButtons[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Credential actions for Server operations",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Revoke" }));
     const confirmation = screen.getByRole("alertdialog", {
       name: "Revoke Server operations?",
     });
@@ -844,9 +856,42 @@ describe("Organization credentials and webhooks", () => {
     );
 
     expect(screen.queryByText("Server operations")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe(
+    expect(toast.success).toHaveBeenCalledWith(
       "Server operations removed from preview data.",
     );
+  });
+
+  it("rotates a credential from its action menu without storing the secret", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Credential actions for Server operations",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Rotate key" }));
+
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Rotate Server operations?",
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Rotate key" }),
+    );
+
+    const rotated = screen.getByRole("dialog", {
+      name: "Credential rotated",
+    });
+    const secret =
+      within(rotated).getByTestId("created-credential").textContent!;
+    const stored = localStorage.getItem(organizationIntegrationsKey)!;
+    expect(secret).toMatch(/^cb_live_[A-F0-9]{36}$/);
+    expect(stored).not.toContain(secret);
+    expect(JSON.parse(stored).credentials[0]).toMatchObject({
+      lastUsed: null,
+      prefix: `${secret.slice(0, 12)}...${secret.slice(-4)}`,
+    });
+    expect(toast.success).toHaveBeenCalledWith("Server operations rotated.");
   });
 
   it("does not recreate cleared data from a credential revocation", async () => {
@@ -857,7 +902,12 @@ describe("Organization credentials and webhooks", () => {
     );
     render(<OrganizationIntegrations />);
 
-    await user.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Credential actions for Server operations",
+      }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Revoke" }));
     const confirmation = screen.getByRole("alertdialog", {
       name: "Revoke Server operations?",
     });
@@ -896,6 +946,42 @@ describe("Organization credentials and webhooks", () => {
     expect(
       within(details).queryByRole("button", { name: "Retry delivery" }),
     ).toBeNull();
+  });
+
+  it("offers icon actions and pauses or resumes a webhook", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    const webhookName = screen.getByText("Operations relay");
+    const row = webhookName.closest(".group")!;
+    expect(row.className).toContain("hover:bg-surface-elevated");
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    for (const action of ["View", "Edit", "Pause", "Delete"]) {
+      const item = screen.getByRole("menuitem", { name: action });
+      expect(item.querySelector("svg")).toBeTruthy();
+    }
+    await user.click(screen.getByRole("menuitem", { name: "Pause" }));
+
+    expect(screen.getByText("Paused")).toBeTruthy();
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
+        .enabled,
+    ).toBe(false);
+    expect(toast.success).toHaveBeenCalledWith("Operations relay paused.");
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Resume" }));
+    expect(screen.getByText("Active")).toBeTruthy();
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
+        .enabled,
+    ).toBe(true);
+    expect(toast.success).toHaveBeenCalledWith("Operations relay resumed.");
   });
 
   it("edits and deletes a webhook through managed actions", async () => {
@@ -943,7 +1029,7 @@ describe("Organization credentials and webhooks", () => {
       within(confirmation).getByRole("button", { name: "Delete webhook" }),
     );
     expect(screen.queryByText("Operations bridge")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe(
+    expect(toast.success).toHaveBeenCalledWith(
       "Operations bridge deleted from preview data.",
     );
   });
@@ -1049,9 +1135,9 @@ describe("Organization credentials and webhooks", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
-    expect(
-      screen.queryByText("Operations relay deleted from preview data."),
-    ).toBeNull();
+    expect(toast.success).not.toHaveBeenCalledWith(
+      "Operations relay deleted from preview data.",
+    );
   });
 
   it("does not report success when a confirmed webhook was already deleted", async () => {
@@ -1080,9 +1166,9 @@ describe("Organization credentials and webhooks", () => {
         "This webhook was already deleted in another tab. Close this confirmation.",
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByText("Operations relay deleted from preview data."),
-    ).toBeNull();
+    expect(toast.success).not.toHaveBeenCalledWith(
+      "Operations relay deleted from preview data.",
+    );
   });
 
   it("does not recreate a webhook deleted in another tab while editing", async () => {
@@ -1123,7 +1209,7 @@ describe("Organization credentials and webhooks", () => {
     expect(
       JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks,
     ).toEqual([]);
-    expect(screen.queryByText("Operations relay added.")).toBeNull();
+    expect(toast.success).not.toHaveBeenCalledWith("Operations relay added.");
   });
 
   it("does not overwrite a webhook changed in another tab while editing", async () => {
@@ -1173,7 +1259,7 @@ describe("Organization credentials and webhooks", () => {
       localStorage.getItem(organizationIntegrationsKey)!,
     );
     expect(stored.webhooks[0]).toMatchObject(changed.webhooks[0]);
-    expect(screen.queryByText("Operations relay updated.")).toBeNull();
+    expect(toast.success).not.toHaveBeenCalledWith("Operations relay updated.");
   });
 
   it("does not report a simulated webhook retry as delivered", async () => {
@@ -1195,11 +1281,9 @@ describe("Organization credentials and webhooks", () => {
     await user.click(
       within(details).getByRole("button", { name: "Retry delivery" }),
     );
-    expect(
-      within(details).getByText(
-        "Retry delivery isn't available in this sample-data preview.",
-      ),
-    ).toBeTruthy();
+    expect(toast.info).toHaveBeenCalledWith(
+      "Retry delivery isn't available in this sample-data preview.",
+    );
     expect(within(details).getByText("4 minutes ago")).toBeTruthy();
     expect(within(details).getByText("HTTP 503")).toBeTruthy();
     expect(

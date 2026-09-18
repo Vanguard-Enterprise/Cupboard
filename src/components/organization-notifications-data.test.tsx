@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { OrganizationNotificationsData } from "./organization-notifications-data";
 import {
   defaultOrganizationNotifications,
@@ -24,6 +25,10 @@ import {
   defaultOrganizationAccess,
   organizationAccessKey,
 } from "@/lib/organization-access";
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn() },
+}));
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -53,7 +58,10 @@ function externalSave(preferences: typeof defaultOrganizationNotifications) {
   });
 }
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  vi.clearAllMocks();
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -96,7 +104,8 @@ describe("Organization notifications and data", () => {
       expect(preference.getAttribute("data-size")).toBe("lg");
       expect(preference.getAttribute("data-state")).toBe("unchecked");
     }
-    expect(screen.getAllByText(/Does not send email yet/)).toHaveLength(4);
+    expect(screen.queryByText(/Does not send email yet/i)).toBeNull();
+    expect(screen.getByText("Server outages and incidents.")).toBeTruthy();
   });
 
   it("saves, restores, and cancels notification choices", async () => {
@@ -127,7 +136,8 @@ describe("Organization notifications and data", () => {
     expect(
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toMatchObject({ weeklySummary: true });
-    expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
+    expect(toast.success).toHaveBeenCalledWith("Preferences saved.");
+    expect(screen.queryByRole("status")).toBeNull();
 
     view.unmount();
     render(<OrganizationNotificationsData />);
@@ -146,9 +156,9 @@ describe("Organization notifications and data", () => {
       securityAlerts: false,
     });
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "changed in another tab",
-    );
+    const conflictAlert = screen.getByRole("alert");
+    expect(conflictAlert.getAttribute("data-slot")).toBe("alert");
+    expect(conflictAlert.textContent).toContain("changed in another tab");
     expect(saveButton().disabled).toBe(true);
     await user.click(cancelButton());
     expect(
@@ -165,9 +175,9 @@ describe("Organization notifications and data", () => {
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
 
-    expect(screen.getByRole("alert").textContent).toContain(
-      "could not be loaded",
-    );
+    const unreadableAlert = screen.getByRole("alert");
+    expect(unreadableAlert.getAttribute("data-slot")).toBe("alert");
+    expect(unreadableAlert.textContent).toContain("could not be loaded");
     expect(saveButton().disabled).toBe(false);
     expect(cancelButton().disabled).toBe(true);
     await user.click(saveButton());
@@ -175,7 +185,7 @@ describe("Organization notifications and data", () => {
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toEqual(defaultOrganizationNotifications);
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("Preferences saved.");
+    expect(toast.success).toHaveBeenCalledWith("Preferences saved.");
   });
 
   it("keeps an unsaved choice when browser storage rejects a save", async () => {
@@ -187,7 +197,10 @@ describe("Organization notifications and data", () => {
     });
 
     await user.click(saveButton());
-    expect(screen.getByRole("alert").textContent).toContain("Could not save");
+    const saveAlert = screen.getByRole("alert");
+    expect(saveAlert.getAttribute("data-slot")).toBe("alert");
+    expect(saveAlert.textContent).toContain("Could not save");
+    expect(toast.success).not.toHaveBeenCalled();
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("checked");
@@ -233,7 +246,7 @@ describe("Organization notifications and data", () => {
     expect(localStorage.getItem(securityAlertStorageKey)).toBeNull();
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
-    expect(screen.getByRole("status").textContent).toBe("Local data cleared.");
+    expect(toast.success).toHaveBeenCalledWith("Local data cleared.");
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("unchecked");

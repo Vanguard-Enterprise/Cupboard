@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { flushSync } from "react-dom";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Building2Icon, InfoIcon, MailIcon } from "lucide-react";
 import {
   Tooltip,
@@ -45,7 +47,6 @@ function ProfileEditor({
   const [draft, setDraft] = useState(saved);
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saveError, setSaveError] = useState("");
-  const [savedNotice, setSavedNotice] = useState(false);
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
   const { contains: countryNameContains } = useComboboxFilter();
@@ -57,7 +58,6 @@ function ProfileEditor({
   };
   if (saved !== baseline) {
     setBaseline(saved);
-    if (JSON.stringify(draft) !== JSON.stringify(saved)) setSavedNotice(false);
     if (JSON.stringify(draft) === JSON.stringify(baseline)) {
       setDraft(saved);
       setConflict(false);
@@ -94,7 +94,6 @@ function ProfileEditor({
         ...(key === "country" && value !== draft.country ? { region: "" } : {}),
       });
       setSaveError("");
-      setSavedNotice(false);
       setErrors({
         ...errors,
         [key]: undefined,
@@ -245,7 +244,6 @@ function ProfileEditor({
         const nextErrors = validateProfile(normalized);
         setErrors(nextErrors);
         setSaveError("");
-        setSavedNotice(false);
         const firstError = Object.keys(nextErrors)[0];
         if (firstError) {
           flushSync(() =>
@@ -261,7 +259,7 @@ function ProfileEditor({
         try {
           save(normalized);
           setDraft(normalized);
-          setSavedNotice(true);
+          toast.success("Changes saved.");
         } catch {
           setSaveError("Could not save your changes. Please try again.");
         }
@@ -352,24 +350,21 @@ function ProfileEditor({
             </section>
           </TabsContent>
           <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-6 py-3 sm:px-7">
-            {savedNotice && !dirty && (
-              <p
-                role="status"
-                className="mr-auto text-sm text-muted-foreground"
-              >
-                Changes saved.
-              </p>
-            )}
             {conflict && (
-              <p role="alert" className="w-full text-sm text-destructive">
-                This profile changed in another tab. Cancel to load the latest
-                version before editing again.
-              </p>
+              <Alert variant="destructive" className="w-full">
+                <AlertDescription>
+                  This profile changed in another tab. Cancel to load the latest
+                  version before editing again.
+                </AlertDescription>
+              </Alert>
             )}
             {saveError && (
-              <p role="alert" className="mr-auto text-sm text-destructive">
-                {saveError}
-              </p>
+              <Alert
+                variant="destructive"
+                className="mr-auto w-auto max-w-full"
+              >
+                <AlertDescription>{saveError}</AlertDescription>
+              </Alert>
             )}
             <Button
               type="button"
@@ -381,7 +376,6 @@ function ProfileEditor({
                 setConflict(false);
                 setErrors({});
                 setSaveError("");
-                setSavedNotice(false);
               }}
             >
               Cancel
@@ -411,9 +405,9 @@ export function OrganizationProfileForm() {
   return (
     <>
       {storageError && (
-        <p role="alert" className="mb-4 text-sm text-destructive">
-          {storageError}
-        </p>
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription>{storageError}</AlertDescription>
+        </Alert>
       )}
       <ProfileEditor saved={profile} save={save} />
     </>

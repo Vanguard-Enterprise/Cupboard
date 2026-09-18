@@ -1,13 +1,17 @@
 "use client";
 
 import { useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
   ClipboardIcon,
+  EyeIcon,
   KeyRoundIcon,
   MoreHorizontalIcon,
+  PauseIcon,
   PencilIcon,
+  PlayIcon,
   PlusIcon,
   RadioTowerIcon,
   RefreshCwIcon,
@@ -15,6 +19,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertAction, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -65,7 +70,7 @@ import {
   type WebhookEvent,
 } from "@/lib/organization-integrations";
 
-type Feedback = { kind: "status" | "alert"; message: string } | null;
+type Feedback = { message: string } | null;
 
 function subscribeToIntegrations(callback: () => void) {
   const handleStorage = (event: StorageEvent) => {
@@ -143,10 +148,12 @@ function editableWebhookSnapshot(webhook: WebhookEndpoint): string {
 
 function CredentialRow({
   credential,
+  onRotate,
   onRevoke,
   disabled,
 }: {
   credential: ApiCredential;
+  onRotate: (credential: ApiCredential) => void;
   onRevoke: (credential: ApiCredential) => void;
   disabled: boolean;
 }) {
@@ -170,15 +177,37 @@ function CredentialRow({
           {credential.lastUsed ?? "Never used"}
         </p>
       </div>
-      <Button
-        variant="ghost"
-        className="min-h-9 w-fit justify-self-start text-text-muted hover:bg-destructive/10 hover:text-destructive [@media(any-pointer:coarse)]:min-h-11 md:justify-self-end"
-        onClick={() => onRevoke(credential)}
-        disabled={disabled}
-      >
-        <Trash2Icon aria-hidden="true" />
-        Revoke
-      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-9 justify-self-start text-text-muted [@media(any-pointer:coarse)]:size-11 md:justify-self-end"
+            aria-label={`Credential actions for ${credential.name}`}
+            disabled={disabled}
+          >
+            <MoreHorizontalIcon aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-40">
+          <DropdownMenuItem
+            className="cursor-pointer"
+            onSelect={() => onRotate(credential)}
+          >
+            <RefreshCwIcon aria-hidden="true" />
+            Rotate key
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            className="cursor-pointer"
+            onSelect={() => onRevoke(credential)}
+          >
+            <Trash2Icon aria-hidden="true" />
+            Revoke
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -187,12 +216,14 @@ function WebhookRow({
   webhook,
   onOpen,
   onEdit,
+  onToggle,
   onDelete,
   disabled,
 }: {
   webhook: WebhookEndpoint;
   onOpen: (webhook: WebhookEndpoint) => void;
   onEdit: (webhook: WebhookEndpoint) => void;
+  onToggle: (webhook: WebhookEndpoint) => void;
   onDelete: (webhook: WebhookEndpoint) => void;
   disabled: boolean;
 }) {
@@ -200,7 +231,7 @@ function WebhookRow({
     webhook.lastDelivery && webhook.lastDelivery.status >= 400,
   );
   const status = !webhook.enabled
-    ? "Disabled"
+    ? "Paused"
     : failed
       ? "Delivery failed"
       : "Active";
@@ -210,10 +241,10 @@ function WebhookRow({
       : `Last delivery ${webhook.lastDelivery.deliveredAt}`
     : "No deliveries yet";
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center">
+    <div className="group grid grid-cols-[minmax(0,1fr)_auto] items-center transition-colors hover:bg-surface-elevated focus-within:bg-surface-elevated">
       <button
         type="button"
-        className="min-w-0 px-5 py-4 text-left outline-none transition-colors hover:bg-surface-elevated focus-visible:bg-surface-elevated focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent sm:px-6"
+        className="min-w-0 px-5 py-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 sm:px-6"
         onClick={() => onOpen(webhook)}
         disabled={disabled}
       >
@@ -260,12 +291,12 @@ function WebhookRow({
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="min-h-9 text-muted-foreground [@media(any-pointer:coarse)]:min-h-11"
+              size="icon"
+              className="size-9 text-muted-foreground [@media(any-pointer:coarse)]:size-11"
               aria-label={`Manage ${webhook.name}`}
               disabled={disabled}
             >
               <MoreHorizontalIcon aria-hidden="true" />
-              <span className="hidden sm:inline">Manage</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-40">
@@ -273,7 +304,8 @@ function WebhookRow({
               className="cursor-pointer"
               onSelect={() => onOpen(webhook)}
             >
-              View details
+              <EyeIcon aria-hidden="true" />
+              View
             </DropdownMenuItem>
             <DropdownMenuItem
               className="cursor-pointer"
@@ -281,6 +313,17 @@ function WebhookRow({
             >
               <PencilIcon aria-hidden="true" />
               Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => onToggle(webhook)}
+            >
+              {webhook.enabled ? (
+                <PauseIcon aria-hidden="true" />
+              ) : (
+                <PlayIcon aria-hidden="true" />
+              )}
+              {webhook.enabled ? "Pause" : "Resume"}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -326,6 +369,9 @@ export function OrganizationIntegrations() {
   const [credentialStorageCleared, setCredentialStorageCleared] =
     useState(false);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [createdSecretAction, setCreatedSecretAction] = useState<
+    "created" | "rotated"
+  >("created");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
     "idle",
   );
@@ -343,7 +389,6 @@ export function OrganizationIntegrations() {
   const [selectedWebhookId, setSelectedWebhookId] = useState<string | null>(
     null,
   );
-  const [retryUnavailable, setRetryUnavailable] = useState(false);
   const [webhookName, setWebhookName] = useState("");
   const [webhookUrl, setWebhookUrl] = useState("");
   const [selectedEvents, setSelectedEvents] = useState<WebhookEvent[]>([]);
@@ -360,6 +405,15 @@ export function OrganizationIntegrations() {
   const [
     credentialRevokeStartedWithMissingKey,
     setCredentialRevokeStartedWithMissingKey,
+  ] = useState(true);
+  const [credentialToRotate, setCredentialToRotate] =
+    useState<ApiCredential | null>(null);
+  const [credentialRotateConflict, setCredentialRotateConflict] = useState<
+    "deleted" | "changed" | "cleared" | null
+  >(null);
+  const [
+    credentialRotateStartedWithMissingKey,
+    setCredentialRotateStartedWithMissingKey,
   ] = useState(true);
   const [webhookToDelete, setWebhookToDelete] =
     useState<WebhookEndpoint | null>(null);
@@ -404,11 +458,11 @@ export function OrganizationIntegrations() {
     try {
       localStorage.setItem(organizationIntegrationsKey, JSON.stringify(next));
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
-      setFeedback({ kind: "status", message: success });
+      setFeedback(null);
+      toast.success(success);
       return true;
     } catch {
       setFeedback({
-        kind: "alert",
         message: "Could not save this change in your browser. Try again.",
       });
       return false;
@@ -424,7 +478,6 @@ export function OrganizationIntegrations() {
       if (!startedWithMissingKey) {
         onCleared();
         setFeedback({
-          kind: "alert",
           message:
             "Integration data was cleared in another tab. Review the current preview before trying again.",
         });
@@ -443,11 +496,11 @@ export function OrganizationIntegrations() {
         setSuspendedDraftDialog("webhook");
       }
       setCredentialToRevoke(null);
+      setCredentialToRotate(null);
       setWebhookToDelete(null);
       setSelectedWebhookId(null);
       setUnreadableToReplace(latestRaw);
       setFeedback({
-        kind: "alert",
         message: "Saved credential and webhook data could not be loaded.",
       });
       return null;
@@ -475,7 +528,6 @@ export function OrganizationIntegrations() {
     }
     window.dispatchEvent(new Event("cupboard-integrations-saved"));
     setFeedback({
-      kind: "alert",
       message: "Saved integration data changed. Review it before replacing.",
     });
   }
@@ -496,7 +548,6 @@ export function OrganizationIntegrations() {
       restoreSuspendedDraft();
       window.dispatchEvent(new Event("cupboard-integrations-saved"));
       setFeedback({
-        kind: "alert",
         message: "Saved integration data changed. Review it before replacing.",
       });
       return;
@@ -513,13 +564,10 @@ export function OrganizationIntegrations() {
         setWebhookStorageCleared(false);
       }
       restoreSuspendedDraft();
-      setFeedback({
-        kind: "status",
-        message: "Unreadable integration data replaced with sample data.",
-      });
+      setFeedback(null);
+      toast.success("Unreadable integration data replaced with sample data.");
     } catch {
       setFeedback({
-        kind: "alert",
         message: "Could not replace the saved data in your browser. Try again.",
       });
     }
@@ -565,6 +613,7 @@ export function OrganizationIntegrations() {
     ) {
       setCredentialDialogOpen(false);
       setCreatedSecret(secret);
+      setCreatedSecretAction("created");
       setCopyState("idle");
     }
   }
@@ -706,6 +755,78 @@ export function OrganizationIntegrations() {
     }
   }
 
+  function rotateCredential() {
+    if (!credentialToRotate) return;
+    const latestData = latestDataForMutation(
+      credentialRotateStartedWithMissingKey,
+      () => setCredentialRotateConflict("cleared"),
+    );
+    if (!latestData) return;
+    const latestCredential = latestData.credentials.find(
+      (item) => item.id === credentialToRotate.id,
+    );
+    if (!latestCredential) {
+      setCredentialRotateConflict("deleted");
+      return;
+    }
+    if (
+      JSON.stringify(latestCredential) !== JSON.stringify(credentialToRotate)
+    ) {
+      setCredentialRotateConflict("changed");
+      return;
+    }
+    const secret = createCredentialSecret();
+    const rotatedCredential: ApiCredential = {
+      ...latestCredential,
+      prefix: `${secret.slice(0, 12)}...${secret.slice(-4)}`,
+      createdAt: today(),
+      lastUsed: null,
+    };
+    if (
+      persist(
+        {
+          ...latestData,
+          credentials: latestData.credentials.map((item) =>
+            item.id === latestCredential.id ? rotatedCredential : item,
+          ),
+        },
+        `${latestCredential.name} rotated.`,
+      )
+    ) {
+      setCredentialToRotate(null);
+      setCreatedSecret(secret);
+      setCreatedSecretAction("rotated");
+      setCopyState("idle");
+    }
+  }
+
+  function toggleWebhook(webhook: WebhookEndpoint) {
+    const latestData = latestDataForMutation(
+      integrationsSnapshot() === null,
+      () => undefined,
+    );
+    if (!latestData) return;
+    const latestWebhook = latestData.webhooks.find(
+      (item) => item.id === webhook.id,
+    );
+    if (!latestWebhook) {
+      setFeedback({
+        message: "This webhook no longer exists.",
+      });
+      return;
+    }
+    const enabled = !latestWebhook.enabled;
+    persist(
+      {
+        ...latestData,
+        webhooks: latestData.webhooks.map((item) =>
+          item.id === latestWebhook.id ? { ...item, enabled } : item,
+        ),
+      },
+      `${latestWebhook.name} ${enabled ? "resumed" : "paused"}.`,
+    );
+  }
+
   function deleteWebhook() {
     if (!webhookToDelete) return;
     const name = webhookToDelete.name;
@@ -744,35 +865,30 @@ export function OrganizationIntegrations() {
   return (
     <div className="space-y-5">
       {feedback && (
-        <p
-          role={feedback.kind}
-          className={
-            feedback.kind === "alert"
-              ? "text-sm text-destructive"
-              : "text-sm text-primary"
-          }
-        >
-          {feedback.message}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{feedback.message}</AlertDescription>
+        </Alert>
       )}
 
       {storageUnreadable && (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3"
+        <Alert
+          variant="destructive"
+          className="items-center gap-3 has-data-[slot=alert-action]:pr-2.5 sm:grid-cols-[minmax(0,1fr)_auto]"
         >
-          <p className="text-sm text-destructive">
+          <AlertDescription>
             Saved integration data could not be loaded. Showing the last loaded
             data; changes are disabled.
-          </p>
-          <Button
-            variant="secondary"
-            className="h-9 [@media(any-pointer:coarse)]:min-h-11"
-            onClick={requestUnreadableReplacement}
-          >
-            Replace local data
-          </Button>
-        </div>
+          </AlertDescription>
+          <AlertAction className="static">
+            <Button
+              variant="secondary"
+              className="h-9 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={requestUnreadableReplacement}
+            >
+              Replace local data
+            </Button>
+          </AlertAction>
+        </Alert>
       )}
 
       <section
@@ -803,6 +919,13 @@ export function OrganizationIntegrations() {
               <CredentialRow
                 key={credential.id}
                 credential={credential}
+                onRotate={(item) => {
+                  setCredentialRotateStartedWithMissingKey(
+                    integrationsSnapshot() === null,
+                  );
+                  setCredentialRotateConflict(null);
+                  setCredentialToRotate(item);
+                }}
                 onRevoke={(item) => {
                   setCredentialRevokeStartedWithMissingKey(
                     integrationsSnapshot() === null,
@@ -854,10 +977,10 @@ export function OrganizationIntegrations() {
                 key={webhook.id}
                 webhook={webhook}
                 onOpen={(item) => {
-                  setRetryUnavailable(false);
                   setSelectedWebhookId(item.id);
                 }}
                 onEdit={editWebhook}
+                onToggle={toggleWebhook}
                 onDelete={(item) => {
                   setWebhookDeleteStartedWithMissingKey(
                     integrationsSnapshot() === null,
@@ -892,10 +1015,12 @@ export function OrganizationIntegrations() {
             </DialogDescription>
           </DialogHeader>
           {credentialStorageCleared && (
-            <p role="alert" className="text-sm text-destructive">
-              Integration data was cleared in another tab. Close and reopen this
-              form before creating a credential.
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription>
+                Integration data was cleared in another tab. Close and reopen
+                this form before creating a credential.
+              </AlertDescription>
+            </Alert>
           )}
           <form
             id="create-credential-form"
@@ -952,7 +1077,10 @@ export function OrganizationIntegrations() {
       <Dialog open={Boolean(createdSecret)} onOpenChange={() => undefined}>
         <DialogContent className="sm:max-w-lg" showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>Credential created</DialogTitle>
+            <DialogTitle>
+              Credential{" "}
+              {createdSecretAction === "created" ? "created" : "rotated"}
+            </DialogTitle>
             <DialogDescription>
               This sample secret cannot authenticate. Copy it now if needed;
               Cupboard will not show it again.
@@ -969,9 +1097,11 @@ export function OrganizationIntegrations() {
             </code>
           </div>
           {copyState === "error" && (
-            <p role="alert" className="text-sm text-destructive">
-              Couldn&apos;t copy to clipboard.
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription>
+                Couldn&apos;t copy to clipboard.
+              </AlertDescription>
+            </Alert>
           )}
           <DialogFooter>
             <Button
@@ -1020,17 +1150,21 @@ export function OrganizationIntegrations() {
             </DialogDescription>
           </DialogHeader>
           {webhookEditIssue && (
-            <p role="alert" className="text-sm text-destructive">
-              {webhookEditIssue === "deleted"
-                ? "This webhook was deleted in another tab. Close this dialog without saving."
-                : "This webhook changed in another tab. Close and reopen it before editing again."}
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription>
+                {webhookEditIssue === "deleted"
+                  ? "This webhook was deleted in another tab. Close this dialog without saving."
+                  : "This webhook changed in another tab. Close and reopen it before editing again."}
+              </AlertDescription>
+            </Alert>
           )}
           {webhookStorageCleared && (
-            <p role="alert" className="text-sm text-destructive">
-              Integration data was cleared in another tab. Close and reopen this
-              form before saving.
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription>
+                Integration data was cleared in another tab. Close and reopen
+                this form before saving.
+              </AlertDescription>
+            </Alert>
           )}
           <form
             id="create-webhook-form"
@@ -1164,7 +1298,6 @@ export function OrganizationIntegrations() {
         onOpenChange={(open) => {
           if (!open) {
             setSelectedWebhookId(null);
-            setRetryUnavailable(false);
           }
         }}
       >
@@ -1197,7 +1330,7 @@ export function OrganizationIntegrations() {
                       ? "Delivery failed"
                       : selectedWebhook.enabled
                         ? "Active"
-                        : "Disabled"}
+                        : "Paused"}
                   </Badge>
                 </div>
                 <SheetDescription className="sr-only">
@@ -1284,12 +1417,6 @@ export function OrganizationIntegrations() {
                       </p>
                     )}
                   </div>
-                  {retryUnavailable && (
-                    <p role="status" className="mt-3 text-xs text-destructive">
-                      Retry delivery isn&apos;t available in this sample-data
-                      preview.
-                    </p>
-                  )}
                 </section>
               </div>
 
@@ -1299,7 +1426,11 @@ export function OrganizationIntegrations() {
                     <Button
                       variant="outline"
                       className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-                      onClick={() => setRetryUnavailable(true)}
+                      onClick={() =>
+                        toast.info(
+                          "Retry delivery isn't available in this sample-data preview.",
+                        )
+                      }
                     >
                       <RefreshCwIcon aria-hidden="true" />
                       Retry delivery
@@ -1383,6 +1514,61 @@ export function OrganizationIntegrations() {
       </AlertDialog>
 
       <AlertDialog
+        open={Boolean(credentialToRotate)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCredentialToRotate(null);
+            setCredentialRotateConflict(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <RefreshCwIcon className="text-warning" aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>
+              Rotate {credentialToRotate?.name}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This replaces the credential in this browser preview and shows the
+              new key once. The previous preview key cannot be recovered.
+            </AlertDialogDescription>
+            {credentialRotateConflict && (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {credentialRotateConflict === "deleted"
+                    ? "This credential was already removed in another tab. Close this confirmation."
+                    : credentialRotateConflict === "changed"
+                      ? "This credential changed in another tab. Close and reopen the confirmation before rotating it."
+                      : "Integration data was cleared in another tab. Close this confirmation before trying again."}
+                </AlertDescription>
+              </Alert>
+            )}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              variant="secondary"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+            >
+              Keep current key
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
+              onClick={(event) => {
+                event.preventDefault();
+                rotateCredential();
+              }}
+              disabled={Boolean(credentialRotateConflict)}
+            >
+              Rotate key
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
         open={Boolean(credentialToRevoke)}
         onOpenChange={(open) => {
           if (!open) {
@@ -1404,13 +1590,15 @@ export function OrganizationIntegrations() {
               revoke access to a live API. This cannot be undone.
             </AlertDialogDescription>
             {credentialRevokeConflict && (
-              <p role="alert" className="text-sm text-destructive">
-                {credentialRevokeConflict === "deleted"
-                  ? "This credential was already removed in another tab. Close this confirmation."
-                  : credentialRevokeConflict === "changed"
-                    ? "This credential changed in another tab. Close and reopen the confirmation before revoking it."
-                    : "Integration data was cleared in another tab. Close this confirmation before trying again."}
-              </p>
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {credentialRevokeConflict === "deleted"
+                    ? "This credential was already removed in another tab. Close this confirmation."
+                    : credentialRevokeConflict === "changed"
+                      ? "This credential changed in another tab. Close and reopen the confirmation before revoking it."
+                      : "Integration data was cleared in another tab. Close this confirmation before trying again."}
+                </AlertDescription>
+              </Alert>
             )}
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1455,13 +1643,15 @@ export function OrganizationIntegrations() {
               this browser preview. This cannot be undone.
             </AlertDialogDescription>
             {webhookDeleteConflict && (
-              <p role="alert" className="text-sm text-destructive">
-                {webhookDeleteConflict === "deleted"
-                  ? "This webhook was already deleted in another tab. Close this confirmation."
-                  : webhookDeleteConflict === "changed"
-                    ? "This webhook changed in another tab. Close and reopen the confirmation before deleting it."
-                    : "Integration data was cleared in another tab. Close this confirmation before trying again."}
-              </p>
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {webhookDeleteConflict === "deleted"
+                    ? "This webhook was already deleted in another tab. Close this confirmation."
+                    : webhookDeleteConflict === "changed"
+                      ? "This webhook changed in another tab. Close and reopen the confirmation before deleting it."
+                      : "Integration data was cleared in another tab. Close this confirmation before trying again."}
+                </AlertDescription>
+              </Alert>
             )}
           </AlertDialogHeader>
           <AlertDialogFooter>

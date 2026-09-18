@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { OrganizationProfileForm } from "./organization-profile-form";
 import { OrganizationProvider } from "./organization-provider";
 import { TooltipProvider } from "./ui/tooltip";
@@ -9,6 +10,10 @@ import {
   defaultOrganizationProfile,
   organizationProfileKey,
 } from "@/lib/organization-profile";
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn() },
+}));
 
 function mount() {
   return render(
@@ -35,7 +40,10 @@ const saveButton = () =>
 const cancelButton = () =>
   screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  vi.clearAllMocks();
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -184,7 +192,8 @@ describe("Organization profile persistence", () => {
     });
     expect(saveButton().disabled).toBe(true);
     expect(cancelButton().disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toBe("Changes saved.");
+    expect(toast.success).toHaveBeenCalledWith("Changes saved.");
+    expect(screen.queryByRole("status")).toBeNull();
     view.unmount();
     mount();
     expect(nameInput().value).toBe("New organization");
@@ -246,7 +255,10 @@ describe("Organization profile persistence", () => {
       throw new Error("Storage unavailable");
     });
     await user.click(saveButton());
-    expect(screen.getByRole("alert").textContent).toContain("Could not save");
+    const storageAlert = screen.getByRole("alert");
+    expect(storageAlert.getAttribute("data-slot")).toBe("alert");
+    expect(storageAlert.textContent).toContain("Could not save");
+    expect(toast.success).not.toHaveBeenCalled();
     expect(nameInput().value).toBe("Cupboard draft");
     expect(saveButton().disabled).toBe(false);
   });
