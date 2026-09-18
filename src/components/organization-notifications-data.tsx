@@ -130,6 +130,7 @@ function NotificationPreferencesEditor({
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
 
   if (saved !== baseline) {
     setBaseline(saved);
@@ -149,9 +150,10 @@ function NotificationPreferencesEditor({
         event.preventDefault();
         if ((!dirty && !needsReplacement) || conflict) return;
         setSaveError("");
+        setSaveMessage("");
         try {
           save(draft);
-          toast.success("Preferences saved.");
+          setSaveMessage("Preferences saved.");
         } catch {
           setSaveError("Could not save your choices. Please try again.");
         }
@@ -168,6 +170,9 @@ function NotificationPreferencesEditor({
           >
             Notification preferences
           </h2>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            Saved in this browser. Cupboard does not send notifications yet.
+          </p>
         </div>
         <div className="divide-y divide-border/60 px-6 sm:px-8">
           {notificationOptions.map((option) => (
@@ -193,6 +198,7 @@ function NotificationPreferencesEditor({
                 onCheckedChange={(checked) => {
                   setDraft({ ...draft, [option.key]: checked });
                   setSaveError("");
+                  setSaveMessage("");
                 }}
                 aria-label={option.title}
                 className="data-checked:ring-1 data-checked:ring-primary/50 data-unchecked:bg-border-strong dark:data-unchecked:bg-border-strong"
@@ -214,6 +220,16 @@ function NotificationPreferencesEditor({
               <AlertDescription>{saveError}</AlertDescription>
             </Alert>
           )}
+          {saveMessage && (
+            <Alert
+              role="status"
+              className="mr-auto w-auto max-w-full border-primary/25 bg-primary/5"
+            >
+              <AlertDescription className="text-primary">
+                {saveMessage}
+              </AlertDescription>
+            </Alert>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -223,6 +239,7 @@ function NotificationPreferencesEditor({
               setDraft(saved);
               setConflict(false);
               setSaveError("");
+              setSaveMessage("");
             }}
           >
             Cancel

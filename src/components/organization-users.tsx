@@ -72,6 +72,7 @@ import type {
 
 type UserSort = "name" | "role" | "status" | "lastActive";
 type UserDraft = Pick<OrganizationUser, "name" | "email" | "roleId" | "status">;
+const currentOperatorId = "user-demo-operator";
 
 const statusLabels: Record<OrganizationUserStatus, string> = {
   active: "Active",
@@ -132,12 +133,14 @@ function UserFields({
   roles,
   error,
   lockAccess,
+  showStatus = true,
   onChange,
 }: {
   draft: UserDraft;
   roles: OrganizationRole[];
   error: string;
   lockAccess?: boolean;
+  showStatus?: boolean;
   onChange: (draft: UserDraft) => void;
 }) {
   return (
@@ -169,7 +172,7 @@ function UserFields({
           }
         />
       </div>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className={`grid gap-2 ${showStatus ? "sm:grid-cols-2" : ""}`}>
         <div className="grid gap-2">
           <Label htmlFor="team-user-role">Role</Label>
           <Select
@@ -193,32 +196,34 @@ function UserFields({
             </SelectContent>
           </Select>
         </div>
-        <div className="grid gap-2">
-          <Label htmlFor="team-user-status">Status</Label>
-          <Select
-            value={draft.status}
-            disabled={lockAccess}
-            onValueChange={(status) =>
-              onChange({
-                ...draft,
-                status: status as OrganizationUserStatus,
-              })
-            }
-          >
-            <SelectTrigger
-              id="team-user-status"
-              aria-label="User status"
-              className="h-11 w-full bg-input-background sm:h-10"
+        {showStatus ? (
+          <div className="grid gap-2">
+            <Label htmlFor="team-user-status">Status</Label>
+            <Select
+              value={draft.status}
+              disabled={lockAccess}
+              onValueChange={(status) =>
+                onChange({
+                  ...draft,
+                  status: status as OrganizationUserStatus,
+                })
+              }
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="invited">Invited</SelectItem>
-              <SelectItem value="suspended">Suspended</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+              <SelectTrigger
+                id="team-user-status"
+                aria-label="User status"
+                className="h-11 w-full bg-input-background sm:h-10"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="invited">Invited</SelectItem>
+                <SelectItem value="suspended">Suspended</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
       </div>
       {lockAccess ? (
         <p className="text-xs leading-5 text-muted-foreground">
@@ -381,7 +386,7 @@ export function OrganizationUsers() {
     const error = validateDraft(editDraft, editing.id);
     setEditError(error);
     if (error) return;
-    const lockAccess = editing.email === "operator@example.com";
+    const lockAccess = editing.id === currentOperatorId;
     const next = settings.users.map((user) =>
       user.id === editing.id
         ? {
@@ -401,7 +406,7 @@ export function OrganizationUsers() {
   }
 
   function removeUser() {
-    if (!removing || removing.email === "operator@example.com") return;
+    if (!removing || removing.id === currentOperatorId) return;
     if (
       save({
         ...settings,
@@ -647,7 +652,7 @@ export function OrganizationUsers() {
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
                                 variant="destructive"
-                                disabled={user.email === "operator@example.com"}
+                                disabled={user.id === currentOperatorId}
                                 onSelect={() => setRemoving(user)}
                               >
                                 <Trash2Icon /> Remove user
@@ -661,7 +666,10 @@ export function OrganizationUsers() {
                 </Table>
               </div>
 
-              <ul className="divide-y divide-border md:hidden">
+              <ul
+                aria-label="Organization users"
+                className="divide-y divide-border md:hidden"
+              >
                 {users.map((user) => (
                   <li key={user.id} className="p-4">
                     <div className="flex items-start gap-3">
@@ -679,25 +687,43 @@ export function OrganizationUsers() {
                           <UserStatusBadge status={user.status} />
                         </div>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-11"
-                        aria-label={`Edit ${user.name}`}
-                        onClick={() => {
-                          clearStorageError();
-                          setEditError("");
-                          setEditing(user);
-                          setEditDraft({
-                            name: user.name,
-                            email: user.email,
-                            roleId: user.roleId,
-                            status: user.status,
-                          });
-                        }}
-                      >
-                        <UserRoundPenIcon />
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="size-11"
+                            aria-label={`Manage ${user.name}`}
+                          >
+                            <MoreHorizontalIcon />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              clearStorageError();
+                              setEditError("");
+                              setEditing(user);
+                              setEditDraft({
+                                name: user.name,
+                                email: user.email,
+                                roleId: user.roleId,
+                                status: user.status,
+                              });
+                            }}
+                          >
+                            <UserRoundPenIcon /> Edit user
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            disabled={user.id === currentOperatorId}
+                            onSelect={() => setRemoving(user)}
+                          >
+                            <Trash2Icon /> Remove user
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </li>
                 ))}
@@ -742,6 +768,7 @@ export function OrganizationUsers() {
             draft={inviteDraft}
             roles={settings.roles}
             error={inviteError || storageError}
+            showStatus={false}
             onChange={(draft) => {
               setInviteDraft(draft);
               setInviteError("");
@@ -781,7 +808,7 @@ export function OrganizationUsers() {
               draft={editDraft}
               roles={settings.roles}
               error={editError || storageError}
-              lockAccess={editing?.email === "operator@example.com"}
+              lockAccess={editing?.id === currentOperatorId}
               onChange={(draft) => {
                 setEditDraft(draft);
                 setEditError("");

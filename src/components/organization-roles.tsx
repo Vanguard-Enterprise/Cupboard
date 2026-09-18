@@ -501,7 +501,10 @@ export function OrganizationRoles() {
                 </Table>
               </div>
 
-              <ul className="divide-y divide-border md:hidden">
+              <ul
+                aria-label="Organization roles"
+                className="divide-y divide-border md:hidden"
+              >
                 {roles.map((role) => (
                   <li key={role.id} className="p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -523,15 +526,40 @@ export function OrganizationRoles() {
                           · {role.permissions.length} permissions
                         </p>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-11"
-                        aria-label={`Edit ${role.name}`}
-                        onClick={() => openRoleDialog(role)}
-                      >
-                        <PencilIcon />
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="size-11"
+                            aria-label={`Manage ${role.name}`}
+                          >
+                            <MoreHorizontalIcon />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-44">
+                          <DropdownMenuItem
+                            onSelect={() => openRoleDialog(role)}
+                          >
+                            <PencilIcon /> Edit role
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() => duplicateRole(role)}
+                          >
+                            <CopyPlusIcon /> Duplicate role
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            variant="destructive"
+                            disabled={
+                              role.system || (userCounts.get(role.id) ?? 0) > 0
+                            }
+                            onSelect={() => setDeleting(role)}
+                          >
+                            <Trash2Icon /> Delete role
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                     <div className="mt-3">
                       <PermissionBadges permissions={role.permissions} />

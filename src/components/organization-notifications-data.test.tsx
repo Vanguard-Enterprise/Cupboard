@@ -108,7 +108,11 @@ describe("Organization notifications and data", () => {
       expect(preference.getAttribute("data-size")).toBe("lg");
       expect(preference.getAttribute("data-state")).toBe("unchecked");
     }
-    expect(screen.queryByText(/Does not send email yet/i)).toBeNull();
+    expect(
+      screen.getByText(
+        "Saved in this browser. Cupboard does not send notifications yet.",
+      ),
+    ).toBeTruthy();
     expect(screen.getByText("Server outages and incidents.")).toBeTruthy();
   });
 
@@ -140,8 +144,9 @@ describe("Organization notifications and data", () => {
     expect(
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toMatchObject({ weeklySummary: true });
-    expect(toast.success).toHaveBeenCalledWith("Preferences saved.");
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "Preferences saved.",
+    );
 
     view.unmount();
     render(<OrganizationNotificationsData />);
@@ -189,7 +194,9 @@ describe("Organization notifications and data", () => {
       JSON.parse(localStorage.getItem(organizationNotificationsKey)!),
     ).toEqual(defaultOrganizationNotifications);
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(toast.success).toHaveBeenCalledWith("Preferences saved.");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Preferences saved.",
+    );
   });
 
   it("keeps an unsaved choice when browser storage rejects a save", async () => {
@@ -204,7 +211,7 @@ describe("Organization notifications and data", () => {
     const saveAlert = screen.getByRole("alert");
     expect(saveAlert.getAttribute("data-slot")).toBe("alert");
     expect(saveAlert.textContent).toContain("Could not save");
-    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("checked");

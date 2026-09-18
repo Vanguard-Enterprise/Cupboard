@@ -90,7 +90,9 @@ describe("Organization roles", () => {
     expect(custom?.permissions).toEqual(["servers.view", "players.moderate"]);
 
     await user.click(
-      screen.getByRole("button", { name: "Manage Support lead" }),
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Support lead",
+      }),
     );
     await user.click(screen.getByRole("menuitem", { name: "Delete role" }));
     const confirm = screen.getByRole("alertdialog");
@@ -107,7 +109,11 @@ describe("Organization roles", () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Roles" });
-    await user.click(screen.getByRole("button", { name: "Manage Operator" }));
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Operator",
+      }),
+    );
     await user.click(screen.getByRole("menuitem", { name: "Edit role" }));
     const dialog = screen.getByRole("dialog", { name: "Edit role" });
     await user.click(
@@ -122,9 +128,35 @@ describe("Organization roles", () => {
       stored.roles.find(({ id }) => id === "operator")?.permissions,
     ).toContain("integrations.manage");
 
-    await user.click(screen.getByRole("button", { name: "Manage Owner" }));
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Owner",
+      }),
+    );
     const deleteItem = screen.getByRole("menuitem", { name: "Delete role" });
     expect(deleteItem.getAttribute("data-disabled")).not.toBeNull();
     expect(toast.success).toHaveBeenCalledWith("Role updated.");
+  });
+
+  it("offers all role actions from the mobile menu", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Roles" });
+    const mobileList = screen.getByRole("list", {
+      name: "Organization roles",
+    });
+
+    await user.click(
+      within(mobileList).getByRole("button", { name: "Manage Viewer" }),
+    );
+    expect(screen.getByRole("menuitem", { name: "Edit role" })).toBeTruthy();
+    expect(
+      screen.getByRole("menuitem", { name: "Duplicate role" }),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Delete role" })
+        .getAttribute("data-disabled"),
+    ).not.toBeNull();
   });
 });

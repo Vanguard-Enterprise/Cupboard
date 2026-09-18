@@ -105,6 +105,7 @@ describe("Organization users", () => {
     await screen.findByRole("heading", { name: "Users" });
     await user.click(screen.getByRole("button", { name: "Invite user" }));
     const dialog = screen.getByRole("dialog", { name: "Invite user" });
+    expect(within(dialog).queryByLabelText("User status")).toBeNull();
     await user.type(within(dialog).getByLabelText("Name"), "Alex Morgan");
     await user.type(within(dialog).getByLabelText("Email"), "alex@example.com");
     await user.click(within(dialog).getByLabelText("User role"));
@@ -131,7 +132,11 @@ describe("Organization users", () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Users" });
-    await user.click(screen.getByRole("button", { name: "Manage Maya Chen" }));
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Maya Chen",
+      }),
+    );
     await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
     const editDialog = screen.getByRole("dialog", { name: "Edit user" });
     await user.click(within(editDialog).getByLabelText("User role"));
@@ -149,7 +154,11 @@ describe("Organization users", () => {
       stored.users.find(({ id }) => id === "user-maya-chen"),
     ).toMatchObject({ roleId: "administrator", status: "suspended" });
 
-    await user.click(screen.getByRole("button", { name: "Manage Maya Chen" }));
+    await user.click(
+      within(screen.getByRole("table")).getByRole("button", {
+        name: "Manage Maya Chen",
+      }),
+    );
     await user.click(screen.getByRole("menuitem", { name: "Remove user" }));
     const confirm = screen.getByRole("alertdialog");
     await user.click(
@@ -157,6 +166,66 @@ describe("Organization users", () => {
     );
     stored = parseOrganizationTeam(localStorage.getItem(organizationTeamKey)!);
     expect(stored.users.some(({ id }) => id === "user-maya-chen")).toBe(false);
+  });
+
+  it("keeps current-operator protections after an email change", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    const table = screen.getByRole("table");
+
+    await user.click(
+      within(table).getByRole("button", { name: "Manage Demo operator" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit user" });
+    const email = within(dialog).getByLabelText("Email");
+    await user.clear(email);
+    await user.type(email, "changed@example.com");
+    await user.click(within(dialog).getByRole("button", { name: "Save user" }));
+
+    await user.click(
+      within(table).getByRole("button", { name: "Manage Demo operator" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    const reopenedDialog = screen.getByRole("dialog", { name: "Edit user" });
+    expect(
+      (within(reopenedDialog).getByLabelText("User role") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (
+        within(reopenedDialog).getByLabelText(
+          "User status",
+        ) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    await user.click(
+      within(reopenedDialog).getByRole("button", { name: "Cancel" }),
+    );
+    await user.click(
+      within(table).getByRole("button", { name: "Manage Demo operator" }),
+    );
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Remove user" })
+        .getAttribute("data-disabled"),
+    ).not.toBeNull();
+  });
+
+  it("offers user removal from the mobile action menu", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    const mobileList = screen.getByRole("list", {
+      name: "Organization users",
+    });
+
+    await user.click(
+      within(mobileList).getByRole("button", { name: "Manage Maya Chen" }),
+    );
+    expect(screen.getByRole("menuitem", { name: "Edit user" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Remove user" })).toBeTruthy();
   });
 
   it("keeps the invitation dialog open when browser storage fails", async () => {

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { flushSync } from "react-dom";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Building2Icon, InfoIcon, MailIcon } from "lucide-react";
@@ -47,6 +46,7 @@ function ProfileEditor({
   const [draft, setDraft] = useState(saved);
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saveError, setSaveError] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
   const { contains: countryNameContains } = useComboboxFilter();
@@ -94,6 +94,7 @@ function ProfileEditor({
         ...(key === "country" && value !== draft.country ? { region: "" } : {}),
       });
       setSaveError("");
+      setSaveMessage("");
       setErrors({
         ...errors,
         [key]: undefined,
@@ -244,6 +245,7 @@ function ProfileEditor({
         const nextErrors = validateProfile(normalized);
         setErrors(nextErrors);
         setSaveError("");
+        setSaveMessage("");
         const firstError = Object.keys(nextErrors)[0];
         if (firstError) {
           flushSync(() =>
@@ -259,7 +261,7 @@ function ProfileEditor({
         try {
           save(normalized);
           setDraft(normalized);
-          toast.success("Changes saved.");
+          setSaveMessage("Changes saved.");
         } catch {
           setSaveError("Could not save your changes. Please try again.");
         }
@@ -366,6 +368,16 @@ function ProfileEditor({
                 <AlertDescription>{saveError}</AlertDescription>
               </Alert>
             )}
+            {saveMessage && (
+              <Alert
+                role="status"
+                className="mr-auto w-auto max-w-full border-primary/25 bg-primary/5"
+              >
+                <AlertDescription className="text-primary">
+                  {saveMessage}
+                </AlertDescription>
+              </Alert>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -376,6 +388,7 @@ function ProfileEditor({
                 setConflict(false);
                 setErrors({});
                 setSaveError("");
+                setSaveMessage("");
               }}
             >
               Cancel

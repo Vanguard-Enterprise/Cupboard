@@ -815,7 +815,7 @@ export function OrganizationIntegrations() {
       });
       return;
     }
-    const enabled = !latestWebhook.enabled;
+    const enabled = !webhook.enabled;
     persist(
       {
         ...latestData,

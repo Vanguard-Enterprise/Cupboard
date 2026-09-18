@@ -984,6 +984,29 @@ describe("Organization credentials and webhooks", () => {
     expect(toast.success).toHaveBeenCalledWith("Operations relay resumed.");
   });
 
+  it("applies the webhook state named by a stale menu action", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationIntegrations />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Manage Operations relay" }),
+    );
+    const pausedElsewhere = structuredClone(defaultOrganizationIntegrations);
+    pausedElsewhere.webhooks[0].enabled = false;
+    localStorage.setItem(
+      organizationIntegrationsKey,
+      JSON.stringify(pausedElsewhere),
+    );
+
+    await user.click(screen.getByRole("menuitem", { name: "Pause" }));
+
+    expect(
+      JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
+        .enabled,
+    ).toBe(false);
+    expect(toast.success).toHaveBeenCalledWith("Operations relay paused.");
+  });
+
   it("edits and deletes a webhook through managed actions", async () => {
     const user = userEvent.setup();
     render(<OrganizationIntegrations />);

@@ -2,7 +2,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { toast } from "sonner";
 import { OrganizationAccess } from "./organization-access";
 import { TooltipProvider } from "./ui/tooltip";
 import {
@@ -10,10 +9,6 @@ import {
   organizationAccessKey,
   parseOrganizationAccess,
 } from "@/lib/organization-access";
-
-vi.mock("sonner", () => ({
-  toast: { success: vi.fn() },
-}));
 
 function mount() {
   return render(
@@ -88,6 +83,11 @@ describe("Organization approvals", () => {
     const user = userEvent.setup();
     mount();
     await screen.findByRole("heading", { name: "Approval rules" });
+    expect(
+      screen.getByText(
+        "Saved in this browser. These rules do not block sensitive actions.",
+      ),
+    ).toBeTruthy();
 
     const save = screen.getByRole("button", {
       name: "Save changes",
@@ -103,7 +103,9 @@ describe("Organization approvals", () => {
       localStorage.getItem(organizationAccessKey)!,
     );
     expect(stored.rules[2].approvals).toBe(2);
-    expect(toast.success).toHaveBeenCalledWith("Approval settings saved.");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Approval settings saved.",
+    );
     expect(save.disabled).toBe(true);
   });
 
@@ -184,7 +186,7 @@ describe("Organization approvals", () => {
     const storageAlert = screen.getByRole("alert");
     expect(storageAlert.getAttribute("data-slot")).toBe("alert");
     expect(storageAlert.textContent).toContain("Could not save");
-    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).toBeNull();
     expect(
       (
         screen.getByRole("button", {
@@ -213,7 +215,9 @@ describe("Organization approvals", () => {
     expect(
       parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!),
     ).toEqual(defaultOrganizationAccess);
-    expect(toast.success).toHaveBeenCalledWith("Approval settings saved.");
+    expect(screen.getByRole("status").textContent).toContain(
+      "Approval settings saved.",
+    );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(save.disabled).toBe(true);
   });

@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { toast } from "sonner";
 import {
   KeyRoundIcon,
   ServerCogIcon,
@@ -71,6 +70,7 @@ function AccessEditor({
   const [baselineVersion, setBaselineVersion] = useState(sourceVersion);
   const [conflict, setConflict] = useState(false);
   const [storageError, setStorageError] = useState(initialStorageError);
+  const [saveMessage, setSaveMessage] = useState("");
 
   const dirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(saved),
@@ -91,6 +91,7 @@ function AccessEditor({
   }
 
   function updateRule(id: ApprovalRule["id"], update: Partial<ApprovalRule>) {
+    setSaveMessage("");
     setDraft((current) => ({
       ...current,
       rules: current.rules.map((rule) =>
@@ -104,8 +105,9 @@ function AccessEditor({
       window.localStorage.setItem(organizationAccessKey, JSON.stringify(draft));
       window.dispatchEvent(new Event(organizationAccessChangedEvent));
       setStorageError("");
-      toast.success("Approval settings saved.");
+      setSaveMessage("Approval settings saved.");
     } catch {
+      setSaveMessage("");
       setStorageError("Could not save approval settings in this browser.");
     }
   }
@@ -138,6 +140,9 @@ function AccessEditor({
               Approval rules
             </h2>
           </div>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            Saved in this browser. These rules do not block sensitive actions.
+          </p>
         </div>
         <div className="divide-y divide-border">
           {draft.rules.map((rule) => {
@@ -211,6 +216,16 @@ function AccessEditor({
                 >
                   Load latest
                 </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+          {saveMessage && (
+            <Alert
+              role="status"
+              className="mr-auto w-full border-primary/25 bg-primary/5 sm:w-auto sm:max-w-full"
+            >
+              <AlertDescription className="text-primary">
+                {saveMessage}
               </AlertDescription>
             </Alert>
           )}
