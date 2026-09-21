@@ -168,7 +168,7 @@ describe("Organization users", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const editDialog = screen.getByRole("dialog", { name: "Edit user" });
     const email = within(editDialog).getByLabelText("Email");
     await user.clear(email);
@@ -224,7 +224,7 @@ describe("Organization users", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const editDialog = screen.getByRole("dialog", { name: "Edit user" });
     expect(
       within(editDialog).getByText(/do not grant, suspend, or revoke access/i),
@@ -249,7 +249,7 @@ describe("Organization users", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Remove user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove" }));
     const confirm = screen.getByRole("alertdialog");
     await user.click(
       within(confirm).getByRole("button", { name: "Remove user" }),
@@ -267,7 +267,7 @@ describe("Organization users", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const dialog = screen.getByRole("dialog", { name: "Edit user" });
     await user.clear(within(dialog).getByLabelText("Name"));
     await user.type(within(dialog).getByLabelText("Name"), "Local edit");
@@ -298,7 +298,7 @@ describe("Organization users", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const dialog = screen.getByRole("dialog", { name: "Edit user" });
 
     const external = structuredClone(defaultOrganizationTeam);
@@ -326,7 +326,7 @@ describe("Organization users", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Remove user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove" }));
     const confirmation = screen.getByRole("alertdialog", {
       name: "Remove Maya Chen?",
     });
@@ -361,7 +361,7 @@ describe("Organization users", () => {
     await user.click(
       within(table).getByRole("button", { name: "Manage Demo operator" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const dialog = screen.getByRole("dialog", { name: "Edit user" });
     const email = within(dialog).getByLabelText("Email");
     await user.clear(email);
@@ -371,7 +371,7 @@ describe("Organization users", () => {
     await user.click(
       within(table).getByRole("button", { name: "Manage Demo operator" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit user" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
     const reopenedDialog = screen.getByRole("dialog", { name: "Edit user" });
     expect(
       (within(reopenedDialog).getByLabelText("User role") as HTMLButtonElement)
@@ -392,7 +392,7 @@ describe("Organization users", () => {
     );
     expect(
       screen
-        .getByRole("menuitem", { name: "Remove user" })
+        .getByRole("menuitem", { name: "Remove" })
         .getAttribute("data-disabled"),
     ).not.toBeNull();
   });
@@ -408,8 +408,8 @@ describe("Organization users", () => {
     await user.click(
       within(mobileList).getByRole("button", { name: "Manage Maya Chen" }),
     );
-    expect(screen.getByRole("menuitem", { name: "Edit user" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Remove user" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Edit" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Remove" })).toBeTruthy();
   });
 
   it("keeps the invitation dialog open when browser storage fails", async () => {

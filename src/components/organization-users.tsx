@@ -748,7 +748,10 @@ export function OrganizationUsers() {
                                 <MoreHorizontalIcon />
                               </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-40">
+                            <DropdownMenuContent
+                              align="end"
+                              className="w-28 min-w-28"
+                            >
                               <DropdownMenuItem
                                 onSelect={() => {
                                   clearStorageError();
@@ -763,7 +766,7 @@ export function OrganizationUsers() {
                                   });
                                 }}
                               >
-                                <UserRoundPenIcon /> Edit user
+                                <UserRoundPenIcon /> Edit
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -771,7 +774,7 @@ export function OrganizationUsers() {
                                 disabled={user.id === currentOperatorId}
                                 onSelect={() => openRemoveUser(user)}
                               >
-                                <Trash2Icon /> Remove user
+                                <Trash2Icon /> Remove
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
@@ -814,7 +817,10 @@ export function OrganizationUsers() {
                             <MoreHorizontalIcon />
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuContent
+                          align="end"
+                          className="w-28 min-w-28"
+                        >
                           <DropdownMenuItem
                             onSelect={() => {
                               clearStorageError();
@@ -829,7 +835,7 @@ export function OrganizationUsers() {
                               });
                             }}
                           >
-                            <UserRoundPenIcon /> Edit user
+                            <UserRoundPenIcon /> Edit
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -837,7 +843,7 @@ export function OrganizationUsers() {
                             disabled={user.id === currentOperatorId}
                             onSelect={() => openRemoveUser(user)}
                           >
-                            <Trash2Icon /> Remove user
+                            <Trash2Icon /> Remove
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
