@@ -27,6 +27,12 @@ jobs:
           cache: npm
       - name: Install Rust toolchain
         run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs --output "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain none --no-modify-path
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
       - run: npm ci
       - run: npm run check
