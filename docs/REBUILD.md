@@ -48,10 +48,26 @@ The initial runtime and frontend shape is recorded in
 The web interface uses Next.js App Router so it can render on the server and call
 the Rust API without exposing private service credentials to the browser. This
 requires a separate web runtime, which is the first deliberate exception to the
-single-application default. The database library, authentication provider, and
-deployment target must still be chosen together before the first persistent
-application slice is added. These choices should favor maintained libraries,
-fast tests, and simple deployment.
+single-application default. The Rust runtime uses Axum, Tokio, and SQLx. Cupboard
+will own accounts and sessions using maintained authentication primitives, with
+no external identity
+provider. Production will run in the USE1 Kubernetes cluster, with PostgreSQL in
+the cluster and Argo CD deployment from `v-deployments`. CI uses the organization's
+GitHub runners. The root Cargo package keeps all Rust code in `backend/`.
+
+CUP-2 adds the runtime, database connection and migration execution, health checks,
+container build, and combined root development and check commands. CUP-27 adds sign-in, account creation, revocable sessions, tenant membership, and
+role management. Signup creates only an account; organization membership and
+ownership are optional. Accounts with no memberships retain access to their account
+workspace within the regular dashboard sidebar and header. Its main area offers
+join-code entry and optional organization creation. They can create an organization
+as Owner or join one through an invitation.
+Existing Users and Roles pages now read and write PostgreSQL through Rust.
+New organizations start with only Owner and Administrator, both with full
+permissions. Ownership is exclusive; Administrator ranks below Owner. Memberships
+support multiple roles, and persisted role order bounds management of lower roles
+and users. Custom roles can be reordered by drag, keyboard, or menu actions. Other
+settings retain their documented browser-local behavior.
 
 The frontend foundation stays in this repository. It uses Next.js Server
 Components, semantic charcoal and sage theme tokens, and source-owned shadcn controls.
@@ -66,9 +82,8 @@ verified per connector before offering actions such as file access or host power
 control. Player identities and staff organization membership are separate domains.
 
 The first editable frontend page is `/dashboard/organization/settings/profile`. It currently
-persists a local preview in browser storage because authentication and the shared
-database remain undecided. Public and private contact fields are separate; general
-search indexes only public fields. This preview is not tenant-authorized storage
+persists a local preview in browser storage because the profile API is not implemented. Public and private contact
+fields are separate; general search indexes only public fields. This preview is not tenant-authorized storage
 and must not hold confidential production contacts. Shared persistence must add
 server-side membership checks before replacing the preview. Organization search
 currently covers only implemented pages and locally saved profile information.
@@ -96,13 +111,13 @@ and data page at
 in the current browser and can clear Cupboard's organization preview data there.
 It does not send notifications or delete shared server data.
 The approvals page at `/dashboard/organization/security/access` previews
-sensitive-action approval rules in local browser storage. The Members & teams
-pages at `/dashboard/organization/team/users` and
-`/dashboard/organization/team/roles` preview searchable, sortable membership and
-permission management in the current browser. They do not send invitations or
-grant access. These controls do not enforce approval or role policy. Shared
-persistence must check tenant membership and authorization in the data-access
-path before either preview can become an access-control boundary.
+sensitive-action approval rules in local browser storage. The Members & teams pages at
+`/dashboard/organization/team/users` and `/dashboard/organization/team/roles`
+now enforce tenant ownership and organization management permission in Rust.
+Invitations use expiring, single-use links shown once for manual sharing. Email
+delivery, email verification, and password recovery are still outside this slice.
+Sensitive-action approval rules remain a separate browser preview and do not
+control backend role enforcement.
 
 ## Acceptance bar for the first slice
 

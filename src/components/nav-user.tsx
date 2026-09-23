@@ -1,4 +1,7 @@
 "use client";
+import { useState } from "react";
+import { navigateAfterAuth, apiRequest } from "@/lib/api-client";
+import { toast } from "sonner";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -35,6 +38,25 @@ export function NavUser({
   };
 }) {
   const { isMobile } = useSidebar();
+  const [busy, setBusy] = useState(false);
+  async function logout() {
+    setBusy(true);
+    try {
+      await apiRequest("auth/logout", {});
+      navigateAfterAuth("/login");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not sign out.",
+      );
+      setBusy(false);
+    }
+  }
+  const initials = user.name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
 
   return (
     <SidebarMenu>
@@ -47,7 +69,9 @@ export function NavUser({
             >
               <Avatar className="h-8 w-8 rounded-lg">
                 <AvatarImage src={user.avatar} alt={user.name} />
-                <AvatarFallback className="rounded-lg">CN</AvatarFallback>
+                <AvatarFallback className="rounded-lg">
+                  {initials}
+                </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-medium">{user.name}</span>
@@ -66,7 +90,9 @@ export function NavUser({
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="h-8 w-8 rounded-lg">
                   <AvatarImage src={user.avatar} alt={user.name} />
-                  <AvatarFallback className="rounded-lg">CN</AvatarFallback>
+                  <AvatarFallback className="rounded-lg">
+                    {initials}
+                  </AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">{user.name}</span>
@@ -97,7 +123,7 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled>
+            <DropdownMenuItem disabled={busy} onSelect={() => void logout()}>
               <LogOutIcon />
               Log out
             </DropdownMenuItem>

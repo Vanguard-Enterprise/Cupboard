@@ -1,7 +1,3 @@
-export const organizationTeamKey =
-  "cupboard:organization:local-preview:team:v1";
-export const organizationTeamChangedEvent = "cupboard-team-saved";
-
 export const permissionDefinitions = [
   {
     id: "servers.view",
@@ -50,13 +46,14 @@ export type OrganizationRole = {
   description: string;
   permissions: PermissionId[];
   system: boolean;
+  position: number;
 };
 
 export type OrganizationUser = {
   id: string;
   name: string;
   email: string;
-  roleId: string;
+  roleIds: string[];
   status: OrganizationUserStatus;
   lastActiveAt: string | null;
 };
@@ -67,83 +64,6 @@ export type OrganizationTeamSettings = {
 };
 
 const allPermissions = permissionDefinitions.map(({ id }) => id);
-
-export const defaultOrganizationTeam: OrganizationTeamSettings = {
-  roles: [
-    {
-      id: "owner",
-      name: "Owner",
-      description: "Full access, including billing, users, and security.",
-      permissions: [...allPermissions],
-      system: true,
-    },
-    {
-      id: "administrator",
-      name: "Administrator",
-      description: "Manage servers, users, integrations, and settings.",
-      permissions: allPermissions.filter(
-        (permission) => permission !== "billing.manage",
-      ),
-      system: true,
-    },
-    {
-      id: "operator",
-      name: "Operator",
-      description: "Run servers and handle player moderation.",
-      permissions: ["servers.view", "servers.manage", "players.moderate"],
-      system: true,
-    },
-    {
-      id: "viewer",
-      name: "Viewer",
-      description: "Read server status without changing live systems.",
-      permissions: ["servers.view"],
-      system: true,
-    },
-  ],
-  users: [
-    {
-      id: "user-demo-operator",
-      name: "Demo operator",
-      email: "operator@example.com",
-      roleId: "owner",
-      status: "active",
-      lastActiveAt: "2026-09-17T20:42:00-04:00",
-    },
-    {
-      id: "user-maya-chen",
-      name: "Maya Chen",
-      email: "maya@example.com",
-      roleId: "operator",
-      status: "active",
-      lastActiveAt: "2026-09-17T18:12:00-04:00",
-    },
-    {
-      id: "user-priya-shah",
-      name: "Priya Shah",
-      email: "priya@example.com",
-      roleId: "administrator",
-      status: "active",
-      lastActiveAt: "2026-09-16T14:25:00-04:00",
-    },
-    {
-      id: "user-noah-williams",
-      name: "Noah Williams",
-      email: "noah@example.com",
-      roleId: "viewer",
-      status: "invited",
-      lastActiveAt: null,
-    },
-    {
-      id: "user-lena-ortiz",
-      name: "Lena Ortiz",
-      email: "lena@example.com",
-      roleId: "viewer",
-      status: "suspended",
-      lastActiveAt: "2026-09-02T09:08:00-04:00",
-    },
-  ],
-};
 
 const permissionIds = new Set<PermissionId>(allPermissions);
 const statuses = new Set<OrganizationUserStatus>([
@@ -169,6 +89,8 @@ export function parseOrganizationTeam(raw: string): OrganizationTeamSettings {
       !candidate.name.trim() ||
       typeof candidate.description !== "string" ||
       typeof candidate.system !== "boolean" ||
+      !Number.isInteger(candidate.position) ||
+      (candidate.position as number) < 0 ||
       !Array.isArray(candidate.permissions) ||
       candidate.permissions.some(
         (permission) =>
@@ -182,6 +104,7 @@ export function parseOrganizationTeam(raw: string): OrganizationTeamSettings {
       name: candidate.name.trim(),
       description: candidate.description.trim(),
       system: candidate.system,
+      position: candidate.position as number,
       permissions: [...new Set(candidate.permissions as PermissionId[])],
     };
   });
@@ -204,8 +127,12 @@ export function parseOrganizationTeam(raw: string): OrganizationTeamSettings {
       !candidate.name.trim() ||
       typeof candidate.email !== "string" ||
       !candidate.email.includes("@") ||
-      typeof candidate.roleId !== "string" ||
-      !roleIds.has(candidate.roleId) ||
+      !Array.isArray(candidate.roleIds) ||
+      !candidate.roleIds.length ||
+      new Set(candidate.roleIds).size !== candidate.roleIds.length ||
+      candidate.roleIds.some(
+        (id) => typeof id !== "string" || !roleIds.has(id),
+      ) ||
       typeof candidate.status !== "string" ||
       !statuses.has(candidate.status as OrganizationUserStatus) ||
       !(
@@ -219,7 +146,7 @@ export function parseOrganizationTeam(raw: string): OrganizationTeamSettings {
       id: candidate.id,
       name: candidate.name.trim(),
       email: candidate.email.trim().toLowerCase(),
-      roleId: candidate.roleId,
+      roleIds: candidate.roleIds as string[],
       status: candidate.status as OrganizationUserStatus,
       lastActiveAt: candidate.lastActiveAt as string | null,
     };
@@ -232,4 +159,33 @@ export function parseOrganizationTeam(raw: string): OrganizationTeamSettings {
     throw new Error("Invalid users");
 
   return { roles, users };
+}
+
+export function roleAuthority(
+  settings: OrganizationTeamSettings,
+  memberId: string,
+) {
+  const member = settings.users.find((user) => user.id === memberId);
+  const assigned = settings.roles.filter((role) =>
+    member?.roleIds.includes(role.id),
+  );
+  const owner = assigned.some((role) => role.id === "owner");
+  const position = Math.min(...assigned.map((role) => role.position));
+  const permissions = new Set(assigned.flatMap((role) => role.permissions));
+  return {
+    position,
+    canGrant: (role: OrganizationRole) =>
+      role.id !== "owner" &&
+      (owner ||
+        (role.position > position &&
+          role.permissions.every((permission) => permissions.has(permission)))),
+    canManageUser: (user: OrganizationUser) =>
+      user.id !== memberId &&
+      user.roleIds.every((id) => {
+        const role = settings.roles.find((candidate) => candidate.id === id);
+        return Boolean(
+          role && role.id !== "owner" && (owner || role.position > position),
+        );
+      }),
+  };
 }

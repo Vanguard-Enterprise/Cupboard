@@ -14,49 +14,65 @@ import {
   SidebarRail,
 } from "@/components/ui/sidebar";
 import { Building2Icon } from "lucide-react";
-import { useOrganization } from "@/components/organization-provider";
+import { navigateAfterAuth, apiRequest, type Identity } from "@/lib/api-client";
+import { toast } from "sonner";
 import { dashboardNavigation } from "@/lib/dashboard-navigation";
-
-// This is sample data.
-const data = {
-  user: { name: "Demo operator", email: "operator@example.com" },
-};
 
 export function AppSidebar({
   activeSection,
   onSearch,
+  identity,
   ...props
 }: React.ComponentProps<typeof Sidebar> & {
   activeSection?: string;
   onSearch: () => void;
+  identity: Identity;
 }) {
-  const { profile } = useOrganization();
+  const [switching, setSwitching] = React.useState(false);
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
         <TeamSwitcher
-          key={profile.name}
-          teams={[
-            {
-              name: profile.name,
-              logo: <Building2Icon />,
-              plan: "Organization",
-            },
-          ]}
+          activeId={identity.organization?.id ?? ""}
+          disabled={switching}
+          teams={identity.organizations.map((org) => ({
+            id: org.id,
+            name: org.name,
+            logo: <Building2Icon />,
+            plan: "Organization",
+          }))}
+          onChange={async (id) => {
+            setSwitching(true);
+            try {
+              await apiRequest("auth/organization", { id });
+              navigateAfterAuth("/dashboard");
+            } catch (error) {
+              toast.error(
+                error instanceof Error
+                  ? error.message
+                  : "Could not switch organization.",
+              );
+              setSwitching(false);
+            }
+          }}
         />
-        <OrganizationSearchButton onOpen={onSearch} />
+        <OrganizationSearchButton
+          onOpen={onSearch}
+          disabled={!identity.organization}
+        />
       </SidebarHeader>
       <SidebarContent>
         {dashboardNavigation.map((group) => (
           <NavMain
             key={group.title}
             group={group}
+            disabled={!identity.organization}
             activeSection={activeSection}
           />
         ))}
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser user={identity.user} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

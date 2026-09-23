@@ -1,8 +1,6 @@
+import { defaultOrganizationTeam } from "@/test/organization-team-fixture";
 import { describe, expect, it } from "vitest";
-import {
-  defaultOrganizationTeam,
-  parseOrganizationTeam,
-} from "./organization-team";
+import { parseOrganizationTeam } from "./organization-team";
 
 describe("organization team settings", () => {
   it("round trips users, roles, and permissions", () => {
@@ -13,7 +11,7 @@ describe("organization team settings", () => {
 
   it("rejects users assigned to missing roles", () => {
     const invalid = structuredClone(defaultOrganizationTeam);
-    invalid.users[0].roleId = "missing";
+    invalid.users[0].roleIds = ["missing"];
     expect(() => parseOrganizationTeam(JSON.stringify(invalid))).toThrow();
   });
 

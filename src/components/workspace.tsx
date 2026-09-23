@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { Identity } from "@/lib/api-client";
 import { Fragment, useState } from "react";
 import { usePathname } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -35,9 +36,11 @@ import {
 export function Workspace({
   children,
   defaultOpen,
+  identity,
 }: {
   children: React.ReactNode;
   defaultOpen: boolean;
+  identity: Identity;
 }) {
   const pathname = usePathname();
   const currentPage =
@@ -102,12 +105,13 @@ export function Workspace({
             crumbs: ["Organization", "Members & teams", "Roles"],
           }
         : undefined;
-  const page = currentPage ?? teamPage;
+  const page = identity.organization ? (currentPage ?? teamPage) : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <OrganizationProvider>
       <SidebarProvider defaultOpen={defaultOpen}>
         <AppSidebar
+          identity={identity}
           activeSection={page?.activeSection}
           onSearch={() => setSearchOpen(true)}
         />
@@ -142,7 +146,9 @@ export function Workspace({
           </header>
           {children}
         </SidebarInset>
-        <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
+        {identity.organization && (
+          <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
+        )}
       </SidebarProvider>
     </OrganizationProvider>
   );

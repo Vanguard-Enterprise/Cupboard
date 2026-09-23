@@ -35,12 +35,19 @@ import {
   usersPath,
 } from "@/lib/dashboard-navigation";
 
-export function OrganizationSearchButton({ onOpen }: { onOpen: () => void }) {
+export function OrganizationSearchButton({
+  onOpen,
+  disabled,
+}: {
+  onOpen: () => void;
+  disabled?: boolean;
+}) {
   const { setOpenMobile } = useSidebar();
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton
+          disabled={disabled}
           tooltip="Search organization"
           aria-label="Search organization"
           onClick={() => {

@@ -25,10 +25,6 @@ import {
   defaultOrganizationAccess,
   organizationAccessKey,
 } from "@/lib/organization-access";
-import {
-  defaultOrganizationTeam,
-  organizationTeamKey,
-} from "@/lib/organization-team";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn() },
@@ -95,7 +91,7 @@ describe("Organization notifications and data", () => {
     expect(screen.getByText("Organization data")).toBeTruthy();
     expect(
       screen.getByText(
-        "Organization profile, team, notification, access, credential, webhook, and security alert acknowledgement data stored in this browser.",
+        "Organization profile, notification, access, credential, webhook, and security alert acknowledgement data stored in this browser.",
       ),
     ).toBeTruthy();
     for (const name of [
@@ -238,10 +234,6 @@ describe("Organization notifications and data", () => {
     const savedAccess = structuredClone(defaultOrganizationAccess);
     savedAccess.rules[0].approvals = 2;
     localStorage.setItem(organizationAccessKey, JSON.stringify(savedAccess));
-    localStorage.setItem(
-      organizationTeamKey,
-      JSON.stringify(defaultOrganizationTeam),
-    );
     localStorage.setItem("unrelated", "keep me");
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
@@ -260,7 +252,6 @@ describe("Organization notifications and data", () => {
     expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
     expect(localStorage.getItem(securityAlertStorageKey)).toBeNull();
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
-    expect(localStorage.getItem(organizationTeamKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
     expect(toast.success).toHaveBeenCalledWith("Local data cleared.");
     expect(

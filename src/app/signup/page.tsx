@@ -1,7 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
 import { SignupForm } from "@/components/signup-form";
-import { FieldDescription } from "@/components/ui/field";
 
 export default function SignupPage() {
   return (
@@ -18,11 +17,6 @@ export default function SignupPage() {
         <div className="flex flex-1 items-center justify-center">
           <div className="w-full max-w-xs">
             <SignupForm />
-            <div className="mt-6">
-              <FieldDescription className="text-center">
-                Already have an account? <Link href="/login">Sign in</Link>
-              </FieldDescription>
-            </div>
           </div>
         </div>
       </div>
