@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { render, testPreviewKey } from "@/test/preview-storage";
+import { act, cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationAccess } from "./organization-access";
 import { TooltipProvider } from "./ui/tooltip";
 import {
   defaultOrganizationAccess,
-  organizationAccessKey,
+  organizationAccessKey as organizationAccessKeyBase,
   parseOrganizationAccess,
 } from "@/lib/organization-access";
 
@@ -249,3 +250,5 @@ describe("Organization approvals", () => {
     expect(save.disabled).toBe(true);
   });
 });
+
+const organizationAccessKey = testPreviewKey(organizationAccessKeyBase);

@@ -1,5 +1,6 @@
 "use client";
 
+import { PreviewStorageProvider } from "./preview-storage";
 import Link from "next/link";
 import type { Identity } from "@/lib/api-client";
 import { Fragment, useState } from "react";
@@ -108,48 +109,53 @@ export function Workspace({
   const page = identity.organization ? (currentPage ?? teamPage) : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
-    <OrganizationProvider>
-      <SidebarProvider defaultOpen={defaultOpen}>
-        <AppSidebar
-          identity={identity}
-          activeSection={page?.activeSection}
-          onSearch={() => setSearchOpen(true)}
-        />
-        <SidebarInset>
-          <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4 py-3">
-            <SidebarTrigger />
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  {page ? (
-                    <BreadcrumbLink asChild>
-                      <Link href="/dashboard">Dashboard</Link>
-                    </BreadcrumbLink>
-                  ) : (
-                    <BreadcrumbPage>Dashboard</BreadcrumbPage>
-                  )}
-                </BreadcrumbItem>
-                {page?.crumbs.map((crumb, index) => (
-                  <Fragment key={crumb}>
-                    <BreadcrumbSeparator />
-                    <BreadcrumbItem>
-                      {index === page.crumbs.length - 1 ? (
-                        <BreadcrumbPage>{crumb}</BreadcrumbPage>
-                      ) : (
-                        <span>{crumb}</span>
-                      )}
-                    </BreadcrumbItem>
-                  </Fragment>
-                ))}
-              </BreadcrumbList>
-            </Breadcrumb>
-          </header>
-          {children}
-        </SidebarInset>
-        {identity.organization && (
-          <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
-        )}
-      </SidebarProvider>
-    </OrganizationProvider>
+    <PreviewStorageProvider
+      accountId={identity.user.id}
+      organizationId={identity.organization?.id ?? null}
+    >
+      <OrganizationProvider>
+        <SidebarProvider defaultOpen={defaultOpen}>
+          <AppSidebar
+            identity={identity}
+            activeSection={page?.activeSection}
+            onSearch={() => setSearchOpen(true)}
+          />
+          <SidebarInset>
+            <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4 py-3">
+              <SidebarTrigger />
+              <Breadcrumb>
+                <BreadcrumbList>
+                  <BreadcrumbItem>
+                    {page ? (
+                      <BreadcrumbLink asChild>
+                        <Link href="/dashboard">Dashboard</Link>
+                      </BreadcrumbLink>
+                    ) : (
+                      <BreadcrumbPage>Dashboard</BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                  {page?.crumbs.map((crumb, index) => (
+                    <Fragment key={crumb}>
+                      <BreadcrumbSeparator />
+                      <BreadcrumbItem>
+                        {index === page.crumbs.length - 1 ? (
+                          <BreadcrumbPage>{crumb}</BreadcrumbPage>
+                        ) : (
+                          <span>{crumb}</span>
+                        )}
+                      </BreadcrumbItem>
+                    </Fragment>
+                  ))}
+                </BreadcrumbList>
+              </Breadcrumb>
+            </header>
+            {children}
+          </SidebarInset>
+          {identity.organization && (
+            <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
+          )}
+        </SidebarProvider>
+      </OrganizationProvider>
+    </PreviewStorageProvider>
   );
 }

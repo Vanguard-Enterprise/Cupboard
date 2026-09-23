@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
+import { render, testPreviewKey } from "@/test/preview-storage";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
   screen,
   within,
 } from "@testing-library/react";
@@ -13,7 +13,7 @@ import { toast } from "sonner";
 import { OrganizationIntegrations } from "./organization-integrations";
 import {
   defaultOrganizationIntegrations,
-  organizationIntegrationsKey,
+  organizationIntegrationsKey as organizationIntegrationsKeyBase,
 } from "@/lib/organization-integrations";
 
 vi.mock("sonner", () => ({
@@ -1226,7 +1226,11 @@ describe("Organization credentials and webhooks", () => {
           newValue: raw,
         }),
       );
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      window.dispatchEvent(
+        new CustomEvent("cupboard-integrations-saved", {
+          detail: organizationIntegrationsKey,
+        }),
+      );
     });
 
     fireEvent.submit(editDialog.querySelector("form")!);
@@ -1272,7 +1276,11 @@ describe("Organization credentials and webhooks", () => {
           newValue: raw,
         }),
       );
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      window.dispatchEvent(
+        new CustomEvent("cupboard-integrations-saved", {
+          detail: organizationIntegrationsKey,
+        }),
+      );
     });
 
     fireEvent.submit(editDialog.querySelector("form")!);
@@ -1329,3 +1337,7 @@ describe("Organization credentials and webhooks", () => {
     ).toEqual({ status: 503, deliveredAt: "4 minutes ago" });
   });
 });
+
+const organizationIntegrationsKey = testPreviewKey(
+  organizationIntegrationsKeyBase,
+);

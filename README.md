@@ -115,13 +115,16 @@ comboboxes instead of native browser menus. The country menu supports keyboard
 navigation and common abbreviations such as USA and UK.
 
 Profile settings are a browser-local prototype stored under
-`cupboard:organization:local-preview:profile:v1`. Nothing is shared between
+`cupboard:organization:local-preview:profile:v1:account:<account-id>:organization:<organization-id>`. Nothing is shared between
 browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not
 use real confidential details until authentication and shared storage exist.
 Notification choices are also browser-local and do not send messages yet. The
-Notifications & data page can clear all organization preview data from
-the current browser without clearing unrelated local storage.
+Notifications & data page clears only the current account and organization's
+preview data. Profile, integration, notification, approval, and alert stores all
+use account and organization namespaces. Switching organizations or accounts
+discards unsaved drafts and cached previews; older unscoped data is not loaded
+or automatically assigned to an organization.
 
 User membership, invitations, roles, and permissions live in PostgreSQL. No
 browser-local team settings are read or migrated. The account menu shows the
@@ -180,7 +183,7 @@ async executor with at most four concurrent jobs per Rust process. Expired
 throttle buckets and sessions are pruned during authentication requests.
 
 Security alert acknowledgements use
-`cupboard:organization:local-preview:security-alerts:v1`. They update only the
+`cupboard:organization:local-preview:security-alerts:v1:account:<account-id>:organization:<organization-id>`. They update only the
 sample alerts in the current browser and do not change a live server.
 
 The approvals page at `/dashboard/organization/security/access` previews

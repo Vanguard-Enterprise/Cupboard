@@ -67,7 +67,9 @@ New organizations start with only Owner and Administrator, both with full
 permissions. Ownership is exclusive; Administrator ranks below Owner. Memberships
 support multiple roles, and persisted role order bounds management of lower roles
 and users. Custom roles can be reordered by drag, keyboard, or menu actions. Other
-settings retain their documented browser-local behavior.
+settings retain their documented browser-local behavior, with storage scoped
+to the signed-in account and active organization. Organization changes discard
+drafts and cached previews. Legacy unscoped records are not imported.
 
 The frontend foundation stays in this repository. It uses Next.js Server
 Components, semantic charcoal and sage theme tokens, and source-owned shadcn controls.
@@ -108,7 +110,7 @@ setup requirements with sample data. It does not request credentials, connect an
 external account, or persist connection settings. The organization notifications
 and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
-in the current browser and can clear Cupboard's organization preview data there.
+in the current browser and can clear only the current account and organization's preview data there.
 It does not send notifications or delete shared server data.
 The approvals page at `/dashboard/organization/security/access` previews
 sensitive-action approval rules in local browser storage. The Members & teams pages at

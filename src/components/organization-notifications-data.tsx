@@ -1,5 +1,7 @@
 "use client";
 
+import { usePreviewStorage } from "./preview-storage";
+
 import { useMemo, useState, useSyncExternalStore } from "react";
 import { Trash2Icon } from "lucide-react";
 import { toast } from "sonner";
@@ -61,29 +63,14 @@ const notificationOptions = [
 
 const notificationsChangedEvent = "cupboard-notifications-saved";
 
-function subscribe(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationNotificationsKey) callback();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener(notificationsChangedEvent, callback);
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener(notificationsChangedEvent, callback);
-  };
-}
-
-function snapshot() {
-  try {
-    return window.localStorage.getItem(organizationNotificationsKey) ?? "";
-  } catch {
-    return "storage-unavailable";
-  }
-}
-
 const serverSnapshot = () => null;
 
 function useSavedNotifications() {
+  const storage = usePreviewStorage(
+    organizationNotificationsKey,
+    "cupboard-notifications-saved",
+  );
+  const { subscribe: subscribe, snapshot: snapshot } = storage;
   const raw = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   return useMemo(() => {
     let preferences = defaultOrganizationNotifications;
@@ -103,14 +90,10 @@ function useSavedNotifications() {
       storageError,
       needsReplacement: Boolean(storageError),
       save(next: OrganizationNotifications) {
-        window.localStorage.setItem(
-          organizationNotificationsKey,
-          JSON.stringify(next),
-        );
-        window.dispatchEvent(new Event(notificationsChangedEvent));
+        storage.set(JSON.stringify(next));
       },
     };
-  }, [raw]);
+  }, [raw, storage]);
 }
 
 function NotificationPreferencesEditor({
@@ -254,6 +237,26 @@ function NotificationPreferencesEditor({
 }
 
 export function OrganizationNotificationsData() {
+  const profileStorage = usePreviewStorage(
+    organizationProfileKey,
+    "cupboard-profile-saved",
+  );
+  const notificationStorage = usePreviewStorage(
+    organizationNotificationsKey,
+    notificationsChangedEvent,
+  );
+  const integrationsStorage = usePreviewStorage(
+    organizationIntegrationsKey,
+    "cupboard-integrations-saved",
+  );
+  const accessStorage = usePreviewStorage(
+    organizationAccessKey,
+    organizationAccessChangedEvent,
+  );
+  const alertsStorage = usePreviewStorage(
+    securityAlertStorageKey,
+    "cupboard-security-alerts-saved",
+  );
   const { preferences, ready, save, storageError, needsReplacement } =
     useSavedNotifications();
   const [clearError, setClearError] = useState("");
@@ -270,16 +273,11 @@ export function OrganizationNotificationsData() {
   function clearLocalData() {
     setClearError("");
     try {
-      window.localStorage.removeItem(organizationProfileKey);
-      window.localStorage.removeItem(organizationNotificationsKey);
-      window.localStorage.removeItem(organizationIntegrationsKey);
-      window.localStorage.removeItem(organizationAccessKey);
-      window.dispatchEvent(new Event("cupboard-profile-saved"));
-      window.dispatchEvent(new Event(notificationsChangedEvent));
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
-      window.localStorage.removeItem(securityAlertStorageKey);
-      window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
-      window.dispatchEvent(new Event(organizationAccessChangedEvent));
+      profileStorage.remove();
+      notificationStorage.remove();
+      integrationsStorage.remove();
+      accessStorage.remove();
+      alertsStorage.remove();
       setEditorGeneration((value) => value + 1);
       toast.success("Local data cleared.");
     } catch {
@@ -315,8 +313,8 @@ export function OrganizationNotificationsData() {
           <div className="min-w-0">
             <p className="text-sm font-medium">Organization data</p>
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
-              Organization profile, notification, access, credential, webhook,
-              and security alert acknowledgement data stored in this browser.
+              Your saved profile, notification, approval, credential, webhook,
+              and alert settings for this organization in this browser.
             </p>
           </div>
           <AlertDialog>
@@ -338,10 +336,10 @@ export function OrganizationNotificationsData() {
                 </AlertDialogMedia>
                 <AlertDialogTitle>Clear local data?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This removes all organization preview data saved in this
-                  browser, including users, roles, approval settings,
-                  credentials, webhooks, and security alert acknowledgements.
-                  You cannot undo this action.
+                  This removes your saved profile, notification, approval,
+                  credential, webhook, and alert settings for this organization
+                  in this browser. Your account, memberships, and roles stay
+                  unchanged. You cannot undo this action.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

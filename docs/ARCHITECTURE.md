@@ -186,5 +186,11 @@ The first application migration contains accounts, organizations, tenant roles,
 memberships, invitation hashes, authentication throttle buckets, and the schema
 required by the session store. SQLx embeds migrations and applies them under its
 migration lock at startup. No account or authorization state falls back to local
-browser storage. Other settings previews remain unchanged and are not shared
-backend records.
+browser storage. Other settings previews use browser storage namespaced by
+account and active organization; they are not shared backend records. A keyed
+React provider remounts those previews when either identity changes, discarding
+unsaved drafts and cached values. Reads, writes, cross-tab subscriptions, conflict
+checks, and clearing data use the same namespace. Legacy unscoped records are
+ignored because their tenant ownership cannot be determined. This prevents
+accidental reuse between workspaces; browser storage remains readable by anyone
+with access to that browser profile.

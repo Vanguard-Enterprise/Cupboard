@@ -1,5 +1,7 @@
 "use client";
 
+import { usePreviewStorage } from "./preview-storage";
+
 import {
   createContext,
   useContext,
@@ -14,24 +16,6 @@ import {
   type OrganizationProfile,
 } from "@/lib/organization-profile";
 
-function subscribe(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationProfileKey) callback();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener("cupboard-profile-saved", callback);
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener("cupboard-profile-saved", callback);
-  };
-}
-function snapshot() {
-  try {
-    return window.localStorage.getItem(organizationProfileKey) ?? "";
-  } catch {
-    return "storage-unavailable";
-  }
-}
 const serverSnapshot = () => null;
 const OrganizationContext = createContext<{
   profile: OrganizationProfile;
@@ -45,6 +29,11 @@ export function OrganizationProvider({
 }: {
   children: React.ReactNode;
 }) {
+  const storage = usePreviewStorage(
+    organizationProfileKey,
+    "cupboard-profile-saved",
+  );
+  const { subscribe: subscribe, snapshot: snapshot } = storage;
   const raw = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   const value = useMemo(() => {
     let profile = defaultOrganizationProfile;
@@ -64,14 +53,10 @@ export function OrganizationProvider({
       save: (next: OrganizationProfile) => {
         if (Object.keys(validateProfile(next)).length)
           throw new Error("Check the highlighted fields.");
-        window.localStorage.setItem(
-          organizationProfileKey,
-          JSON.stringify(next),
-        );
-        window.dispatchEvent(new Event("cupboard-profile-saved"));
+        storage.set(JSON.stringify(next));
       },
     };
-  }, [raw]);
+  }, [raw, storage]);
   return (
     <OrganizationContext.Provider value={value}>
       {children}

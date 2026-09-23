@@ -1,5 +1,7 @@
 "use client";
 
+import { usePreviewStorage } from "./preview-storage";
+
 import { useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import {
@@ -71,26 +73,6 @@ import {
 } from "@/lib/organization-integrations";
 
 type Feedback = { message: string } | null;
-
-function subscribeToIntegrations(callback: () => void) {
-  const handleStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationIntegrationsKey) callback();
-  };
-  window.addEventListener("storage", handleStorage);
-  window.addEventListener("cupboard-integrations-saved", callback);
-  return () => {
-    window.removeEventListener("storage", handleStorage);
-    window.removeEventListener("cupboard-integrations-saved", callback);
-  };
-}
-
-function integrationsSnapshot(): string | null {
-  try {
-    return localStorage.getItem(organizationIntegrationsKey);
-  } catch {
-    return "storage-unavailable";
-  }
-}
 
 const integrationsServerSnapshot = () => null;
 
@@ -342,6 +324,13 @@ function WebhookRow({
 }
 
 export function OrganizationIntegrations() {
+  const storage = usePreviewStorage(
+    organizationIntegrationsKey,
+    "cupboard-integrations-saved",
+    null,
+  );
+  const { subscribe: subscribeToIntegrations, snapshot: integrationsSnapshot } =
+    storage;
   const raw = useSyncExternalStore(
     subscribeToIntegrations,
     integrationsSnapshot,
@@ -456,8 +445,7 @@ export function OrganizationIntegrations() {
 
   function persist(next: OrganizationIntegrations, success: string): boolean {
     try {
-      localStorage.setItem(organizationIntegrationsKey, JSON.stringify(next));
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      storage.set(JSON.stringify(next));
       setFeedback(null);
       toast.success(success);
       return true;
@@ -526,7 +514,7 @@ export function OrganizationIntegrations() {
         return;
       }
     }
-    window.dispatchEvent(new Event("cupboard-integrations-saved"));
+    storage.notify();
     setFeedback({
       message: "Saved integration data changed. Review it before replacing.",
     });
@@ -546,15 +534,14 @@ export function OrganizationIntegrations() {
     if (latestRaw !== unreadableToReplace || !latestIsUnreadable) {
       setUnreadableToReplace(null);
       restoreSuspendedDraft();
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      storage.notify();
       setFeedback({
         message: "Saved integration data changed. Review it before replacing.",
       });
       return;
     }
     try {
-      localStorage.removeItem(organizationIntegrationsKey);
-      window.dispatchEvent(new Event("cupboard-integrations-saved"));
+      storage.remove();
       setUnreadableToReplace(null);
       if (suspendedDraftDialog === "credential") {
         setCredentialStartedWithMissingKey(true);
