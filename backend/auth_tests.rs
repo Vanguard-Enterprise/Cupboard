@@ -622,6 +622,47 @@ async fn signup_password_minimum_is_eight_characters() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+    for (index, password) in ["😀".repeat(8), "界".repeat(100), "😀".repeat(128)]
+        .into_iter()
+        .enumerate()
+    {
+        let unicode_email = format!("unicode-{index}-{email}");
+        let (status, _) = client
+            .request(
+                "POST",
+                "auth/signup",
+                json!({"name":"Operator", "email":unicode_email,"password":password}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        client.request("POST", "auth/logout", json!({})).await;
+        let (status, _) = client
+            .request(
+                "POST",
+                "auth/login",
+                json!({"email":unicode_email,"password":password}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    for password in ["😀".repeat(4), "界".repeat(129)] {
+        let (status, _) = client
+            .request(
+                "POST",
+                "auth/signup",
+                json!({"name":"Operator", "email":format!("invalid-{email}"),"password":password}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = client
+            .request(
+                "POST",
+                "auth/login",
+                json!({"email":email,"password":password}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 }
 
 #[tokio::test]

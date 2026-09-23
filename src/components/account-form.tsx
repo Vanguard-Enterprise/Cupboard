@@ -1,6 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { validPasswordLength, passwordLengthMessage } from "@/lib/password";
 import { navigateAfterAuth, apiRequest } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,11 @@ export function AccountForm({
     const data = new FormData(form);
     const password = String(data.get("password"));
     setError("");
+    if (!validPasswordLength(password)) {
+      setError(passwordLengthMessage);
+      form.querySelector<HTMLInputElement>("#password")?.focus();
+      return;
+    }
     if (signup && password !== data.get("confirm-password")) {
       setError("Passwords do not match.");
       form.querySelector<HTMLInputElement>("#confirm-password")?.focus();
@@ -100,12 +106,10 @@ export function AccountForm({
             name="password"
             type="password"
             autoComplete={signup ? "new-password" : "current-password"}
-            minLength={signup ? 8 : undefined}
-            maxLength={128}
             required
           />
           {signup && (
-            <FieldDescription>Use at least 8 characters.</FieldDescription>
+            <FieldDescription>Use 8 to 128 characters.</FieldDescription>
           )}
         </Field>
         {signup && (

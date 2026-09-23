@@ -138,7 +138,8 @@ optional: accounts can remain signed in with no memberships, create an organizat
 later, or join through an invitation. The regular dashboard sidebar remains
 available without membership; its main area offers join-code entry and organization
 creation. The join field accepts a code or the full invitation link. Creating an organization grants its Owner
-role. Passwords require at least 8 characters and are hashed with
+role. Passwords require 8 to 128 Unicode characters, counted as code points
+in the browser and scalar values in Rust, and are hashed with
 Argon2id. `/login` creates a PostgreSQL-backed session with an absolute 12-hour
 expiry. Logout deletes the session. A changed password hash invalidates existing
 sessions. Password reset and email verification are not implemented yet.

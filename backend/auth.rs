@@ -120,7 +120,7 @@ impl AuthnBackend for Backend {
     async fn authenticate(&self, creds: Credentials) -> ApiResult<Option<Account>> {
         let email = normalize_email(&creds.email)?;
         throttle(&self.pool, &email).await?;
-        if creds.password.len() > 128 {
+        if !valid_password_length(&creds.password) {
             return Ok(None);
         }
         let user = sqlx::query_as::<_, Account>(
@@ -165,6 +165,10 @@ pub fn normalize_email(value: &str) -> ApiResult<String> {
         return Err(invalid("Enter a valid email address."));
     }
     Ok(value)
+}
+fn valid_password_length(value: &str) -> bool {
+    // Unicode scalar values: a maximum of 512 UTF-8 bytes reaches Argon2.
+    (8..=128).contains(&value.chars().count())
 }
 pub fn bounded(value: &str, max: usize, message: &'static str) -> ApiResult<String> {
     let value = value.trim();
@@ -276,7 +280,7 @@ async fn signup(
     let email = normalize_email(&input.email)?;
     throttle(&pool, &email).await?;
     let name = bounded(&input.name, 100, "Enter a name of at most 100 characters.")?;
-    if input.password.chars().count() < 8 || input.password.len() > 128 {
+    if !valid_password_length(&input.password) {
         return Err(invalid("Use a password of 8 to 128 characters."));
     }
     let permit = PASSWORD_SLOTS.try_acquire().map_err(|_| busy())?;
@@ -428,7 +432,19 @@ async fn switch_organization(
 
 #[cfg(test)]
 mod text_tests {
-    use super::bounded;
+    use super::{bounded, valid_password_length};
+
+    #[test]
+    fn password_limits_count_unicode_characters() {
+        for character in ["a", "界", "😀"] {
+            for length in [0, 4, 7, 8, 100, 128, 129] {
+                assert_eq!(
+                    valid_password_length(&character.repeat(length)),
+                    (8..=128).contains(&length)
+                );
+            }
+        }
+    }
 
     #[test]
     fn text_limits_match_browser_utf16_lengths() {
