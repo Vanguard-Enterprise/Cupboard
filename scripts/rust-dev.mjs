@@ -47,6 +47,8 @@ export function startRustDev({
   let stopping = false;
   let processes;
   let server;
+  let restarting = false;
+  let serverError;
   const abort = new AbortController();
   function stop() {
     stopping = true;
@@ -60,8 +62,10 @@ export function startRustDev({
         const current = await fingerprint(paths);
         if (current !== previous) {
           previous = current;
+          restarting = true;
           processes?.stop();
           await server;
+          restarting = false;
           if (stopping) break;
           processes = createProcesses();
           console.log("Rust: rebuilding API...");
@@ -71,11 +75,15 @@ export function startRustDev({
             // Do not run a build superseded by edits made during compilation.
             if ((await fingerprint(paths)) !== current) continue;
             console.log("Rust: starting API; watching for changes.");
+            function exited(error) {
+              if (stopping || restarting) return;
+              serverError =
+                error ?? new Error("Rust API exited unexpectedly with code 0");
+              abort.abort();
+            }
             server = processes
               .run(serve[0], serve.slice(1), env)
-              .catch((error) => {
-                if (!stopping) console.error(`Rust: ${error.message}`);
-              });
+              .then(() => exited(), exited);
           } catch (error) {
             if (!stopping)
               console.error(
@@ -86,7 +94,7 @@ export function startRustDev({
         await setTimeout(interval, undefined, { signal: abort.signal });
       }
     } catch (error) {
-      if (!stopping) throw error;
+      if (!stopping) throw serverError ?? error;
     } finally {
       stop();
       await server;

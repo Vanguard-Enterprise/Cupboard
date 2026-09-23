@@ -67,3 +67,68 @@ describe("development server configuration", () => {
     expect(findNetBirdAddress(interfaces)).toBeUndefined();
   });
 });
+
+it("stops the web server and exits nonzero when the API fails", async () => {
+  const { mkdtemp, mkdir, writeFile, readFile, rm } =
+    await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { fileURLToPath } = await import("node:url");
+  const dir = await mkdtemp(join(tmpdir(), "cupboard-dev-exit-"));
+  const pidFile = join(dir, "web-pid");
+  let webPid;
+  try {
+    await mkdir(join(dir, "bin"));
+    await mkdir(join(dir, "target/debug"), { recursive: true });
+    await mkdir(join(dir, "node_modules/next/dist/bin"), { recursive: true });
+    for (const [file, body] of [
+      ["bin/cargo", "process.exit(0)"],
+      ["bin/netbird", "process.exit(1)"],
+      ["target/debug/cupboard", "setTimeout(() => process.exit(1), 100)"],
+    ])
+      await writeFile(join(dir, file), `#!/usr/bin/env node\n${body}\n`, {
+        mode: 0o755,
+      });
+    await writeFile(
+      join(dir, "node_modules/next/dist/bin/next"),
+      "require('fs').writeFileSync(process.env.WEB_PID, String(process.pid)); setInterval(() => {}, 1000)",
+    );
+    const run = promisify(execFile)(
+      process.execPath,
+      [fileURLToPath(new URL("./dev.mjs", import.meta.url))],
+      {
+        cwd: dir,
+        env: {
+          ...process.env,
+          DATABASE_URL: "unused-test-database",
+          WEB_PID: pidFile,
+          PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+        },
+        timeout: 4000,
+      },
+    );
+    await expect(run).rejects.toMatchObject({ code: 1, killed: false });
+    webPid = Number(await readFile(pidFile, "utf8"));
+    await expect
+      .poll(() => {
+        try {
+          process.kill(webPid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(false);
+  } finally {
+    if (!webPid)
+      webPid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+    if (webPid) {
+      try {
+        process.kill(webPid, "SIGKILL");
+      } catch {}
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});

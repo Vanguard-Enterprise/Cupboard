@@ -64,3 +64,38 @@ it("reloads atomic saves, recovers from build errors, and stops the API", async 
   }
   expect(alive(last)).toBe(false);
 });
+
+it.each([0, 1])(
+  "rejects when the API exits unexpectedly with code %s",
+  async (code) => {
+    const watcher = startRustDev({
+      paths: [],
+      interval: 10_000,
+      build: [process.execPath, "-e", "process.exit(0)"],
+      serve: [process.execPath, "-e", `process.exit(${code})`],
+    });
+    try {
+      await expect(watcher.done).rejects.toThrow(
+        code === 0 ? "exited unexpectedly with code 0" : "stopped with 1",
+      );
+    } finally {
+      watcher.stop();
+    }
+  },
+);
+
+it("rejects when the API cannot start", async () => {
+  const watcher = startRustDev({
+    paths: [],
+    interval: 10_000,
+    build: [process.execPath, "-e", "process.exit(0)"],
+    serve: ["/nonexistent/cupboard-api"],
+  });
+  try {
+    await expect(watcher.done).rejects.toThrow(
+      "Could not start /nonexistent/cupboard-api",
+    );
+  } finally {
+    watcher.stop();
+  }
+});

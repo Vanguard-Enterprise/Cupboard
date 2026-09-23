@@ -126,7 +126,8 @@ async function start() {
   } finally {
     rust?.stop();
     processes.stop();
-    await rust?.done;
+    // The race above reports watcher failure; still wait for its cleanup.
+    await rust?.done.catch(() => {});
   }
 }
 
