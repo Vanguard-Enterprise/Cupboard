@@ -53,8 +53,10 @@ export function createNextDevArgs({ hostname, port }) {
 async function start() {
   const processes = createProcesses();
   let rust;
+  let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
+      stopping = true;
       rust?.stop();
       processes.stop();
     });
@@ -99,6 +101,7 @@ async function start() {
         "postgres",
       ]);
     }
+    if (stopping) return;
     const env = {
       ...process.env,
       DATABASE_URL:
@@ -121,8 +124,10 @@ async function start() {
       processes.run(process.execPath, createNextDevArgs(config), env),
     ]);
   } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
+    if (!stopping) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
   } finally {
     rust?.stop();
     processes.stop();
