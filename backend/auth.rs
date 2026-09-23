@@ -168,7 +168,8 @@ pub fn normalize_email(value: &str) -> ApiResult<String> {
 }
 pub fn bounded(value: &str, max: usize, message: &'static str) -> ApiResult<String> {
     let value = value.trim();
-    if value.is_empty() || value.len() > max {
+    // Match HTML maxLength and JavaScript string.length, both UTF-16 code units.
+    if value.is_empty() || value.encode_utf16().count() > max {
         return Err(invalid(message));
     }
     Ok(value.to_owned())
@@ -423,4 +424,22 @@ async fn switch_organization(
         .await
         .map_err(|_| internal())?;
     Ok(Json(json!({"ok":true})))
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::bounded;
+
+    #[test]
+    fn text_limits_match_browser_utf16_lengths() {
+        for (character, limit) in [("界", 100), ("é", 100), ("😀", 50)] {
+            let accepted = character.repeat(limit);
+            assert_eq!(
+                bounded(&format!("  {accepted}  "), 100, "Too long").unwrap(),
+                accepted
+            );
+            assert!(bounded(&character.repeat(limit + 1), 100, "Too long").is_err());
+        }
+        assert!(bounded("  ", 100, "Required").is_err());
+    }
 }

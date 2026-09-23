@@ -172,20 +172,19 @@ export function roleAuthority(
   const owner = assigned.some((role) => role.id === "owner");
   const position = Math.min(...assigned.map((role) => role.position));
   const permissions = new Set(assigned.flatMap((role) => role.permissions));
+  const canGrant = (role: OrganizationRole) =>
+    role.id !== "owner" &&
+    (owner ||
+      (role.position > position &&
+        role.permissions.every((permission) => permissions.has(permission))));
   return {
     position,
-    canGrant: (role: OrganizationRole) =>
-      role.id !== "owner" &&
-      (owner ||
-        (role.position > position &&
-          role.permissions.every((permission) => permissions.has(permission)))),
+    canGrant,
     canManageUser: (user: OrganizationUser) =>
       user.id !== memberId &&
       user.roleIds.every((id) => {
         const role = settings.roles.find((candidate) => candidate.id === id);
-        return Boolean(
-          role && role.id !== "owner" && (owner || role.position > position),
-        );
+        return Boolean(role && canGrant(role));
       }),
   };
 }

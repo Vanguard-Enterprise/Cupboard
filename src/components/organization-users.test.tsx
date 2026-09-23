@@ -169,3 +169,29 @@ it("disables editing users with equal or higher roles", async () => {
     ).disabled,
   ).toBe(false);
 });
+
+it("disables member actions for lower roles with permissions the manager lacks", async () => {
+  api.state.team.currentUserId = "user-maya-chen";
+  api.state.team.roles.find((role) => role.id === "operator")!.permissions = [
+    "organization.manage",
+    "servers.view",
+  ];
+  api.state.team.roles
+    .find((role) => role.id === "viewer")!
+    .permissions.push("billing.manage");
+  mount();
+  await screen.findByRole("heading", { name: "Users" });
+  const table = screen.getByRole("table");
+  for (const name of ["Noah Williams", "Lena Ortiz"]) {
+    expect(
+      (
+        within(table).getByRole("button", {
+          name: `Manage ${name}`,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  }
+  expect(
+    api.fetcher.mock.calls.every(([, options]) => options?.method !== "POST"),
+  ).toBe(true);
+});

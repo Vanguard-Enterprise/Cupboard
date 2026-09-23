@@ -210,7 +210,7 @@ fn validate_role(role: &mut Role) -> ApiResult<()> {
         80,
         "Enter a role name of at most 80 characters.",
     )?;
-    if role.description.len() > 500
+    if role.description.encode_utf16().count() > 500
         || role.permissions.len() > PERMISSIONS.len()
         || role
             .permissions
@@ -459,4 +459,29 @@ async fn create(
         .await
         .map_err(|_| internal())?;
     Ok(Json(json!({"id":id,"name":name})))
+}
+
+#[cfg(test)]
+mod text_tests {
+    use super::{Role, validate_role};
+
+    #[test]
+    fn role_text_limits_match_browser_utf16_lengths() {
+        for (character, units) in [("界", 1), ("😀", 2)] {
+            let mut role = Role {
+                id: "custom".into(),
+                name: character.repeat(80 / units),
+                description: character.repeat(500 / units),
+                permissions: vec![],
+                system: false,
+                position: 2,
+            };
+            assert!(validate_role(&mut role).is_ok());
+            role.name.push_str(character);
+            assert!(validate_role(&mut role).is_err());
+            role.name = "Valid".into();
+            role.description.push_str(character);
+            assert!(validate_role(&mut role).is_err());
+        }
+    }
 }

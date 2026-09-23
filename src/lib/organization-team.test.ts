@@ -1,6 +1,6 @@
 import { defaultOrganizationTeam } from "@/test/organization-team-fixture";
 import { describe, expect, it } from "vitest";
-import { parseOrganizationTeam } from "./organization-team";
+import { parseOrganizationTeam, roleAuthority } from "./organization-team";
 
 describe("organization team settings", () => {
   it("round trips users, roles, and permissions", () => {
@@ -55,5 +55,35 @@ describe("organization team settings", () => {
     const parsed = parseOrganizationTeam(JSON.stringify(stored));
     expect(parsed).not.toHaveProperty("apiKey");
     expect(parsed.users[0]).not.toHaveProperty("token");
+  });
+});
+
+describe("member role authority", () => {
+  it("requires every existing role to be grantable using combined permissions", () => {
+    const team = structuredClone(defaultOrganizationTeam);
+    team.users[0].roleIds = ["operator"];
+    team.users[1].roleIds = ["viewer", "billing"];
+    team.roles.push({
+      id: "billing",
+      name: "Billing",
+      description: "",
+      permissions: ["billing.manage"],
+      position: 4,
+      system: false,
+    });
+    const operator = team.roles.find((role) => role.id === "operator")!;
+    operator.permissions = ["organization.manage", "servers.view"];
+    let authority = roleAuthority(team, team.users[0].id);
+    expect(authority.canManageUser(team.users[1])).toBe(false);
+    expect(authority.canManageUser(team.users[3])).toBe(true);
+    team.users[0].roleIds.push("billing");
+    authority = roleAuthority(team, team.users[0].id);
+    expect(authority.canManageUser(team.users[1])).toBe(true);
+    expect(authority.canManageUser(team.users[0])).toBe(false);
+    expect(authority.canManageUser(team.users[2])).toBe(false);
+    team.users[0].roleIds = ["owner"];
+    expect(
+      roleAuthority(team, team.users[0].id).canManageUser(team.users[1]),
+    ).toBe(true);
   });
 });
