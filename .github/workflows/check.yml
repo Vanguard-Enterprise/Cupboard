@@ -35,7 +35,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
       - run: npm ci
-      - run: npm run check
+      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check
       - name: Build backend image
         run: docker build --file backend/Dockerfile --tag cupboard-api:check-${{ github.run_id }} .
       - name: Remove check image

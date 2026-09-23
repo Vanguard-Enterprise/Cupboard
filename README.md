@@ -46,7 +46,9 @@ npm run check
 
 Checks create a separate disposable PostgreSQL container and remove it afterward.
 They require Docker, or `CUPBOARD_TEST_DATABASE_URL` pointing to a dedicated test
-database. They never fall back to the development `DATABASE_URL`.
+database. They never fall back to the development `DATABASE_URL`. Containerized CI runners
+set `CUPBOARD_CHECK_CONTAINER` to their Docker container ID or name so checks can
+attach them to the temporary test database network and detach them on completion.
 
 The API listens on port 8080 by default. `GET /health/live` returns 204 while the
 process is running. `GET /health/ready` returns 204 when PostgreSQL responds, or
