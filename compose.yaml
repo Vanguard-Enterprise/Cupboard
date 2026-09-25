@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: cupboard
+      POSTGRES_PASSWORD: cupboard-local-only
+      POSTGRES_DB: cupboard
+    ports:
+      - "127.0.0.1:${CUPBOARD_DB_PORT:-55432}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cupboard -d cupboard"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+  postgres-test:
+    image: postgres:18
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: cupboard
+      POSTGRES_PASSWORD: cupboard-test-only
+      POSTGRES_DB: cupboard_test
+    ports:
+      - "127.0.0.1:${CUPBOARD_TEST_DB_PORT:-55433}:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cupboard -d cupboard_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres:

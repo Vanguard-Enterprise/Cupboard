@@ -1,21 +1,23 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { previewStorageKey } from "./preview-storage";
+import { render, testPreviewKey } from "@/test/preview-storage";
+import { act, cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { OrganizationNotificationsData } from "./organization-notifications-data";
 import {
   defaultOrganizationNotifications,
-  organizationNotificationsKey,
+  organizationNotificationsKey as organizationNotificationsKeyBase,
 } from "@/lib/organization-notifications";
 import {
   defaultOrganizationProfile,
-  organizationProfileKey,
+  organizationProfileKey as organizationProfileKeyBase,
 } from "@/lib/organization-profile";
-import { securityAlertStorageKey } from "@/lib/security-alerts";
+import { securityAlertStorageKey as securityAlertStorageKeyBase } from "@/lib/security-alerts";
 import {
   defaultOrganizationIntegrations,
-  organizationIntegrationsKey,
+  organizationIntegrationsKey as organizationIntegrationsKeyBase,
 } from "@/lib/organization-integrations";
 import {
   navigationHref,
@@ -23,12 +25,8 @@ import {
 } from "@/lib/dashboard-navigation";
 import {
   defaultOrganizationAccess,
-  organizationAccessKey,
+  organizationAccessKey as organizationAccessKeyBase,
 } from "@/lib/organization-access";
-import {
-  defaultOrganizationTeam,
-  organizationTeamKey,
-} from "@/lib/organization-team";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn() },
@@ -95,7 +93,7 @@ describe("Organization notifications and data", () => {
     expect(screen.getByText("Organization data")).toBeTruthy();
     expect(
       screen.getByText(
-        "Organization profile, team, notification, access, credential, webhook, and security alert acknowledgement data stored in this browser.",
+        "Your saved profile, notification, approval, credential, webhook, and alert settings for this organization in this browser.",
       ),
     ).toBeTruthy();
     for (const name of [
@@ -238,11 +236,19 @@ describe("Organization notifications and data", () => {
     const savedAccess = structuredClone(defaultOrganizationAccess);
     savedAccess.rules[0].approvals = 2;
     localStorage.setItem(organizationAccessKey, JSON.stringify(savedAccess));
-    localStorage.setItem(
-      organizationTeamKey,
-      JSON.stringify(defaultOrganizationTeam),
-    );
     localStorage.setItem("unrelated", "keep me");
+    const untouchedKeys = [
+      organizationProfileKeyBase,
+      organizationNotificationsKeyBase,
+      organizationIntegrationsKeyBase,
+      organizationAccessKeyBase,
+      securityAlertStorageKeyBase,
+    ].flatMap((base) => [
+      base,
+      previewStorageKey("test-account", "other-org", base),
+      previewStorageKey("other-account", "test-organization", base),
+    ]);
+    for (const key of untouchedKeys) localStorage.setItem(key, "keep me");
     const user = userEvent.setup();
     render(<OrganizationNotificationsData />);
 
@@ -260,11 +266,26 @@ describe("Organization notifications and data", () => {
     expect(localStorage.getItem(organizationIntegrationsKey)).toBeNull();
     expect(localStorage.getItem(securityAlertStorageKey)).toBeNull();
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
-    expect(localStorage.getItem(organizationTeamKey)).toBeNull();
     expect(localStorage.getItem("unrelated")).toBe("keep me");
+    for (const key of untouchedKeys)
+      expect(localStorage.getItem(key)).toBe("keep me");
     expect(toast.success).toHaveBeenCalledWith("Local data cleared.");
     expect(
       notificationSwitch("Weekly summary").getAttribute("data-state"),
     ).toBe("unchecked");
   });
 });
+
+const organizationProfileKey = testPreviewKey(organizationProfileKeyBase);
+
+const organizationIntegrationsKey = testPreviewKey(
+  organizationIntegrationsKeyBase,
+);
+
+const organizationNotificationsKey = testPreviewKey(
+  organizationNotificationsKeyBase,
+);
+
+const organizationAccessKey = testPreviewKey(organizationAccessKeyBase);
+
+const securityAlertStorageKey = testPreviewKey(securityAlertStorageKeyBase);

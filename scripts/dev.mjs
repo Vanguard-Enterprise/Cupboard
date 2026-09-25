@@ -1,4 +1,6 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import { startRustDev } from "./rust-dev.mjs";
+import { createProcesses } from "./processes.mjs";
 import { networkInterfaces } from "node:os";
 import { pathToFileURL } from "node:url";
 
@@ -48,7 +50,17 @@ export function createNextDevArgs({ hostname, port }) {
   ];
 }
 
-function start() {
+async function start() {
+  const processes = createProcesses();
+  let rust;
+  let stopping = false;
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      stopping = true;
+      rust?.stop();
+      processes.stop();
+    });
+  }
   let netbirdStatus;
 
   try {
@@ -74,25 +86,54 @@ function start() {
       : "  NetBird: unavailable; no active NetBird interface was found",
   );
   console.log(
-    "\nNext.js hot reloading is enabled on all network interfaces.\n",
+    "\nNext.js hot reloading and automatic Rust rebuilds are enabled.\n",
   );
 
-  const next = spawn(process.execPath, createNextDevArgs(config), {
-    stdio: "inherit",
-    env: {
+  try {
+    if (!process.env.DATABASE_URL) {
+      await processes.run("docker", [
+        "compose",
+        "up",
+        "--detach",
+        "--wait",
+        "--wait-timeout",
+        "60",
+        "postgres",
+      ]);
+    }
+    if (stopping) return;
+    const env = {
       ...process.env,
+      DATABASE_URL:
+        process.env.DATABASE_URL ??
+        `postgres://cupboard:cupboard-local-only@127.0.0.1:${process.env.CUPBOARD_DB_PORT ?? "55432"}/cupboard`,
+      CUPBOARD_API_URL:
+        process.env.CUPBOARD_API_URL ??
+        `http://127.0.0.1:${(process.env.CUPBOARD_API_BIND ?? "0.0.0.0:8080").split(":").at(-1)}`,
+      CUPBOARD_WEB_ORIGINS:
+        process.env.CUPBOARD_WEB_ORIGINS ??
+        [config.localUrl, `http://127.0.0.1:${config.port}`, config.netbirdUrl]
+          .filter(Boolean)
+          .join(","),
+      CUPBOARD_INSECURE_COOKIES: "1",
       CUPBOARD_DEV_ORIGINS: config.allowedDevOrigins.join(","),
-    },
-  });
-
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => next.kill(signal));
+    };
+    rust = startRustDev({ env });
+    await Promise.race([
+      rust.done,
+      processes.run(process.execPath, createNextDevArgs(config), env),
+    ]);
+  } catch (error) {
+    if (!stopping) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  } finally {
+    rust?.stop();
+    processes.stop();
+    // The race above reports watcher failure; still wait for its cleanup.
+    await rust?.done.catch(() => {});
   }
-
-  next.on("exit", (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    process.exit(code ?? 0);
-  });
 }
 
 if (

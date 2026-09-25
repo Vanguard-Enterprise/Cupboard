@@ -1,0 +1,33 @@
+[package]
+name = "cupboard"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[lib]
+path = "backend/lib.rs"
+
+[[bin]]
+name = "cupboard"
+path = "backend/main.rs"
+
+[dependencies]
+axum = "0.8.9"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+
+axum-login = "0.18"
+tower-sessions = { version = "0.14", default-features = false, features = ["axum-core"] }
+tower-sessions-sqlx-store = { version = "0.15", features = ["postgres"] }
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = "0.3"
+uuid = { version = "1", features = ["v4"] }
+email_address = "0.2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

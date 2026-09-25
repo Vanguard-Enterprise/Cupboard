@@ -1,5 +1,7 @@
 "use client";
 
+import { usePreviewStorage } from "./preview-storage";
+
 import { useMemo, useState, useSyncExternalStore } from "react";
 import {
   KeyRoundIcon,
@@ -32,26 +34,6 @@ const ruleIcons: Record<ApprovalRule["id"], typeof ServerCogIcon> = {
   billing: WalletCardsIcon,
 };
 
-function subscribe(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === organizationAccessKey) callback();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener(organizationAccessChangedEvent, callback);
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener(organizationAccessChangedEvent, callback);
-  };
-}
-
-function snapshot() {
-  try {
-    return window.localStorage.getItem(organizationAccessKey) ?? "";
-  } catch {
-    return "storage-unavailable";
-  }
-}
-
 const serverSnapshot = () => null;
 
 function AccessEditor({
@@ -65,6 +47,10 @@ function AccessEditor({
   initialStorageError: string;
   needsReplacement: boolean;
 }) {
+  const storage = usePreviewStorage(
+    organizationAccessKey,
+    organizationAccessChangedEvent,
+  );
   const [draft, setDraft] = useState<OrganizationAccessSettings>(saved);
   const [baseline, setBaseline] = useState(saved);
   const [baselineVersion, setBaselineVersion] = useState(sourceVersion);
@@ -102,8 +88,7 @@ function AccessEditor({
 
   function saveChanges() {
     try {
-      window.localStorage.setItem(organizationAccessKey, JSON.stringify(draft));
-      window.dispatchEvent(new Event(organizationAccessChangedEvent));
+      storage.set(JSON.stringify(draft));
       setStorageError("");
       setSaveMessage("Approval settings saved.");
     } catch {
@@ -259,6 +244,11 @@ function AccessEditor({
 }
 
 export function OrganizationAccess() {
+  const storage = usePreviewStorage(
+    organizationAccessKey,
+    organizationAccessChangedEvent,
+  );
+  const { subscribe: subscribe, snapshot: snapshot } = storage;
   const raw = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   const loaded = useMemo(() => {
     let saved = defaultOrganizationAccess;

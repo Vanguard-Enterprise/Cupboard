@@ -1,5 +1,7 @@
 "use client";
 
+import { usePreviewStorage } from "./preview-storage";
+
 import {
   useEffect,
   useLayoutEffect,
@@ -69,26 +71,6 @@ const severityOrder: Record<AlertSeverity, number> = {
 const knownAlertIds = new Set(securityAlerts.map((alert) => alert.id));
 
 const storageUnavailable = "storage-unavailable";
-
-function subscribeToAcknowledgements(callback: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (!event.key || event.key === securityAlertStorageKey) callback();
-  };
-  window.addEventListener("storage", onStorage);
-  window.addEventListener("cupboard-security-alerts-saved", callback);
-  return () => {
-    window.removeEventListener("storage", onStorage);
-    window.removeEventListener("cupboard-security-alerts-saved", callback);
-  };
-}
-
-function acknowledgementSnapshot() {
-  try {
-    return window.localStorage.getItem(securityAlertStorageKey) ?? "";
-  } catch {
-    return storageUnavailable;
-  }
-}
 
 const serverAcknowledgementSnapshot = () => null;
 
@@ -289,6 +271,14 @@ function AlertDetail({
 }
 
 export function SecurityAlerts() {
+  const storage = usePreviewStorage(
+    securityAlertStorageKey,
+    "cupboard-security-alerts-saved",
+  );
+  const {
+    subscribe: subscribeToAcknowledgements,
+    snapshot: acknowledgementSnapshot,
+  } = storage;
   const [status, setStatus] = useState<StatusFilter>("all");
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [query, setQuery] = useState("");
@@ -349,7 +339,7 @@ export function SecurityAlerts() {
             : remainingOverrides;
         });
       }),
-    [],
+    [acknowledgementSnapshot, subscribeToAcknowledgements],
   );
 
   const visibleAlerts = useMemo(() => {
@@ -469,11 +459,7 @@ export function SecurityAlerts() {
 
     setSaveError("");
     try {
-      window.localStorage.setItem(
-        securityAlertStorageKey,
-        JSON.stringify([...next]),
-      );
-      window.dispatchEvent(new Event("cupboard-security-alerts-saved"));
+      storage.set(JSON.stringify([...next]));
       setSessionAcknowledgementOverrides(new Map());
       toast.success(
         willBeAcknowledged ? "Alert acknowledged." : "Alert reopened.",

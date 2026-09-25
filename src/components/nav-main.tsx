@@ -62,9 +62,11 @@ type NavigationGroup = (typeof dashboardNavigation)[number];
 function NavSection({
   item,
   activeSection,
+  disabled,
 }: {
   item: NavigationGroup["items"][number];
   activeSection?: string;
+  disabled?: boolean;
 }) {
   const active = item.sections.some((section) => section.id === activeSection);
   const [open, setOpen] = useState(active);
@@ -92,7 +94,11 @@ function NavSection({
     >
       <SidebarMenuItem>
         <CollapsibleTrigger asChild>
-          <SidebarMenuButton tooltip={item.title} isActive={active}>
+          <SidebarMenuButton
+            tooltip={item.title}
+            isActive={active}
+            disabled={disabled}
+          >
             <Icon />
             <span>{item.title}</span>
             <ChevronRightIcon className="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90" />
@@ -102,7 +108,7 @@ function NavSection({
           <SidebarMenuSub>
             {item.sections.map((section) => (
               <SidebarMenuSubItem key={section.id}>
-                {navigationHref(section.id) ? (
+                {!disabled && navigationHref(section.id) ? (
                   <SidebarMenuSubButton
                     asChild
                     isActive={section.id === activeSection}
@@ -139,9 +145,11 @@ function NavSection({
 export function NavMain({
   group,
   activeSection,
+  disabled,
 }: {
   group: NavigationGroup;
   activeSection?: string;
+  disabled?: boolean;
 }) {
   return (
     <SidebarGroup>
@@ -152,6 +160,7 @@ export function NavMain({
             key={`${item.title}-${activeSection ?? "overview"}`}
             item={item}
             activeSection={activeSection}
+            disabled={disabled}
           />
         ))}
       </SidebarMenu>

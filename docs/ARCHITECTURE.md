@@ -2,9 +2,8 @@
 
 ## Status
 
-This document records the starting architecture. The frontend foundation is now
-selected and implemented. The backend decisions at the end of this document must
-be resolved before the first persistent application slice begins.
+This document records the starting architecture. The frontend and Rust runtime foundations are implemented. Accounts, sessions, organization membership, and role management now use the
+Rust API and PostgreSQL. Server connections remain the next product work.
 
 ## Product boundary
 
@@ -129,28 +128,69 @@ run all required formatting, static checks, and tests for Rust and TypeScript.
 Development tooling may run several child processes behind that one command.
 Production deploys the Next.js web artifact and the Rust application artifact.
 
-Until the backend exists, `npm run dev` is the root development command. It starts
-Next.js with hot reloading on `0.0.0.0`, prints the local URL, and discovers the
-machine's active NetBird IPv4 address for remote testing. `npm run check` checks
-formatting, lint, TypeScript, tests, and the production web build.
+`npm run dev` starts local PostgreSQL, builds and runs the Rust API, and starts
+Next.js with hot reloading on `0.0.0.0`. It prints the active NetBird URL. Rust
+changes currently require restarting this command. `npm run check` runs Rust
+formatting, Clippy, database integration tests, web checks, and the production web
+build. Its disposable PostgreSQL instance is separate from development data.
 
-## Deliberately absent
+## Selected backend stack and deployment
 
-The starting architecture does not include feature microservices, Redis, a queue,
-or a standalone worker. Next.js is the single web runtime and Rust is the single
-application API runtime. Any later addition must name the current measured
-problem that requires it in `docs/REBUILD.md`.
+- Axum and Tokio run one Rust application, with source in `backend/` and a root
+  Cargo package. SQLx provides PostgreSQL pooling and embedded migrations.
+- Cupboard owns operator accounts and sessions, with no external identity
+  provider. `axum-login` 0.18 and `tower-sessions` 0.14 handle authentication
+  sessions; their official PostgreSQL store requires SQLx 0.8. Argon2id hashes
+  passwords. Session cookies are HttpOnly, SameSite=Lax, Secure in production,
+  and expire after 12 hours. Logout revokes the stored session.
+- Every team read checks active tenant membership and `organization.manage` in
+  the data-access path. Team writes lock the organization row, recheck permissions,
+  and compare a revision before modifying data. Tenant IDs never prove ownership.
+  PostgreSQL enforces composite tenant/role references and unique memberships.
+  Memberships have multiple role assignments; permissions combine, while the
+  highest ranked role bounds management of lower roles and users. Organization
+  ownership is recorded separately and its Owner role is exclusive. Owner and
+  Administrator have full permissions and fixed top positions. Custom role order
+  is persisted and checked on every mutation.
+- Signup creates only an account and session. Accounts can have zero organization
+  memberships. Explicit organization creation creates the organization, two
+  built-in roles (Owner and Administrator), and the creator’s Owner membership in one transaction. Joining
+  an invitation does not create another organization. Invitations are seven-day,
+  single-use bearer links whose
+  random tokens are hashed at rest. Acceptance requires the matching account
+  email. Email delivery and verification remain separate work.
+- Production runs in the existing USE1 Kubernetes cluster. Argo CD reconciles
+  deployment manifests from `Vanguard-Enterprise/v-deployments`.
+- Production PostgreSQL runs in that cluster. Local development uses PostgreSQL
+  18 in Docker Compose with a named volume.
+- GitHub Actions uses the organization's `[self-hosted, ve-runner]` runners.
+  Runners need Docker with Compose, Rustup, and Node.js support. Fork pull requests
+  do not execute on these private runners.
+- `backend/Dockerfile` builds the Rust artifact and runs it as a non-root user.
+  `DATABASE_URL` comes from the deployment environment. Credentials are never
+  baked into the image. Kubernetes should probe `/health/live` for liveness and
+  `/health/ready` for database readiness, both on port 8080.
+- Deployment-specific secret references, ingress, image publishing, and release
+  promotion will be configured with the first deployment in `v-deployments`.
+  The cluster already has OpenBao and External Secrets configuration; Cupboard's
+  secret bindings still need to be defined there.
+- A separate CDN is not required for the first deployment.
 
-## Decisions still required before code
+The runtime exposes health checks and application API routes for signup, login,
+logout, the current identity, organization switching, team management, and
+invitation acceptance. Next.js renders the workspace only after fetching the
+current identity from Rust. Browser mutations use a same-origin Next.js proxy;
+Rust independently checks allowed origins and the custom request header.
 
-The following choices remain open and must be made as one compatible set:
-
-- Rust web framework and asynchronous runtime
-- PostgreSQL access and migration library
-- Authentication and session provider
-- Production deployment target and secret-key source
-- CDN or edge-cache implementation
-
-These decisions should favor maintained libraries, fast automated tests, one-step
-local development, and a deployment that does not introduce services without a
-current need.
+The first application migration contains accounts, organizations, tenant roles,
+memberships, invitation hashes, authentication throttle buckets, and the schema
+required by the session store. SQLx embeds migrations and applies them under its
+migration lock at startup. No account or authorization state falls back to local
+browser storage. Other settings previews use browser storage namespaced by
+account and active organization; they are not shared backend records. A keyed
+React provider remounts those previews when either identity changes, discarding
+unsaved drafts and cached values. Reads, writes, cross-tab subscriptions, conflict
+checks, and clearing data use the same namespace. Legacy unscoped records are
+ignored because their tenant ownership cannot be determined. This prevents
+accidental reuse between workspaces; browser storage remains readable by anyone
+with access to that browser profile.

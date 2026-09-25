@@ -71,15 +71,20 @@ import type {
   OrganizationUserStatus,
 } from "@/lib/organization-team";
 
+import { Checkbox } from "@/components/ui/checkbox";
+import { roleAuthority } from "@/lib/organization-team";
+
 type UserSort = "name" | "role" | "status" | "lastActive";
-type UserDraft = Pick<OrganizationUser, "name" | "email" | "roleId" | "status">;
-type UserDraftField = "name" | "email" | "roleId";
+type UserDraft = Pick<
+  OrganizationUser,
+  "name" | "email" | "roleIds" | "status"
+>;
+type UserDraftField = "name" | "email" | "roleIds";
 type UserDraftIssue = { field: UserDraftField; message: string };
-const currentOperatorId = "user-demo-operator";
 const emptyInviteDraft: UserDraft = {
   name: "",
   email: "",
-  roleId: "viewer",
+  roleIds: [],
   status: "invited",
 };
 
@@ -120,7 +125,7 @@ function matchesEditableUser(
   return (
     current.name === original.name &&
     current.email === original.email &&
-    current.roleId === original.roleId &&
+    JSON.stringify(current.roleIds) === JSON.stringify(original.roleIds) &&
     current.status === original.status
   );
 }
@@ -155,6 +160,7 @@ function UserFields({
   error,
   errorField,
   lockAccess,
+  lockIdentity = false,
   showStatus = true,
   onChange,
 }: {
@@ -163,6 +169,7 @@ function UserFields({
   error: string;
   errorField: UserDraftField | null;
   lockAccess?: boolean;
+  lockIdentity?: boolean;
   showStatus?: boolean;
   onChange: (draft: UserDraft) => void;
 }) {
@@ -177,6 +184,7 @@ function UserFields({
         <Label htmlFor="team-user-name">Name</Label>
         <Input
           id="team-user-name"
+          disabled={lockIdentity}
           value={draft.name}
           aria-invalid={errorField === "name"}
           aria-describedby={
@@ -196,6 +204,7 @@ function UserFields({
         <Label htmlFor="team-user-email">Email</Label>
         <Input
           id="team-user-email"
+          disabled={lockIdentity}
           type="email"
           value={draft.email}
           aria-invalid={errorField === "email"}
@@ -215,32 +224,39 @@ function UserFields({
       </div>
       <div className={`grid gap-2 ${showStatus ? "sm:grid-cols-2" : ""}`}>
         <div className="grid gap-2">
-          <Label htmlFor="team-user-role">Role</Label>
-          <Select
-            value={draft.roleId}
-            disabled={lockAccess}
-            onValueChange={(roleId) => onChange({ ...draft, roleId })}
+          <Label htmlFor="team-user-role">Roles</Label>
+          <div
+            id="team-user-role"
+            role="group"
+            aria-label="User roles"
+            tabIndex={-1}
+            aria-describedby={
+              errorField === "roleIds" ? "team-user-role-error" : undefined
+            }
+            className="grid gap-3 rounded-md border p-3"
           >
-            <SelectTrigger
-              id="team-user-role"
-              aria-label="User role"
-              aria-invalid={errorField === "roleId"}
-              aria-describedby={
-                errorField === "roleId" ? "team-user-role-error" : undefined
-              }
-              className="h-11 w-full bg-input-background sm:h-10"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper">
-              {roles.map((role) => (
-                <SelectItem key={role.id} value={role.id}>
-                  {role.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {errorField === "roleId" ? (
+            {roles.map((role) => (
+              <label
+                key={role.id}
+                className="flex min-h-8 items-center gap-2 text-sm"
+              >
+                <Checkbox
+                  checked={draft.roleIds.includes(role.id)}
+                  disabled={lockAccess || role.id === "owner"}
+                  onCheckedChange={(checked) =>
+                    onChange({
+                      ...draft,
+                      roleIds: checked
+                        ? [...draft.roleIds, role.id]
+                        : draft.roleIds.filter((id) => id !== role.id),
+                    })
+                  }
+                />
+                {role.name}
+              </label>
+            ))}
+          </div>
+          {errorField === "roleIds" ? (
             <p id="team-user-role-error" className="text-sm text-destructive">
               {error}
             </p>
@@ -251,7 +267,7 @@ function UserFields({
             <Label htmlFor="team-user-status">Status</Label>
             <Select
               value={draft.status}
-              disabled={lockAccess}
+              disabled={lockAccess || draft.status === "invited"}
               onValueChange={(status) =>
                 onChange({
                   ...draft,
@@ -268,7 +284,9 @@ function UserFields({
               </SelectTrigger>
               <SelectContent position="popper">
                 <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="invited">Invited</SelectItem>
+                {draft.status === "invited" && (
+                  <SelectItem value="invited">Invited</SelectItem>
+                )}
                 <SelectItem value="suspended">Suspended</SelectItem>
               </SelectContent>
             </Select>
@@ -277,8 +295,8 @@ function UserFields({
       </div>
       {lockAccess ? (
         <p className="text-xs leading-5 text-muted-foreground">
-          The current operator&apos;s role and status cannot be changed in this
-          preview.
+          You cannot change access for yourself or users at or above your
+          highest role.
         </p>
       ) : null}
     </div>
@@ -286,8 +304,19 @@ function UserFields({
 }
 
 export function OrganizationUsers() {
-  const { ready, settings, storageError, clearStorageError, save } =
-    useOrganizationTeam();
+  const {
+    ready,
+    settings,
+    storageError,
+    clearStorageError,
+    save,
+    currentOperatorId,
+    saving,
+    canManage,
+    reload,
+    invitationLink,
+    clearInvitation,
+  } = useOrganizationTeam();
   const [query, setQuery] = useState("");
   const [roleFilters, setRoleFilters] = useState<Set<string>>(new Set());
   const [statusFilters, setStatusFilters] = useState<
@@ -312,17 +341,22 @@ export function OrganizationUsers() {
     () => new Map(settings.roles.map((role) => [role.id, role])),
     [settings.roles],
   );
+  const authority = roleAuthority(settings, currentOperatorId);
+  const assignableRoles = settings.roles.filter(authority.canGrant);
   const users = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     const filtered = settings.users.filter((user) => {
-      const role = rolesById.get(user.roleId)?.name ?? "Unknown role";
+      const role = user.roleIds
+        .map((id) => rolesById.get(id)?.name ?? "Unknown role")
+        .join(", ");
       const matchesQuery =
         !normalized ||
         `${user.name} ${user.email} ${role} ${statusLabels[user.status]}`
           .toLowerCase()
           .includes(normalized);
       const matchesRole =
-        roleFilters.size === 0 || roleFilters.has(user.roleId);
+        roleFilters.size === 0 ||
+        user.roleIds.some((id) => roleFilters.has(id));
       const matchesStatus =
         statusFilters.size === 0 || statusFilters.has(user.status);
       return matchesQuery && matchesRole && matchesStatus;
@@ -331,9 +365,17 @@ export function OrganizationUsers() {
       let result = 0;
       if (sort === "name") result = left.name.localeCompare(right.name);
       if (sort === "role")
-        result = (rolesById.get(left.roleId)?.name ?? "").localeCompare(
-          rolesById.get(right.roleId)?.name ?? "",
-        );
+        result =
+          Math.min(
+            ...left.roleIds.map(
+              (id) => rolesById.get(id)?.position ?? Infinity,
+            ),
+          ) -
+          Math.min(
+            ...right.roleIds.map(
+              (id) => rolesById.get(id)?.position ?? Infinity,
+            ),
+          );
       if (sort === "status")
         result = statusOrder[left.status] - statusOrder[right.status];
       if (sort === "lastActive")
@@ -410,8 +452,11 @@ export function OrganizationUsers() {
         field: "email",
         message: "A user with this email already exists.",
       };
-    if (!settings.roles.some((role) => role.id === draft.roleId))
-      return { field: "roleId", message: "Choose an available role." };
+    if (
+      !draft.roleIds.length ||
+      draft.roleIds.some((id) => !settings.roles.some((role) => role.id === id))
+    )
+      return { field: "roleIds", message: "Choose an available role." };
     return null;
   }
 
@@ -424,11 +469,11 @@ export function OrganizationUsers() {
       setError(issue.message);
       setErrorField(issue.field);
     });
-    const fieldId = issue.field === "roleId" ? "role" : issue.field;
+    const fieldId = issue.field === "roleIds" ? "role" : issue.field;
     document.getElementById(`team-user-${fieldId}`)?.focus();
   }
 
-  function createUser() {
+  async function createUser() {
     const issue = validateDraft(inviteDraft);
     if (issue) {
       focusDraftIssue(issue, setInviteError, setInviteErrorField);
@@ -440,18 +485,18 @@ export function OrganizationUsers() {
       id: `user-${Date.now()}`,
       name: inviteDraft.name.trim(),
       email: inviteDraft.email.trim().toLowerCase(),
-      roleId: inviteDraft.roleId,
+      roleIds: inviteDraft.roleIds,
       status: "invited",
       lastActiveAt: null,
     };
-    if (save({ ...settings, users: [...settings.users, nextUser] })) {
+    if (await save({ ...settings, users: [...settings.users, nextUser] })) {
       setInviteOpen(false);
       setInviteDraft(emptyInviteDraft);
       toast.success(`Invitation created for ${nextUser.email}.`);
     }
   }
 
-  function updateUser() {
+  async function updateUser() {
     if (!editing || !editDraft) return;
     const currentUser = settings.users.find(({ id }) => id === editing.id);
     if (!currentUser) {
@@ -475,19 +520,19 @@ export function OrganizationUsers() {
     }
     setEditError("");
     setEditErrorField(null);
-    const lockAccess = editing.id === currentOperatorId;
+    const lockAccess = !authority.canManageUser(editing);
     const next = settings.users.map((user) =>
       user.id === editing.id
         ? {
             ...user,
             name: editDraft.name.trim(),
             email: editDraft.email.trim().toLowerCase(),
-            roleId: lockAccess ? user.roleId : editDraft.roleId,
+            roleIds: lockAccess ? user.roleIds : editDraft.roleIds,
             status: lockAccess ? user.status : editDraft.status,
           }
         : user,
     );
-    if (save({ ...settings, users: next })) {
+    if (await save({ ...settings, users: next })) {
       setEditing(null);
       setEditDraft(null);
       toast.success("User updated.");
@@ -500,7 +545,7 @@ export function OrganizationUsers() {
     setRemoving(user);
   }
 
-  function removeUser(event: MouseEvent<HTMLButtonElement>) {
+  async function removeUser(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     if (!removing) return;
     const currentUser = settings.users.find(({ id }) => id === removing.id);
@@ -521,7 +566,7 @@ export function OrganizationUsers() {
       return;
     }
     if (
-      save({
+      await save({
         ...settings,
         users: settings.users.filter((user) => user.id !== removing.id),
       })
@@ -541,6 +586,7 @@ export function OrganizationUsers() {
         <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
         <Button
           className="h-11 sm:h-9"
+          disabled={saving || !canManage}
           onClick={() => {
             clearStorageError();
             setInviteError("");
@@ -554,7 +600,12 @@ export function OrganizationUsers() {
       <div className="space-y-4">
         {storageError ? (
           <Alert variant="destructive">
-            <AlertDescription>{storageError}</AlertDescription>
+            <AlertDescription>
+              {storageError}
+              <Button variant="outline" onClick={() => void reload()}>
+                Refresh users
+              </Button>
+            </AlertDescription>
           </Alert>
         ) : null}
         <section
@@ -729,7 +780,11 @@ export function OrganizationUsers() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          {rolesById.get(user.roleId)?.name ?? "Unknown role"}
+                          {user.roleIds
+                            .map(
+                              (id) => rolesById.get(id)?.name ?? "Unknown role",
+                            )
+                            .join(", ")}
                         </TableCell>
                         <TableCell>
                           <UserStatusBadge status={user.status} />
@@ -744,6 +799,9 @@ export function OrganizationUsers() {
                                 variant="ghost"
                                 size="icon-sm"
                                 aria-label={`Manage ${user.name}`}
+                                disabled={
+                                  saving || !authority.canManageUser(user)
+                                }
                               >
                                 <MoreHorizontalIcon />
                               </Button>
@@ -761,7 +819,7 @@ export function OrganizationUsers() {
                                   setEditDraft({
                                     name: user.name,
                                     email: user.email,
-                                    roleId: user.roleId,
+                                    roleIds: user.roleIds,
                                     status: user.status,
                                   });
                                 }}
@@ -771,7 +829,7 @@ export function OrganizationUsers() {
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
                                 variant="destructive"
-                                disabled={user.id === currentOperatorId}
+                                disabled={!authority.canManageUser(user)}
                                 onSelect={() => openRemoveUser(user)}
                               >
                                 <Trash2Icon /> Remove
@@ -801,7 +859,11 @@ export function OrganizationUsers() {
                           {user.email}
                         </p>
                         <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                          <span>{rolesById.get(user.roleId)?.name}</span>
+                          <span>
+                            {user.roleIds
+                              .map((id) => rolesById.get(id)?.name)
+                              .join(", ")}
+                          </span>
                           <span aria-hidden="true">·</span>
                           <UserStatusBadge status={user.status} />
                         </div>
@@ -813,6 +875,7 @@ export function OrganizationUsers() {
                             size="icon"
                             className="size-11"
                             aria-label={`Manage ${user.name}`}
+                            disabled={saving || !authority.canManageUser(user)}
                           >
                             <MoreHorizontalIcon />
                           </Button>
@@ -830,7 +893,7 @@ export function OrganizationUsers() {
                               setEditDraft({
                                 name: user.name,
                                 email: user.email,
-                                roleId: user.roleId,
+                                roleIds: user.roleIds,
                                 status: user.status,
                               });
                             }}
@@ -840,7 +903,7 @@ export function OrganizationUsers() {
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
                             variant="destructive"
-                            disabled={user.id === currentOperatorId}
+                            disabled={!authority.canManageUser(user)}
                             onSelect={() => openRemoveUser(user)}
                           >
                             <Trash2Icon /> Remove
@@ -880,6 +943,35 @@ export function OrganizationUsers() {
       </div>
 
       <Dialog
+        open={Boolean(invitationLink)}
+        onOpenChange={(open) => {
+          if (!open) clearInvitation();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Share invitation</DialogTitle>
+            <DialogDescription>
+              Copy this link now and send it to the invited user. It expires
+              after seven days and can be accepted once. Cupboard will not show
+              it again.
+            </DialogDescription>
+          </DialogHeader>
+          <Label htmlFor="invitation-link">Invitation link</Label>
+          <Input
+            id="invitation-link"
+            value={invitationLink}
+            readOnly
+            onFocus={(event) => event.target.select()}
+          />
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button>Done</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
         open={inviteOpen}
         onOpenChange={(open) => {
           setInviteOpen(open);
@@ -890,17 +982,18 @@ export function OrganizationUsers() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Invite user</DialogTitle>
             <DialogDescription>
-              Create a browser-local invitation and choose its starting role.
-              Cupboard does not send an invitation or grant organization access.
+              Choose one or more roles and create an invitation link. Share it
+              with the invited user. The link expires after seven days; no email
+              is sent.
             </DialogDescription>
           </DialogHeader>
           <UserFields
             draft={inviteDraft}
-            roles={settings.roles}
+            roles={assignableRoles}
             error={inviteError || storageError}
             errorField={inviteErrorField}
             showStatus={false}
@@ -916,7 +1009,11 @@ export function OrganizationUsers() {
                 Cancel
               </Button>
             </DialogClose>
-            <Button className="h-11 sm:h-9" onClick={createUser}>
+            <Button
+              className="h-11 sm:h-9"
+              disabled={saving}
+              onClick={createUser}
+            >
               Create invitation
             </Button>
           </DialogFooter>
@@ -933,22 +1030,26 @@ export function OrganizationUsers() {
           }
         }}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit user</DialogTitle>
             <DialogDescription>
-              Update this user&apos;s identity, role, or status. Changes are
-              saved only in this browser and do not grant, suspend, or revoke
-              access.
+              Change this user&apos;s roles or suspend access to this
+              organization. Saving applies the change to their current session.
             </DialogDescription>
           </DialogHeader>
           {editDraft ? (
             <UserFields
               draft={editDraft}
-              roles={settings.roles}
+              roles={settings.roles.filter(
+                (role) =>
+                  authority.canGrant(role) ||
+                  editDraft.roleIds.includes(role.id),
+              )}
               error={editError || storageError}
               errorField={editErrorField}
-              lockAccess={editing?.id === currentOperatorId}
+              lockIdentity
+              lockAccess={Boolean(editing && !authority.canManageUser(editing))}
               onChange={(draft) => {
                 setEditDraft(draft);
                 setEditError("");
@@ -962,7 +1063,11 @@ export function OrganizationUsers() {
                 Cancel
               </Button>
             </DialogClose>
-            <Button className="h-11 sm:h-9" onClick={updateUser}>
+            <Button
+              className="h-11 sm:h-9"
+              disabled={saving}
+              onClick={updateUser}
+            >
               Save user
             </Button>
           </DialogFooter>
@@ -982,8 +1087,8 @@ export function OrganizationUsers() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the user from this browser-local preview. You cannot
-              undo this action.
+              This revokes access to the organization and cancels any pending
+              invitation. You can invite the user again later.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {removeError || storageError ? (
@@ -993,7 +1098,11 @@ export function OrganizationUsers() {
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Keep user</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={removeUser}>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={saving}
+              onClick={removeUser}
+            >
               Remove user
             </AlertDialogAction>
           </AlertDialogFooter>

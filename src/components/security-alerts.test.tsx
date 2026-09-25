@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { render, testPreviewKey } from "@/test/preview-storage";
+import { act, cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { SecurityAlerts } from "./security-alerts";
-import { securityAlertStorageKey } from "@/lib/security-alerts";
+import { securityAlertStorageKey as securityAlertStorageKeyBase } from "@/lib/security-alerts";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn() },
@@ -423,3 +424,5 @@ describe("Security alerts", () => {
     );
   });
 });
+
+const securityAlertStorageKey = testPreviewKey(securityAlertStorageKeyBase);

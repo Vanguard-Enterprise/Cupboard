@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo, useState, type MouseEvent } from "react";
+import { roleAuthority } from "@/lib/organization-team";
+import { useMemo, useRef, useState, type MouseEvent } from "react";
 import { flushSync } from "react-dom";
 import {
+  GripVerticalIcon,
+  LockKeyholeIcon,
+  ArrowUpIcon,
+  ArrowDownIcon,
   CopyPlusIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -71,7 +76,7 @@ import {
   type PermissionId,
 } from "@/lib/organization-team";
 
-type RoleSort = "name" | "users" | "permissions";
+type RoleSort = "position" | "name" | "users" | "permissions";
 type RoleDraft = Pick<OrganizationRole, "name" | "description" | "permissions">;
 type RoleDraftField = keyof RoleDraft;
 type RoleDraftIssue = { field: RoleDraftField; message: string };
@@ -146,7 +151,7 @@ function RoleFields({
           aria-describedby={
             errorField === "name" ? "role-name-error" : undefined
           }
-          disabled={editingSystemRole}
+          disabled={editingSystemRole || lockPermissions}
           className="h-11 sm:h-10"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
           autoFocus={!editingSystemRole}
@@ -161,6 +166,7 @@ function RoleFields({
         <Label htmlFor="role-description">Description</Label>
         <Textarea
           id="role-description"
+          disabled={lockPermissions}
           value={draft.description}
           aria-invalid={errorField === "description"}
           aria-describedby={
@@ -243,7 +249,7 @@ function RoleFields({
       </fieldset>
       {lockPermissions ? (
         <p className="text-xs leading-5 text-muted-foreground">
-          The Owner role always has every permission.
+          Permissions cannot be changed for this role.
         </p>
       ) : null}
     </div>
@@ -251,10 +257,29 @@ function RoleFields({
 }
 
 export function OrganizationRoles() {
-  const { ready, settings, storageError, clearStorageError, save } =
-    useOrganizationTeam();
+  const {
+    ready,
+    settings,
+    storageError,
+    clearStorageError,
+    save,
+    saving,
+    canManage,
+    currentOperatorId,
+    reorderRoles,
+    reload,
+  } = useOrganizationTeam();
   const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<RoleSort>("name");
+  const pointerDrag = useRef<{
+    id: string;
+    pointerId: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    target: string | null;
+  } | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [sort, setSort] = useState<RoleSort>("position");
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<OrganizationRole | null>(null);
@@ -268,7 +293,7 @@ export function OrganizationRoles() {
   const userCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const user of settings.users)
-      counts.set(user.roleId, (counts.get(user.roleId) ?? 0) + 1);
+      for (const id of user.roleIds) counts.set(id, (counts.get(id) ?? 0) + 1);
     return counts;
   }, [settings.users]);
   const roles = useMemo(() => {
@@ -284,6 +309,7 @@ export function OrganizationRoles() {
     });
     return filtered.toSorted((left, right) => {
       let result = 0;
+      if (sort === "position") result = left.position - right.position;
       if (sort === "name") result = left.name.localeCompare(right.name);
       if (sort === "users")
         result =
@@ -294,6 +320,124 @@ export function OrganizationRoles() {
     });
   }, [direction, query, settings.roles, sort, userCounts]);
 
+  const authority = roleAuthority(settings, currentOperatorId);
+  const orderedRoles = settings.roles.toSorted(
+    (a, b) => a.position - b.position,
+  );
+  const canMove = (role: OrganizationRole) =>
+    !saving &&
+    !role.system &&
+    authority.canGrant(role) &&
+    sort === "position" &&
+    direction === "asc" &&
+    !query.trim();
+  async function moveRole(id: string, targetId: string) {
+    const from = orderedRoles.findIndex((role) => role.id === id);
+    const to = orderedRoles.findIndex((role) => role.id === targetId);
+    if (
+      from < 0 ||
+      to < 0 ||
+      from === to ||
+      !canMove(orderedRoles[from]) ||
+      !canMove(orderedRoles[to])
+    )
+      return;
+    const ids = orderedRoles.map((role) => role.id);
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    if (await reorderRoles(ids)) toast.success("Role order updated.");
+  }
+  function moveAdjacent(role: OrganizationRole, offset: number) {
+    const target =
+      orderedRoles[
+        orderedRoles.findIndex((entry) => entry.id === role.id) + offset
+      ];
+    if (target) void moveRole(role.id, target.id);
+  }
+  function canMoveAdjacent(role: OrganizationRole, offset: number) {
+    const target =
+      orderedRoles[
+        orderedRoles.findIndex((entry) => entry.id === role.id) + offset
+      ];
+    return canMove(role) && Boolean(target && canMove(target));
+  }
+  function reorderHandle(role: OrganizationRole) {
+    return (
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="size-11 touch-none cursor-grab active:cursor-grabbing md:size-8"
+        aria-label={`Reorder ${role.name}`}
+        title={
+          canMove(role)
+            ? "Drag to reorder, or use Arrow Up and Arrow Down"
+            : "This role cannot be moved"
+        }
+        disabled={!canMove(role)}
+        onPointerDown={(event) => {
+          if (event.button !== 0 || !canMove(role)) return;
+          event.preventDefault();
+          event.currentTarget.focus();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          pointerDrag.current = {
+            id: role.id,
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            moved: false,
+            target: null,
+          };
+        }}
+        onPointerMove={(event) => {
+          const drag = pointerDrag.current;
+          if (!drag || drag.pointerId !== event.pointerId) return;
+          if (
+            Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5 &&
+            !drag.moved
+          )
+            return;
+          drag.moved = true;
+          const id = document
+            .elementFromPoint(event.clientX, event.clientY)
+            ?.closest<HTMLElement>("[data-role-target]")?.dataset.roleTarget;
+          const target = orderedRoles.find((entry) => entry.id === id);
+          drag.target =
+            target && target.id !== drag.id && canMove(target)
+              ? target.id
+              : null;
+          setDropTarget(drag.target);
+        }}
+        onPointerUp={(event) => {
+          const drag = pointerDrag.current;
+          if (!drag || drag.pointerId !== event.pointerId) return;
+          pointerDrag.current = null;
+          setDropTarget(null);
+          if (event.currentTarget.hasPointerCapture(event.pointerId))
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          if (drag.moved && drag.target) void moveRole(drag.id, drag.target);
+        }}
+        onPointerCancel={() => {
+          pointerDrag.current = null;
+          setDropTarget(null);
+        }}
+        onLostPointerCapture={() => {
+          pointerDrag.current = null;
+          setDropTarget(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            pointerDrag.current = null;
+            setDropTarget(null);
+          }
+          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            event.preventDefault();
+            moveAdjacent(role, event.key === "ArrowUp" ? -1 : 1);
+          }
+        }}
+      >
+        {role.system ? <LockKeyholeIcon /> : <GripVerticalIcon />}
+      </Button>
+    );
+  }
   if (!ready) {
     return (
       <p role="status" className="text-sm text-muted-foreground">
@@ -339,7 +483,7 @@ export function OrganizationRoles() {
     document.getElementById(fieldId)?.focus();
   }
 
-  function saveRole() {
+  async function saveRole() {
     if (editing) {
       const currentRole = settings.roles.find(({ id }) => id === editing.id);
       if (!currentRole) {
@@ -408,11 +552,13 @@ export function OrganizationRoles() {
           description: draft.description.trim(),
           permissions: draft.permissions,
           system: false,
+          position:
+            Math.max(1, ...settings.roles.map((role) => role.position)) + 1,
         };
     const nextRoles = editing
       ? settings.roles.map((role) => (role.id === editing.id ? nextRole : role))
       : [...settings.roles, nextRole];
-    if (save({ ...settings, roles: nextRoles })) {
+    if (await save({ ...settings, roles: nextRoles })) {
       setDialogOpen(false);
       toast.success(editing ? "Role updated." : "Role created.");
     }
@@ -437,7 +583,7 @@ export function OrganizationRoles() {
     setDeleting(role);
   }
 
-  function deleteRole(event: MouseEvent<HTMLButtonElement>) {
+  async function deleteRole(event: MouseEvent<HTMLButtonElement>) {
     event.preventDefault();
     if (!deleting) return;
     const currentRole = settings.roles.find(({ id }) => id === deleting.id);
@@ -463,7 +609,7 @@ export function OrganizationRoles() {
       return;
     }
     if (
-      save({
+      await save({
         ...settings,
         roles: settings.roles.filter((role) => role.id !== deleting.id),
       })
@@ -479,15 +625,30 @@ export function OrganizationRoles() {
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Roles</h1>
-        <Button className="h-11 sm:h-9" onClick={() => openRoleDialog()}>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Roles</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Higher roles manage lower roles. Drag to reorder, or use Move up and
+            Move down. Owner and Administrator stay at the top.
+          </p>
+        </div>
+        <Button
+          className="h-11 sm:h-9"
+          disabled={saving || !canManage}
+          onClick={() => openRoleDialog()}
+        >
           <PlusIcon /> Add role
         </Button>
       </div>
       <div className="space-y-4">
         {storageError ? (
           <Alert variant="destructive">
-            <AlertDescription>{storageError}</AlertDescription>
+            <AlertDescription>
+              {storageError}
+              <Button variant="outline" onClick={() => void reload()}>
+                Refresh roles
+              </Button>
+            </AlertDescription>
           </Alert>
         ) : null}
         <section
@@ -514,11 +675,12 @@ export function OrganizationRoles() {
             >
               <SelectTrigger
                 aria-label="Sort roles"
-                className="h-11 w-full bg-input-background md:hidden"
+                className="h-11 w-full bg-input-background sm:w-48"
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent position="popper" align="end">
+                <SelectItem value="position:asc">Highest role first</SelectItem>
                 <SelectItem value="name:asc">Name, A to Z</SelectItem>
                 <SelectItem value="name:desc">Name, Z to A</SelectItem>
                 <SelectItem value="users:desc">Most users</SelectItem>
@@ -532,6 +694,23 @@ export function OrganizationRoles() {
             </p>
           </div>
 
+          {(sort !== "position" || direction !== "asc" || query.trim()) && (
+            <div className="flex items-center gap-3 border-b p-3 text-sm text-muted-foreground">
+              <span>
+                Reordering uses the full hierarchy, highest role first.
+              </span>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSort("position");
+                  setDirection("asc");
+                  setQuery("");
+                }}
+              >
+                Enable reordering
+              </Button>
+            </div>
+          )}
           {roles.length ? (
             <>
               <div className="hidden md:block">
@@ -541,6 +720,9 @@ export function OrganizationRoles() {
                   </TableCaption>
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-12">
+                        <span className="sr-only">Order</span>
+                      </TableHead>
                       <TableHead className="px-4">
                         <SortButton
                           label="Role"
@@ -574,7 +756,42 @@ export function OrganizationRoles() {
                     {roles.map((role) => {
                       const count = userCounts.get(role.id) ?? 0;
                       return (
-                        <TableRow key={role.id}>
+                        <TableRow
+                          key={role.id}
+                          data-role-target={role.id}
+                          className={
+                            dropTarget === role.id
+                              ? "bg-primary/10 outline-2 outline-primary -outline-offset-2"
+                              : undefined
+                          }
+                          draggable={canMove(role)}
+                          onDragStart={(event) => {
+                            if (!canMove(role)) {
+                              event.preventDefault();
+                              return;
+                            }
+                            event.dataTransfer.setData("text/plain", role.id);
+                            event.dataTransfer.effectAllowed = "move";
+                          }}
+                          onDragOver={(event) => {
+                            if (canMove(role)) {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = "move";
+                              setDropTarget(role.id);
+                            }
+                          }}
+                          onDragLeave={() => setDropTarget(null)}
+                          onDragEnd={() => setDropTarget(null)}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            setDropTarget(null);
+                            void moveRole(
+                              event.dataTransfer.getData("text/plain"),
+                              role.id,
+                            );
+                          }}
+                        >
+                          <TableCell>{reorderHandle(role)}</TableCell>
                           <TableCell className="max-w-sm px-4 py-3 whitespace-normal">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="font-medium">{role.name}</span>
@@ -616,8 +833,24 @@ export function OrganizationRoles() {
                                 </DropdownMenuItem>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
+                                  disabled={!canMoveAdjacent(role, -1)}
+                                  onSelect={() => moveAdjacent(role, -1)}
+                                >
+                                  <ArrowUpIcon /> Move up
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={!canMoveAdjacent(role, 1)}
+                                  onSelect={() => moveAdjacent(role, 1)}
+                                >
+                                  <ArrowDownIcon /> Move down
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
                                   variant="destructive"
-                                  disabled={role.system || count > 0}
+                                  disabled={
+                                    role.system ||
+                                    count > 0 ||
+                                    !authority.canGrant(role)
+                                  }
                                   onSelect={() => openDeleteRole(role)}
                                 >
                                   <Trash2Icon /> Delete role
@@ -637,8 +870,13 @@ export function OrganizationRoles() {
                 className="divide-y divide-border md:hidden"
               >
                 {roles.map((role) => (
-                  <li key={role.id} className="p-4">
+                  <li
+                    key={role.id}
+                    data-role-target={role.id}
+                    className={`p-4 ${dropTarget === role.id ? "bg-primary/10 outline-2 outline-primary -outline-offset-2" : ""}`}
+                  >
                     <div className="flex items-start justify-between gap-3">
+                      {reorderHandle(role)}
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="font-medium">{role.name}</p>
@@ -681,9 +919,23 @@ export function OrganizationRoles() {
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
+                            disabled={!canMoveAdjacent(role, -1)}
+                            onSelect={() => moveAdjacent(role, -1)}
+                          >
+                            <ArrowUpIcon /> Move up
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!canMoveAdjacent(role, 1)}
+                            onSelect={() => moveAdjacent(role, 1)}
+                          >
+                            <ArrowDownIcon /> Move down
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
                             variant="destructive"
                             disabled={
-                              role.system || (userCounts.get(role.id) ?? 0) > 0
+                              role.system ||
+                              (userCounts.get(role.id) ?? 0) > 0 ||
+                              !authority.canGrant(role)
                             }
                             onSelect={() => openDeleteRole(role)}
                           >
@@ -728,8 +980,10 @@ export function OrganizationRoles() {
           <DialogHeader>
             <DialogTitle>{editing ? "Edit role" : "Add role"}</DialogTitle>
             <DialogDescription>
-              Choose the permissions saved with this role. These browser-local
-              permissions do not grant or restrict access.
+              Choose the permissions granted to this role. Saving changes access
+              for every user assigned to it. Organization management controls
+              users and roles. Other permissions apply as their features become
+              available.
             </DialogDescription>
           </DialogHeader>
           <RoleFields
@@ -737,7 +991,9 @@ export function OrganizationRoles() {
             error={formError || storageError}
             errorField={formErrorField}
             editingSystemRole={Boolean(editing?.system)}
-            lockPermissions={editing?.id === "owner"}
+            lockPermissions={Boolean(
+              editing && (editing.system || !authority.canGrant(editing)),
+            )}
             onChange={(nextDraft) => {
               setDraft(nextDraft);
               setFormError("");
@@ -750,7 +1006,16 @@ export function OrganizationRoles() {
                 Cancel
               </Button>
             </DialogClose>
-            <Button className="h-11 sm:h-9" onClick={saveRole}>
+            <Button
+              className="h-11 sm:h-9"
+              disabled={
+                saving ||
+                Boolean(
+                  editing && (editing.system || !authority.canGrant(editing)),
+                )
+              }
+              onClick={saveRole}
+            >
               {editing ? "Save role" : "Create role"}
             </Button>
           </DialogFooter>
@@ -770,8 +1035,8 @@ export function OrganizationRoles() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the role from this browser-local preview. You cannot
-              undo this action.
+              This deletes the role from the organization. Reassign its users
+              before deleting it.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError || storageError ? (
@@ -781,7 +1046,11 @@ export function OrganizationRoles() {
           ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel>Keep role</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={deleteRole}>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={saving}
+              onClick={deleteRole}
+            >
               Delete role
             </AlertDialogAction>
           </AlertDialogFooter>

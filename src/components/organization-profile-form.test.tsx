@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { render, testPreviewKey } from "@/test/preview-storage";
+import { act, cleanup, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationProfileForm } from "./organization-profile-form";
@@ -7,7 +8,7 @@ import { OrganizationProvider } from "./organization-provider";
 import { TooltipProvider } from "./ui/tooltip";
 import {
   defaultOrganizationProfile,
-  organizationProfileKey,
+  organizationProfileKey as organizationProfileKeyBase,
 } from "@/lib/organization-profile";
 
 function mount() {
@@ -257,3 +258,5 @@ describe("Organization profile persistence", () => {
     expect(saveButton().disabled).toBe(false);
   });
 });
+
+const organizationProfileKey = testPreviewKey(organizationProfileKeyBase);
