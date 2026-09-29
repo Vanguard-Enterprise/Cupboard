@@ -105,7 +105,7 @@ export function AccountForm({
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
             id="email"
-            className={signup ? undefined : "h-11 lg:h-10"}
+            className={signup ? undefined : "h-11"}
             name="email"
             type="email"
             autoComplete="email"
@@ -117,7 +117,7 @@ export function AccountForm({
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
             id="password"
-            className={signup ? undefined : "h-11 lg:h-10"}
+            className={signup ? undefined : "h-11"}
             name="password"
             type="password"
             autoComplete={signup ? "new-password" : "current-password"}
@@ -143,7 +143,7 @@ export function AccountForm({
           <Button
             type="submit"
             disabled={busy}
-            className={signup ? undefined : "h-11 lg:h-10"}
+            className={signup ? undefined : "h-11"}
           >
             {busy
               ? signup

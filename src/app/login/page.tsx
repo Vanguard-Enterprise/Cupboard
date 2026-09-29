@@ -31,6 +31,7 @@ export default function LoginPage() {
           src="/images/cupboard-coastal-operations.webp"
           alt=""
           fill
+          fetchPriority="high"
           sizes="(min-width: 1053px) 62vw, (min-width: 1024px) calc(100vw - 400px), 1px"
           className="object-cover object-[50%_45%]"
         />
