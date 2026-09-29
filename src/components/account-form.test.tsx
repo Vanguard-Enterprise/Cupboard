@@ -26,7 +26,7 @@ describe("account forms", () => {
     render(<AccountForm />);
     await user.type(screen.getByLabelText("Email"), "operator@example.com");
     await user.type(screen.getByLabelText("Password"), "invalid-password");
-    await user.click(screen.getByRole("button", { name: "Login" }));
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() =>
       expect(screen.getByRole("alert").textContent).toContain(
         "Email or password is incorrect",
@@ -72,7 +72,7 @@ for (const signup of [false, true]) {
           const user = userEvent.setup();
           await user.click(
             screen.getByRole("button", {
-              name: signup ? "Create account" : "Login",
+              name: signup ? "Create account" : "Sign in",
             }),
           );
           expect(screen.getByRole("alert").textContent).toContain(
@@ -101,7 +101,7 @@ for (const signup of [false, true]) {
           const user = userEvent.setup();
           await user.click(
             screen.getByRole("button", {
-              name: signup ? "Create account" : "Login",
+              name: signup ? "Create account" : "Sign in",
             }),
           );
           await waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
