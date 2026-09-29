@@ -1,0 +1,8 @@
+Generated with the built-in image_gen tool.
+
+Use case: logo-brand.
+Create a single original standalone logo symbol for Cupboard, a Rust game server management product. This is a minimal alternative to a literal two-door tool cupboard.
+Concept: one compact upright cabinet silhouette made of a bold rounded C-shaped outer casing, with two thick horizontal shelf/server units occupying its interior. Each unit has a single small square negative-space indicator at its right end. The outer C reads as Cupboard and the internal shelves read as both storage and managed servers. Use just three principal solid shapes. Bold wide negative-space separations, carefully balanced mass, readable at favicon size. The result should look like a distinctive cupboard/server cabinet, not a generic database cylinder or hamburger menu.
+Style: extremely clean flat geometric logo, even corner radii, precise alignment, single solid muted sage #7cb58d ink. No gradients, texture, lighting, shadows, thin lines or fine detail. Calm professional software brand, not esports.
+Background: genuinely transparent alpha including all negative-space cuts. No black background painted into the image.
+Composition: square image, one centered mark at about 70 percent of the canvas size, generous clear margin. No text, wordmark, letters written separately, labels, mockups, multiple variants, surrounding app-icon tile, shields, padlocks, weapons, circuit ornament or watermark.

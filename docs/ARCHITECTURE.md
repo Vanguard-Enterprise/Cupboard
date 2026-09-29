@@ -163,9 +163,9 @@ build. Its disposable PostgreSQL instance is separate from development data.
   deployment manifests from `Vanguard-Enterprise/v-deployments`.
 - Production PostgreSQL runs in that cluster. Local development uses PostgreSQL
   18 in Docker Compose with a named volume.
-- GitHub Actions uses the organization's `[self-hosted, ve-runner]` runners.
-  Runners need Docker with Compose, Rustup, and Node.js support. Fork pull requests
-  do not execute on these private runners.
+- GitHub Actions uses GitHub-hosted `ubuntu-24.04` VMs with Docker and Compose.
+  The workflow installs the pinned Rust and Node.js versions and runs the root
+  checks directly on the VM. Fork pull requests remain excluded by the workflow.
 - `backend/Dockerfile` builds the Rust artifact and runs it as a non-root user.
   `DATABASE_URL` comes from the deployment environment. Credentials are never
   baked into the image. Kubernetes should probe `/health/live` for liveness and

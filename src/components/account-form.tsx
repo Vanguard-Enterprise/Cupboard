@@ -66,9 +66,22 @@ export function AccountForm({
       onSubmit={submit}
     >
       <FieldGroup>
-        <h1 className="text-center text-2xl font-bold">
-          {signup ? "Create an account" : "Login to your account"}
-        </h1>
+        <div className="space-y-2">
+          <h1
+            className={
+              signup
+                ? "text-center text-2xl font-bold"
+                : "text-2xl font-semibold tracking-tight"
+            }
+          >
+            {signup ? "Create an account" : "Sign in to Cupboard"}
+          </h1>
+          {!signup && (
+            <p className="text-sm text-muted-foreground">
+              Manage your Rust servers.
+            </p>
+          )}
+        </div>
         {error && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
@@ -92,6 +105,7 @@ export function AccountForm({
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
             id="email"
+            className={signup ? undefined : "h-11"}
             name="email"
             type="email"
             autoComplete="email"
@@ -103,6 +117,7 @@ export function AccountForm({
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
             id="password"
+            className={signup ? undefined : "h-11"}
             name="password"
             type="password"
             autoComplete={signup ? "new-password" : "current-password"}
@@ -125,18 +140,22 @@ export function AccountForm({
           </Field>
         )}
         <Field>
-          <Button type="submit" disabled={busy}>
+          <Button
+            type="submit"
+            disabled={busy}
+            className={signup ? undefined : "h-11"}
+          >
             {busy
               ? signup
                 ? "Creating account..."
                 : "Signing in..."
               : signup
                 ? "Create account"
-                : "Login"}
+                : "Sign in"}
           </Button>
         </Field>
-        <FieldDescription className="text-center">
-          {signup ? "Already have an account? " : "Don't have an account? "}
+        <FieldDescription className={signup ? "text-center" : "text-left"}>
+          {signup ? "Already have an account? " : "New to Cupboard? "}
           <Link
             href={signup ? "/login" : "/signup"}
             onClick={(event) => {
@@ -148,7 +167,7 @@ export function AccountForm({
               }
             }}
           >
-            {signup ? "Sign in" : "Sign up"}
+            {signup ? "Sign in" : "Create an account"}
           </Link>
         </FieldDescription>
       </FieldGroup>

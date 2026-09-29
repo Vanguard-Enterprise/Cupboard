@@ -52,8 +52,9 @@ single-application default. The Rust runtime uses Axum, Tokio, and SQLx. Cupboar
 will own accounts and sessions using maintained authentication primitives, with
 no external identity
 provider. Production will run in the USE1 Kubernetes cluster, with PostgreSQL in
-the cluster and Argo CD deployment from `v-deployments`. CI uses the organization's
-GitHub runners. The root Cargo package keeps all Rust code in `backend/`.
+the cluster and Argo CD deployment from `v-deployments`. CI uses GitHub-hosted
+Ubuntu 24.04 VMs so checks do not depend on the availability of the organization's
+self-hosted runners. The root Cargo package keeps all Rust code in `backend/`.
 
 CUP-2 adds the runtime, database connection and migration execution, health checks,
 container build, and combined root development and check commands. CUP-27 adds sign-in, account creation, revocable sessions, tenant membership, and

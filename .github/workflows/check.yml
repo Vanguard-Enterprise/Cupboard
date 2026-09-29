@@ -15,7 +15,7 @@ concurrency:
 jobs:
   check:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, ve-runner]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -35,7 +35,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
       - run: npm ci
-      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check
+      - run: npm run check
       - name: Build backend image
         run: docker build --file backend/Dockerfile --tag cupboard-api:check-${{ github.run_id }} .
       - name: Remove check image

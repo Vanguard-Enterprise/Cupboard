@@ -71,7 +71,7 @@ docker build -f backend/Dockerfile -t cupboard-api .
 
 Production targets USE1 Kubernetes through Argo CD in `v-deployments`, with
 cluster PostgreSQL and environment-provided credentials. GitHub Actions runs
-checks and the container build on `[self-hosted, ve-runner]`. Image publishing
+checks and the container build on GitHub-hosted `ubuntu-24.04` runners. Image publishing
 and deployment manifests are not part of the runtime bootstrap.
 
 The web application uses the Next.js App Router. Pages and layouts are Server
