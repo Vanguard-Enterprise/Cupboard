@@ -130,7 +130,7 @@ export function OrganizationSearch({
                     navigate("/dashboard/organization/settings/usage")
                   }
                 >
-                  Organization usage
+                  Billing &amp; usage
                 </CommandItem>
                 <CommandItem
                   value="Organization integrations API credentials webhooks"

@@ -1,16 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { flushSync } from "react-dom";
+import { Building2Icon } from "lucide-react";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Building2Icon, InfoIcon, MailIcon } from "lucide-react";
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-} from "@/components/ui/tooltip";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useOrganization } from "@/components/organization-provider";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -31,9 +25,36 @@ import {
 } from "@/lib/address-options";
 import {
   validateProfile,
+  isValidLogoUrl,
   type OrganizationProfile,
   type ProfileErrors,
 } from "@/lib/organization-profile";
+
+function LogoPreview({ url }: { url: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = isValidLogoUrl(url) ? url : undefined;
+  return (
+    <div className="space-y-2">
+      <Avatar className="size-20 rounded-xl after:rounded-xl">
+        <AvatarImage
+          src={src}
+          alt="Organization logo"
+          referrerPolicy="no-referrer"
+          className="rounded-xl border border-border bg-input-background object-contain p-2"
+          onLoadingStatusChange={(status) => setFailed(status === "error")}
+        />
+        <AvatarFallback className="rounded-xl border border-border bg-input-background">
+          <Building2Icon className="size-7" aria-label="No organization logo" />
+        </AvatarFallback>
+      </Avatar>
+      {src && failed && (
+        <p className="max-w-48 text-xs text-muted-foreground" role="status">
+          Image could not be loaded. Check the URL is publicly accessible.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function ProfileEditor({
   saved,
@@ -42,7 +63,6 @@ function ProfileEditor({
   saved: OrganizationProfile;
   save: (profile: OrganizationProfile) => void;
 }) {
-  const [activeTab, setActiveTab] = useState("details");
   const [draft, setDraft] = useState(saved);
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saveError, setSaveError] = useState("");
@@ -106,9 +126,12 @@ function ProfileEditor({
       name: key,
       value: draft[key],
       required: key === "name",
-      maxLength: ["description", "addressLine1", "addressLine2"].includes(key)
-        ? 1000
-        : 200,
+      maxLength:
+        key === "logoUrl"
+          ? 2048
+          : ["description", "addressLine1", "addressLine2"].includes(key)
+            ? 1000
+            : 200,
       autoComplete: (
         {
           addressLine1: "billing address-line1",
@@ -130,37 +153,13 @@ function ProfileEditor({
     };
     return (
       <div
-        className={`space-y-2 ${type === "textarea" || fullWidth ? "md:col-span-2" : ""}`}
+        className={`scroll-mt-6 space-y-2 ${type === "textarea" || fullWidth ? "md:col-span-2" : ""}`}
       >
         <div className="flex items-center gap-1.5">
           <Label htmlFor={key}>
             {label}
             {common.required ? " *" : ""}
           </Label>
-          {key === "privateEmail" && (
-            <Tooltip disableHoverableContent>
-              <TooltipTrigger asChild>
-                <span
-                  tabIndex={0}
-                  role="img"
-                  aria-label="About internal contact email"
-                  className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                >
-                  <InfoIcon className="size-3.5" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent
-                side="right"
-                sideOffset={8}
-                align="center"
-                collisionPadding={12}
-                className="max-w-[min(18rem,calc(100vw-3rem))] border border-border bg-popover text-foreground shadow-lg"
-                aria-label="About internal contact email"
-              >
-                For staff communication. Excluded from organization search.
-              </TooltipContent>
-            </Tooltip>
-          )}
         </div>
         {isCombobox ? (
           <Combobox
@@ -235,7 +234,7 @@ function ProfileEditor({
   return (
     <form
       noValidate
-      className="space-y-6"
+      className="space-y-8"
       onSubmit={(event) => {
         event.preventDefault();
         if (conflict) return;
@@ -248,13 +247,6 @@ function ProfileEditor({
         setSaveMessage("");
         const firstError = Object.keys(nextErrors)[0];
         if (firstError) {
-          flushSync(() =>
-            setActiveTab(
-              ["name", "description", "website"].includes(firstError)
-                ? "details"
-                : "contacts",
-            ),
-          );
           document.getElementById(firstError)?.focus();
           return;
         }
@@ -267,142 +259,180 @@ function ProfileEditor({
         }
       }}
     >
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-4">
-        <TabsList
-          aria-label="Organization profile sections"
-          className="h-9! gap-1 rounded-lg bg-surface-elevated p-1"
-        >
-          <TabsTrigger
-            value="details"
-            className="h-7 rounded-md px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-          >
-            <Building2Icon /> Details
-          </TabsTrigger>
-          <TabsTrigger
-            value="contacts"
-            className="h-7 rounded-md px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-          >
-            <MailIcon /> Contact info
-          </TabsTrigger>
-        </TabsList>
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <TabsContent value="details" className="px-6 py-6 sm:px-7">
-            <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
-              {field("name", "Organization name")}
-              {field("website", "Website", "url", "https://example.com")}
-              {field("description", "Description", "textarea")}
-            </div>
-          </TabsContent>
-          <TabsContent value="contacts" className="space-y-8 px-6 py-6 sm:px-7">
-            <section aria-labelledby="contacts-heading" className="space-y-6">
-              <h2 id="contacts-heading" className="text-base font-semibold">
-                Contact information
-              </h2>
-              <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
-                {field(
-                  "publicEmail",
-                  "Public email",
-                  "email",
-                  "hello@example.com",
-                )}
-                {field(
-                  "supportUrl",
-                  "Support URL",
-                  "url",
-                  "https://example.com/support",
-                )}
-                {field(
-                  "privateEmail",
-                  "Internal contact email",
-                  "email",
-                  undefined,
-                  undefined,
-                  true,
-                )}
-              </div>
-            </section>
-            <section aria-labelledby="billing-heading" className="space-y-6">
-              <h2 id="billing-heading" className="text-base font-semibold">
-                Billing information
-              </h2>
-              <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
-                {field("legalName", "Legal name")}
-                {field("billingEmail", "Billing email", "email")}
-                {field(
-                  "addressLine1",
-                  "Address line 1",
-                  "text",
-                  undefined,
-                  undefined,
-                  true,
-                )}
-                {field(
-                  "addressLine2",
-                  "Address line 2 (optional)",
-                  "text",
-                  undefined,
-                  undefined,
-                  true,
-                )}
-                {field("country", "Country")}
-                {field("city", "City")}
-                {field("region", "State / region")}
-                {field("postalCode", "ZIP / postal code")}
-              </div>
-            </section>
-          </TabsContent>
-          <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-6 py-3 sm:px-7">
-            {conflict && (
-              <Alert variant="destructive" className="w-full">
-                <AlertDescription>
-                  This profile changed in another tab. Cancel to load the latest
-                  version before editing again.
-                </AlertDescription>
-              </Alert>
-            )}
-            {saveError && (
-              <Alert
-                variant="destructive"
-                className="mr-auto w-auto max-w-full"
-              >
-                <AlertDescription>{saveError}</AlertDescription>
-              </Alert>
-            )}
-            {saveMessage && (
-              <Alert
-                role="status"
-                className="mr-auto w-auto max-w-full border-primary/25 bg-primary/5"
-              >
-                <AlertDescription className="text-primary">
-                  {saveMessage}
-                </AlertDescription>
-              </Alert>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 px-4"
-              disabled={!dirty && !conflict}
-              onClick={() => {
-                setDraft(saved);
-                setConflict(false);
-                setErrors({});
-                setSaveError("");
-                setSaveMessage("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              className="h-9 px-4"
-              disabled={!dirty || conflict}
-            >
-              Save changes
-            </Button>
+      <div className="divide-y divide-border">
+        <section aria-labelledby="details-heading" className="space-y-6 pb-8">
+          <div className="space-y-1">
+            <h2 id="details-heading" className="text-base font-semibold">
+              Organization details
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Your organization&apos;s name, website, and description.
+            </p>
           </div>
-        </div>
-      </Tabs>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6">
+            <LogoPreview
+              key={draft.logoUrl.trim()}
+              url={draft.logoUrl.trim()}
+            />
+            <div className="min-w-0 flex-1 space-y-2">
+              {field(
+                "logoUrl",
+                "Organization logo URL",
+                "url",
+                "https://example.com/logo.png",
+                "Use a public HTTPS image URL. Square images work best.",
+              )}
+              {draft.logoUrl && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                  onClick={() => {
+                    setDraft({ ...draft, logoUrl: "" });
+                    setErrors({ ...errors, logoUrl: undefined });
+                    setSaveError("");
+                    setSaveMessage("");
+                  }}
+                >
+                  Remove logo
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
+            {field(
+              "name",
+              "Organization name",
+              "text",
+              undefined,
+              undefined,
+              true,
+            )}
+            {field(
+              "website",
+              "Website",
+              "url",
+              "https://example.com",
+              undefined,
+              true,
+            )}
+            {field("description", "Description", "textarea")}
+          </div>
+        </section>
+        <section aria-labelledby="contacts-heading" className="space-y-6 py-8">
+          <div className="space-y-1">
+            <h2 id="contacts-heading" className="text-base font-semibold">
+              Contact information
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Contact details for your community and staff.
+            </p>
+          </div>
+          <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
+            {field("publicEmail", "Public email", "email", "hello@example.com")}
+            {field(
+              "supportUrl",
+              "Support URL",
+              "url",
+              "https://example.com/support",
+            )}
+            {field(
+              "privateEmail",
+              "Internal contact email",
+              "email",
+              undefined,
+              "For staff communication. Excluded from organization search.",
+              true,
+            )}
+          </div>
+        </section>
+        <section aria-labelledby="billing-heading" className="space-y-6 pt-8">
+          <div className="space-y-1">
+            <h2 id="billing-heading" className="text-base font-semibold">
+              Billing information
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Legal name, billing contact, and address.
+            </p>
+          </div>
+          <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
+            {field("legalName", "Legal name")}
+            {field("billingEmail", "Billing email", "email")}
+            {field(
+              "addressLine1",
+              "Address line 1",
+              "text",
+              undefined,
+              undefined,
+              true,
+            )}
+            {field(
+              "addressLine2",
+              "Address line 2 (optional)",
+              "text",
+              undefined,
+              undefined,
+              true,
+            )}
+            {field("country", "Country")}
+            {field("city", "City")}
+            {field("region", "State / region")}
+            {field("postalCode", "ZIP / postal code")}
+          </div>
+        </section>
+      </div>
+      <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-background py-4">
+        {conflict && (
+          <Alert variant="destructive" className="w-full">
+            <AlertDescription>
+              This profile changed in another tab. Cancel to load the latest
+              version before editing again.
+            </AlertDescription>
+          </Alert>
+        )}
+        {saveError && (
+          <Alert variant="destructive" className="mr-auto w-auto max-w-full">
+            <AlertDescription>{saveError}</AlertDescription>
+          </Alert>
+        )}
+        {dirty && !conflict && !saveError && (
+          <p className="mr-auto text-sm text-muted-foreground">
+            Unsaved changes
+          </p>
+        )}
+        {saveMessage && (
+          <Alert
+            role="status"
+            className="mr-auto w-auto max-w-full border-primary/25 bg-primary/5"
+          >
+            <AlertDescription className="text-primary">
+              {saveMessage}
+            </AlertDescription>
+          </Alert>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+          disabled={!dirty && !conflict}
+          onClick={() => {
+            setDraft(saved);
+            setConflict(false);
+            setErrors({});
+            setSaveError("");
+            setSaveMessage("");
+          }}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+          disabled={!dirty || conflict}
+        >
+          Save changes
+        </Button>
+      </div>
     </form>
   );
 }

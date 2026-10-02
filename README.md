@@ -84,9 +84,12 @@ The current component catalog is installed in `src/components/ui` so product
 work does not need to rerun setup. The `/dashboard/` page uses the shadcn
 `sidebar-07` block with organization navigation. The dashboard is empty until
 server data is connected. Organization profile settings live at
-`/dashboard/organization/settings/profile`. Organization usage is available at
-`/dashboard/organization/settings/usage` with clearly labeled sample data until
-metering is connected. Credentials and webhooks are available at
+`/dashboard/organization/settings/profile`. Billing and usage are available at
+`/dashboard/organization/settings/usage`. Resource meters show used and remaining
+capacity; the activity chart offers 7-, 14-, and 30-day ranges with totals and an
+expandable daily table. Usage values remain fixed design data until metering is
+connected. Billing details read the saved, scoped organization profile and link
+to its billing fields; there are no payment, subscription, or invoice APIs. Credentials and webhooks are available at
 `/dashboard/organization/integrations/credentials` as a browser-local preview.
 Credential secrets appear only once and are never stored; webhook endpoints and
 credential metadata use sample data or local browser storage. Security alerts
@@ -106,8 +109,13 @@ management. Changes require the organization management permission.
 The sidebar search opens with its button or Ctrl/Cmd+K and searches available pages,
 organization details, and public contacts. Private contacts are excluded.
 
+Profile settings use one form with organization, contact, and billing sections.
+A sticky footer keeps Save changes and Cancel within reach.
+Organization logos accept a public HTTPS image URL with a preview and removal.
+Logo URLs use the same browser-local storage as other profile fields; existing
+profiles without a logo remain valid. File uploads are tracked separately in CUP-31.
 Profile edits remain drafts until Save changes is selected. Cancel restores the
-saved values across both tabs. Invalid edits show an error and are not saved.
+saved values across all sections. Invalid edits show an error and are not saved.
 Updates from another tab refresh untouched forms. If local edits conflict with
 a newer saved profile, Cancel loads the latest version before editing continues.
 Country and supported state or region fields use searchable source-owned
@@ -119,9 +127,10 @@ Profile settings are a browser-local prototype stored under
 browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not
 use real confidential details until authentication and shared storage exist.
-Notification choices are also browser-local and do not send messages yet. The
-Notifications & data page clears only the current account and organization's
-preview data. Profile, integration, notification, approval, and alert stores all
+Notification choices are grouped into operational alerts and summaries, with
+explicit Save changes and Cancel actions. They are browser-local and do not send
+messages yet. The page does not provide browser-data clearing.
+Profile, integration, notification, approval, and alert stores all
 use account and organization namespaces. Switching organizations or accounts
 discards unsaved drafts and cached previews; older unscoped data is not loaded
 or automatically assigned to an organization.
