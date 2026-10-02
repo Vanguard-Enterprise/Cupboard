@@ -12,6 +12,12 @@ Read the [design direction](docs/DESIGN.md) before changing the interface. It
 records Cupboard's product character, visual system, interaction rules,
 accessibility bar, and writing style.
 
+## Development workflow
+
+Follow [the development workflow](docs/WORKFLOW.md) for issue-named worktrees,
+isolated databases and ports, fast checks, PR review, and agent handoffs. These
+are the defaults for all new Cupboard work.
+
 ## Local development
 
 Install Node.js 24.18.0, Rustup, and Docker with Compose. The repository pins
@@ -33,8 +39,10 @@ restarts Rust when backend sources, migrations, Cargo files, `build.rs`,
 is needed. The API stops during rebuilding; compile errors stay visible in the
 terminal and saving a fix retries automatically. Both servers listen on all
 network interfaces. The command prints the local web URL and active NetBird URL.
-Ctrl+C stops the watcher, builds, and both application processes. PostgreSQL remains running with its saved development data. The
-default port is `5173`; set `CUPBOARD_PORT` to use another port.
+Ctrl+C stops the watcher, builds, and both application processes. PostgreSQL remains running with its saved development data. Each worktree saves automatically selected web and API ports in
+`.dev-stack/workspace.json`. Set `CUPBOARD_PORT` or
+`CUPBOARD_API_BIND=0.0.0.0:<port>` to choose specific ports. Occupied saved ports
+fail with an actionable error rather than silently changing the browser URL.
 The command also allows the detected NetBird host to load Next.js development
 resources so interactive controls and hot reloading work over NetBird.
 
@@ -56,12 +64,15 @@ process is running. `GET /health/ready` returns 204 when PostgreSQL responds, or
 fails. Account, session, and organization membership endpoints are available under
 `/app-api/`. The Next.js boundary forwards authenticated requests to Rust.
 
-Local PostgreSQL listens on loopback port 55432. Its Compose credentials are for
-local development only. Set `CUPBOARD_DB_PORT` to change the port, or supply
-`DATABASE_URL` to use an existing database and skip local Compose startup. Set
-`CUPBOARD_API_BIND` to change the API listening address. Export these variables in
-your shell; the Rust process does not load `.env` files. Stop the development
-database with `docker compose stop postgres` without removing its volume.
+Local PostgreSQL publishes an automatically assigned loopback port. Each worktree
+has a separate Compose project and persistent database volume. Set
+`CUPBOARD_DB_PORT` to choose its database port, or supply `DATABASE_URL` to use an
+existing database and skip local Compose startup. An external database is an
+explicit override; use a dedicated database for each worktree. Export these
+variables in your shell; the Rust process does not load `.env` files.
+`npm run dev:stop-db` stops only this worktree's database and preserves its volume.
+The previous shared Compose database remains untouched; the new workflow starts
+with a fresh database in each worktree.
 
 Build the production API image with:
 

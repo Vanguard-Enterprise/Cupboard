@@ -138,6 +138,15 @@ A fresh clone must support the following with documented root commands:
 The slice is incomplete if it requires several terminals, undocumented services,
 or manual repair after a normal restart.
 
+## Development isolation
+
+CUP-34 makes each development worktree own a persistent Compose PostgreSQL
+volume, saved web/API ports, and a dev-process lock. Concurrent agent work must
+not reuse another task's database or stop its processes. Disposable check
+containers remain separate from development data. `docs/WORKFLOW.md` records
+the worktree, doctor, quick-check, and PR-feedback commands. These are local
+workflow tools and do not change the production runtime or launch scope.
+
 ## Rules for adding complexity
 
 A new process, package, data store, queue, or protocol needs a short note in this

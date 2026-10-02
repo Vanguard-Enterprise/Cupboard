@@ -41,6 +41,26 @@ This repository is a clean rebuild for one developer working with coding agents.
 - Provide one root command for local development and one root command for all
   required checks.
 - Keep setup reproducible from a fresh clone.
+- Follow `docs/WORKFLOW.md` for all new work. Start each nontrivial task in an
+  issue-named worktree using `npm run worktree`, or reuse the isolated worktree
+  provided for the current task. Never switch another task's working tree.
+- Run `npm run doctor` before starting a new environment. Use `npm ci` for
+  dependencies and `npm run dev` for the complete stack. Let the dev command
+  select and save ports and a worktree-specific database; do not share a
+  development `DATABASE_URL` between tasks.
+- Use separate browser profiles or contexts for concurrent worktrees because
+  cookies on the same host are shared across ports.
+- Run focused checks during editing or `npm run check:quick`; run the full
+  `npm run check` before declaring the change complete or ready for review.
+- When working on a PR, use `npm run review -- <number>` to collect checks,
+  reviews, and threads. Register the PR with the current T3 thread when its
+  linking tools are available. Repeat collection after every push.
+- Finish with the issue and branch, a short description of the change, checks
+  and their results, the PR state when applicable, and any remaining blocker.
+  Include the clickable NetBird URL when the server was started.
+- Preserve worktrees and database volumes after handoff. Stop only processes and
+  containers owned by the task; do not remove saved data without an explicit
+  request.
 - Tests must cover tenant isolation, authorization, secret handling, and the main
   success path of each slice.
 - Update `docs/REBUILD.md` when a decision changes the repository shape or launch

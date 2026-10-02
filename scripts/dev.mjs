@@ -1,3 +1,8 @@
+import {
+  acquireDevLock,
+  prepareWorkspace,
+  databasePort,
+} from "./workspace.mjs";
 import { execFileSync } from "node:child_process";
 import { startRustDev } from "./rust-dev.mjs";
 import { createProcesses } from "./processes.mjs";
@@ -51,6 +56,17 @@ export function createNextDevArgs({ hostname, port }) {
 }
 
 async function start() {
+  let release;
+  let workspace;
+  try {
+    release = acquireDevLock();
+    workspace = await prepareWorkspace();
+  } catch (error) {
+    release?.();
+    console.error(error.message);
+    process.exitCode = 1;
+    return;
+  }
   const processes = createProcesses();
   let rust;
   let stopping = false;
@@ -74,11 +90,13 @@ async function start() {
 
   const config = createDevServerConfig(
     networkInterfaces(),
-    process.env.CUPBOARD_PORT ?? "5173",
+    String(workspace.webPort),
     netbirdStatus,
   );
 
   console.log("\nCupboard development server");
+  console.log(`  Workspace: ${workspace.project}`);
+  console.log(`  API port: ${workspace.apiPort}`);
   console.log(`  Local:   ${config.localUrl}`);
   console.log(
     config.netbirdUrl
@@ -89,27 +107,44 @@ async function start() {
     "\nNext.js hot reloading and automatic Rust rebuilds are enabled.\n",
   );
 
+  const compose = ["compose", "--project-name", workspace.project];
+  const databaseEnv = {
+    ...process.env,
+    CUPBOARD_DB_PORT: process.env.CUPBOARD_DB_PORT ?? "0",
+  };
   try {
+    let localDatabasePort;
     if (!process.env.DATABASE_URL) {
-      await processes.run("docker", [
-        "compose",
-        "up",
-        "--detach",
-        "--wait",
-        "--wait-timeout",
-        "60",
-        "postgres",
-      ]);
+      await processes.run(
+        "docker",
+        [
+          ...compose,
+          "up",
+          "--detach",
+          "--wait",
+          "--wait-timeout",
+          "60",
+          "postgres",
+        ],
+        databaseEnv,
+      );
+      if (!stopping)
+        localDatabasePort = databasePort(
+          execFileSync("docker", [...compose, "port", "postgres", "5432"], {
+            encoding: "utf8",
+            env: databaseEnv,
+            timeout: 10000,
+          }),
+        );
     }
     if (stopping) return;
     const env = {
       ...process.env,
       DATABASE_URL:
-        process.env.DATABASE_URL ??
-        `postgres://cupboard:cupboard-local-only@127.0.0.1:${process.env.CUPBOARD_DB_PORT ?? "55432"}/cupboard`,
-      CUPBOARD_API_URL:
-        process.env.CUPBOARD_API_URL ??
-        `http://127.0.0.1:${(process.env.CUPBOARD_API_BIND ?? "0.0.0.0:8080").split(":").at(-1)}`,
+        process.env.DATABASE_URL ||
+        `postgres://cupboard:cupboard-local-only@127.0.0.1:${localDatabasePort}/cupboard`,
+      CUPBOARD_API_BIND: `0.0.0.0:${workspace.apiPort}`,
+      CUPBOARD_API_URL: `http://127.0.0.1:${workspace.apiPort}`,
       CUPBOARD_WEB_ORIGINS:
         process.env.CUPBOARD_WEB_ORIGINS ??
         [config.localUrl, `http://127.0.0.1:${config.port}`, config.netbirdUrl]
@@ -133,6 +168,7 @@ async function start() {
     processes.stop();
     // The race above reports watcher failure; still wait for its cleanup.
     await rust?.done.catch(() => {});
+    release();
   }
 }
 
