@@ -64,6 +64,7 @@ function ProfileEditor({
   save: (profile: OrganizationProfile) => void;
 }) {
   const [draft, setDraft] = useState(saved);
+  const [previewUrl, setPreviewUrl] = useState(saved.logoUrl.trim());
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saveError, setSaveError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
@@ -80,6 +81,7 @@ function ProfileEditor({
     setBaseline(saved);
     if (JSON.stringify(draft) === JSON.stringify(baseline)) {
       setDraft(saved);
+      setPreviewUrl(saved.logoUrl.trim());
       setConflict(false);
     } else {
       setConflict(JSON.stringify(draft) !== JSON.stringify(saved));
@@ -150,6 +152,11 @@ function ProfileEditor({
       onChange: (
         event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
       ) => updateValue(event.target.value),
+      onBlur:
+        key === "logoUrl"
+          ? (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+              setPreviewUrl(event.target.value.trim())
+          : undefined,
     };
     return (
       <div
@@ -253,6 +260,7 @@ function ProfileEditor({
         try {
           save(normalized);
           setDraft(normalized);
+          setPreviewUrl(normalized.logoUrl);
           setSaveMessage("Changes saved.");
         } catch {
           setSaveError("Could not save your changes. Please try again.");
@@ -270,10 +278,7 @@ function ProfileEditor({
             </p>
           </div>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6">
-            <LogoPreview
-              key={draft.logoUrl.trim()}
-              url={draft.logoUrl.trim()}
-            />
+            <LogoPreview key={previewUrl} url={previewUrl} />
             <div className="min-w-0 flex-1 space-y-2">
               {field(
                 "logoUrl",
@@ -289,6 +294,7 @@ function ProfileEditor({
                   className="h-10 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
                   onClick={() => {
                     setDraft({ ...draft, logoUrl: "" });
+                    setPreviewUrl("");
                     setErrors({ ...errors, logoUrl: undefined });
                     setSaveError("");
                     setSaveMessage("");
@@ -417,6 +423,7 @@ function ProfileEditor({
           disabled={!dirty && !conflict}
           onClick={() => {
             setDraft(saved);
+            setPreviewUrl(saved.logoUrl.trim());
             setConflict(false);
             setErrors({});
             setSaveError("");

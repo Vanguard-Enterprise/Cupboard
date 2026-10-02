@@ -46,6 +46,27 @@ afterEach(() => {
 });
 
 describe("Organization profile persistence", () => {
+  it("loads logo previews only after leaving the URL field", async () => {
+    const requests = vi
+      .spyOn(HTMLImageElement.prototype, "src", "set")
+      .mockImplementation(() => {});
+    const user = userEvent.setup();
+    mount();
+    const input = screen.getByLabelText("Organization logo URL");
+    await user.type(input, "https://example.com/logo.png");
+    expect(requests).not.toHaveBeenCalled();
+    await user.tab();
+    expect(requests.mock.calls).toEqual([["https://example.com/logo.png"]]);
+    await user.click(input);
+    await user.type(input, "?version=2");
+    expect(requests).toHaveBeenCalledTimes(1);
+    await user.tab();
+    expect(requests.mock.calls).toEqual([
+      ["https://example.com/logo.png"],
+      ["https://example.com/logo.png?version=2"],
+    ]);
+  });
+
   it("saves a logo URL, restores it, and cancels or saves removal", async () => {
     const user = userEvent.setup();
     const view = mount();
@@ -71,6 +92,9 @@ describe("Organization profile persistence", () => {
   });
 
   it("rejects credential-bearing logo URLs without rendering or saving them", async () => {
+    const requests = vi
+      .spyOn(HTMLImageElement.prototype, "src", "set")
+      .mockImplementation(() => {});
     const user = userEvent.setup();
     mount();
     const input = screen.getByLabelText("Organization logo URL");
@@ -80,6 +104,7 @@ describe("Organization profile persistence", () => {
     expect(document.activeElement).toBe(input);
     expect(screen.queryByRole("img", { name: "Organization logo" })).toBeNull();
     expect(localStorage.getItem(organizationProfileKey)).toBeNull();
+    expect(requests).not.toHaveBeenCalled();
   });
 
   it("navigates filtered countries by keyboard", async () => {
