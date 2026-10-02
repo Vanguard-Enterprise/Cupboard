@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { execFileSync } from "node:child_process";
 import { createProcesses } from "./processes.mjs";
 
+const quick = process.argv.includes("--quick");
 const processes = createProcesses();
 const project = `cupboard-check-${randomUUID()}`;
 const runnerContainer = process.env.CUPBOARD_CHECK_CONTAINER;
@@ -25,7 +26,7 @@ try {
     "warnings",
   ]);
   let databaseUrl = process.env.CUPBOARD_TEST_DATABASE_URL;
-  if (!databaseUrl) {
+  if (!quick && !databaseUrl) {
     ownedDatabase = true;
     const env = { ...process.env, CUPBOARD_TEST_DB_PORT: "0" };
     await processes.run(
@@ -69,11 +70,18 @@ try {
       databaseUrl = `postgres://cupboard:cupboard-test-only@127.0.0.1:${port}/cupboard_test`;
     }
   }
-  await processes.run("cargo", ["test", "--locked", "--all-targets"], {
-    ...process.env,
-    CUPBOARD_TEST_DATABASE_URL: databaseUrl,
-  });
-  for (const script of ["format:check", "lint", "typecheck", "test", "build"]) {
+  if (!quick)
+    await processes.run("cargo", ["test", "--locked", "--all-targets"], {
+      ...process.env,
+      CUPBOARD_TEST_DATABASE_URL: databaseUrl,
+    });
+  for (const script of [
+    "format:check",
+    "lint",
+    "typecheck",
+    "test",
+    ...(quick ? [] : ["build"]),
+  ]) {
     await processes.run(process.execPath, [
       process.env.npm_execpath,
       "run",

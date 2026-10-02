@@ -15,7 +15,12 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "worktree": "node scripts/workflow.mjs worktree",
+    "doctor": "node scripts/workflow.mjs doctor",
+    "dev:stop-db": "node scripts/workflow.mjs stop-db",
+    "check:quick": "node scripts/check.mjs --quick",
+    "review": "node scripts/workflow.mjs review"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
