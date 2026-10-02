@@ -2,6 +2,7 @@ export const organizationProfileKey =
   "cupboard:organization:local-preview:profile:v1";
 export const defaultOrganizationProfile = {
   name: "Cupboard",
+  logoUrl: "",
   description: "",
   website: "",
   publicEmail: "",
@@ -19,16 +20,36 @@ export const defaultOrganizationProfile = {
 export type OrganizationProfile = typeof defaultOrganizationProfile;
 export type ProfileErrors = Partial<Record<keyof OrganizationProfile, string>>;
 
+export function isValidLogoUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      value.length <= 2048 &&
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function validateProfile(profile: OrganizationProfile): ProfileErrors {
   const errors: ProfileErrors = {};
   if (!profile.name.trim()) errors.name = "Enter an organization name.";
   for (const key of Object.keys(profile) as (keyof OrganizationProfile)[]) {
-    const limit = ["description", "addressLine1", "addressLine2"].includes(key)
-      ? 1000
-      : 200;
+    const limit =
+      key === "logoUrl"
+        ? 2048
+        : ["description", "addressLine1", "addressLine2"].includes(key)
+          ? 1000
+          : 200;
     if (profile[key].length > limit)
       errors[key] = `Use ${limit} characters or fewer.`;
   }
+  if (profile.logoUrl && !isValidLogoUrl(profile.logoUrl))
+    errors.logoUrl =
+      "Enter an https:// image URL without credentials, up to 2048 characters.";
   for (const key of ["publicEmail", "privateEmail", "billingEmail"] as const) {
     if (profile[key] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile[key]))
       errors[key] = "Enter a valid email address.";
@@ -68,6 +89,7 @@ export function parseProfile(raw: string): OrganizationProfile {
   const profile = { ...defaultOrganizationProfile };
   for (const key of Object.keys(profile) as (keyof OrganizationProfile)[]) {
     const field = (value as Record<string, unknown>)[key];
+    if (key === "logoUrl" && field === undefined) continue;
     if (typeof field !== "string") throw new Error("Invalid profile");
     profile[key] = field;
   }

@@ -90,9 +90,11 @@ fields are separate; general search indexes only public fields. This preview is 
 and must not hold confidential production contacts. Shared persistence must add
 server-side membership checks before replacing the preview. Organization search
 currently covers only implemented pages and locally saved profile information.
-The organization usage page at `/dashboard/organization/settings/usage` previews
-activity and capacity charts with sample data. It does not meter activity, enforce
-limits, or connect to billing.
+The billing and usage page at `/dashboard/organization/settings/usage` shows
+resource capacity and activity charts with fixed design data, explicit date ranges,
+calculated totals, and an accessible daily table. Its billing details read the
+scoped browser-local organization profile and link back to its billing fields.
+It does not meter activity, enforce limits, or connect to a billing provider.
 The credentials and webhooks page at
 `/dashboard/organization/integrations/credentials` is also a browser-local
 preview. It stores credential metadata and webhook configuration under a local
@@ -111,7 +113,7 @@ setup requirements with sample data. It does not request credentials, connect an
 external account, or persist connection settings. The organization notifications
 and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
-in the current browser and can clear only the current account and organization's preview data there.
+in the current browser. Browser-data clearing was removed from this page.
 It does not send notifications or delete shared server data.
 The approvals page at `/dashboard/organization/security/access` previews
 sensitive-action approval rules in local browser storage. The Members & teams pages at

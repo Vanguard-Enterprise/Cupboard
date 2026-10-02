@@ -8,6 +8,31 @@ import {
 import { dashboardNavigation, navigationHref } from "./dashboard-navigation";
 
 describe("organization profile", () => {
+  it("preserves older profiles without a logo and validates hosted logo URLs", () => {
+    const old = { ...defaultOrganizationProfile } as Partial<
+      typeof defaultOrganizationProfile
+    >;
+    delete old.logoUrl;
+    expect(parseProfile(JSON.stringify(old))).toEqual(
+      defaultOrganizationProfile,
+    );
+    for (const logoUrl of [
+      "javascript:alert(1)",
+      "data:image/png;base64,abc",
+      "http://example.com/logo.png",
+      "https://user:password@example.com/logo.png",
+      "https://example.com/" + "x".repeat(2048),
+    ]) {
+      expect(
+        validateProfile({ ...defaultOrganizationProfile, logoUrl }),
+      ).toHaveProperty("logoUrl");
+    }
+    const profile = {
+      ...defaultOrganizationProfile,
+      logoUrl: "https://example.com/logo.png",
+    };
+    expect(parseProfile(JSON.stringify(profile))).toEqual(profile);
+  });
   it("round trips saved details and both contact types", () => {
     const profile = {
       ...defaultOrganizationProfile,

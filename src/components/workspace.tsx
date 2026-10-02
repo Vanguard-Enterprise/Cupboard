@@ -53,7 +53,7 @@ export function Workspace({
       : pathname === usagePath
         ? {
             activeSection: "billing",
-            crumbs: ["Organization", "Settings", "Usage"],
+            crumbs: ["Organization", "Settings", "Billing & usage"],
           }
         : pathname === connectionsPath
           ? {
