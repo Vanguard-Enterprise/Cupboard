@@ -252,9 +252,15 @@ function ProfileEditor({
         setErrors(nextErrors);
         setSaveError("");
         setSaveMessage("");
-        const firstError = Object.keys(nextErrors)[0];
-        if (firstError) {
-          document.getElementById(firstError)?.focus();
+        if (Object.keys(nextErrors).length) {
+          const firstInvalidControl = Array.from(
+            event.currentTarget.querySelectorAll<
+              HTMLInputElement | HTMLTextAreaElement
+            >("input, textarea"),
+          ).find(
+            (control) => nextErrors[control.id as keyof OrganizationProfile],
+          );
+          firstInvalidControl?.focus();
           return;
         }
         try {

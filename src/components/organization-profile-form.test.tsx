@@ -296,6 +296,21 @@ describe("Organization profile persistence", () => {
     expect(localStorage.getItem(organizationProfileKey)).toBeNull();
   });
 
+  it("focuses errors in visual order when multiple fields are invalid", async () => {
+    const user = userEvent.setup();
+    mount();
+    const logo = screen.getByLabelText("Organization logo URL");
+    await user.type(logo, "invalid");
+    await user.clear(nameInput());
+    await user.click(saveButton());
+    expect(document.activeElement).toBe(logo);
+    expect(screen.getByText("Enter an organization name.")).toBeTruthy();
+    expect(localStorage.getItem(organizationProfileKey)).toBeNull();
+    await user.clear(logo);
+    await user.click(saveButton());
+    expect(document.activeElement).toBe(nameInput());
+  });
+
   it("reports a storage failure without discarding the draft", async () => {
     const user = userEvent.setup();
     mount();
