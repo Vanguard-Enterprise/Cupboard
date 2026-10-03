@@ -2,12 +2,21 @@
 
 import { useMemo, useState } from "react";
 import {
+  CalendarIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
   CircleXIcon,
   SearchIcon,
   SearchXIcon,
 } from "lucide-react";
+import { format } from "date-fns";
+import type { DateRange } from "react-day-picker";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -289,6 +298,10 @@ export function AuditLog() {
   const [query, setQuery] = useState("");
   const [type, setType] = useState<EventType | "all">("all");
   const [outcome, setOutcome] = useState<EventOutcome | "all">("all");
+  const [actor, setActor] = useState("all");
+  const [action, setAction] = useState("all");
+  const [target, setTarget] = useState("all");
+  const [dateRange, setDateRange] = useState<DateRange>();
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
 
   const filteredEvents = useMemo(() => {
@@ -310,34 +323,178 @@ export function AuditLog() {
       return (
         matchesQuery &&
         (type === "all" || event.type === type) &&
-        (outcome === "all" || event.outcome === outcome)
+        (outcome === "all" || event.outcome === outcome) &&
+        (actor === "all" || event.actor === actor) &&
+        (action === "all" || event.action === action) &&
+        (target === "all" || event.target === target) &&
+        (!dateRange?.from ||
+          event.timestamp.slice(0, 10) >=
+            format(dateRange.from, "yyyy-MM-dd")) &&
+        (!dateRange?.from ||
+          event.timestamp.slice(0, 10) <=
+            format(dateRange.to ?? dateRange.from, "yyyy-MM-dd"))
       );
     });
-  }, [outcome, query, type]);
+  }, [outcome, query, type, actor, action, target, dateRange]);
   const filtersActive = Boolean(
-    query.trim() || type !== "all" || outcome !== "all",
+    query.trim() ||
+    type !== "all" ||
+    outcome !== "all" ||
+    actor !== "all" ||
+    action !== "all" ||
+    target !== "all" ||
+    dateRange?.from,
   );
 
   function clearFilters() {
     setQuery("");
     setType("all");
     setOutcome("all");
+    setActor("all");
+    setAction("all");
+    setTarget("all");
+    setDateRange(undefined);
   }
 
+  const filters = [
+    {
+      label: "Event type",
+      shortLabel: "Type",
+      value: type,
+      onChange: (value: string) => setType(value as EventType | "all"),
+      options: Object.entries(eventTypeLabels),
+    },
+    {
+      label: "Actor",
+      shortLabel: "Actor",
+      value: actor,
+      onChange: setActor,
+      options: [...new Set(events.map((event) => event.actor))].map((value) => [
+        value,
+        value,
+      ]),
+    },
+    {
+      label: "Action",
+      shortLabel: "Action",
+      value: action,
+      onChange: setAction,
+      options: [...new Set(events.map((event) => event.action))].map(
+        (value) => [value, value],
+      ),
+    },
+    {
+      label: "Target",
+      shortLabel: "Target",
+      value: target,
+      onChange: setTarget,
+      options: [...new Set(events.map((event) => event.target))].map(
+        (value) => [value, value],
+      ),
+    },
+    {
+      label: "Outcome",
+      shortLabel: "Outcome",
+      value: outcome,
+      onChange: (value: string) => setOutcome(value as EventOutcome | "all"),
+      options: [
+        ["succeeded", "Succeeded"],
+        ["failed", "Failed"],
+      ],
+    },
+  ];
+
   return (
-    <section
-      aria-label="Organization audit events"
-      className="overflow-hidden rounded-xl border border-border bg-card"
-    >
-      <div className="border-b border-border px-3 py-3">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
-          <div className="relative min-w-0 flex-1">
-            <label
-              htmlFor="audit-search"
-              className="pointer-events-none absolute top-1/2 left-9 z-10 -translate-y-1/2 text-xs font-medium text-text-muted"
+    <section aria-label="Organization audit events" className="@container">
+      <div className="mb-4 flex flex-wrap items-end gap-x-4 gap-y-3">
+        <div
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
+          aria-label="Event filters"
+        >
+          {filters.map((filter) => (
+            <Select
+              key={filter.label}
+              value={filter.value}
+              onValueChange={filter.onChange}
             >
-              Search events
-            </label>
+              <SelectTrigger
+                aria-label={filter.label}
+                className={`max-w-full gap-2 border-transparent px-2.5 shadow-none data-[size=default]:h-11 sm:data-[size=default]:h-9 ${filter.value !== "all" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-surface-elevated"}`}
+              >
+                <SelectValue>
+                  {filter.value === "all"
+                    ? filter.shortLabel
+                    : filter.options.find(
+                        ([value]) => value === filter.value,
+                      )?.[1]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent position="popper" align="start">
+                <SelectItem value="all">
+                  All{" "}
+                  {filter.label === "Event type"
+                    ? "event types"
+                    : `${filter.label.toLowerCase()}s`}
+                </SelectItem>
+                {filter.options.map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ))}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                className="h-11 max-w-full gap-2 sm:h-9"
+              >
+                <CalendarIcon aria-hidden="true" className="size-4" />
+                {dateRange?.from
+                  ? `${format(dateRange.from, "MMM d, yyyy")}${dateRange.to && dateRange.to.getTime() !== dateRange.from.getTime() ? ` – ${format(dateRange.to, "MMM d, yyyy")}` : ""}`
+                  : "Select date range"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              className="max-h-[var(--radix-popover-content-available-height)] w-auto max-w-[calc(100vw-2rem)] overflow-y-auto p-3"
+              aria-label="Filter by date range"
+            >
+              <p className="text-sm font-medium">Date range</p>
+              <p className="text-xs text-muted-foreground">
+                Select a start and end date. Times are in EDT.
+              </p>
+              <Calendar
+                mode="range"
+                selected={dateRange}
+                onSelect={setDateRange}
+                defaultMonth={dateRange?.from ?? new Date(2026, 8, 15)}
+                className="[--cell-size:min(2.75rem,calc((100vw-6rem)/7))] sm:[--cell-size:2.25rem]"
+              />
+              <Button variant="ghost" onClick={() => setDateRange(undefined)}>
+                Clear dates
+              </Button>
+            </PopoverContent>
+          </Popover>
+          {filtersActive && (
+            <Button
+              variant="ghost"
+              onClick={clearFilters}
+              className="h-11 text-muted-foreground sm:h-9"
+            >
+              Clear filters
+            </Button>
+          )}
+        </div>
+        <div className="w-full sm:w-64">
+          <label
+            htmlFor="audit-search"
+            className="mb-1.5 block text-xs text-muted-foreground"
+          >
+            Search events
+          </label>
+          <div className="relative">
             <SearchIcon
               className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-text-muted"
               aria-hidden="true"
@@ -346,214 +503,164 @@ export function AuditLog() {
               id="audit-search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="h-11 pr-3 pl-[7.5rem] lg:h-9"
+              placeholder="Search actors, actions, targets…"
+              className="h-11 pl-9 sm:h-9"
             />
           </div>
-          <Select
-            value={type}
-            onValueChange={(value) => setType(value as EventType | "all")}
-          >
-            <SelectTrigger
-              aria-label="Event type"
-              className="w-full bg-input-background px-3 data-[size=default]:h-11 lg:w-44 lg:data-[size=default]:h-9"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent
-              position="popper"
-              align="start"
-              className="w-[var(--radix-select-trigger-width)]"
-            >
-              <SelectItem value="all">All event types</SelectItem>
-              <SelectItem value="access">Access</SelectItem>
-              <SelectItem value="integration">Integration</SelectItem>
-              <SelectItem value="organization">Organization</SelectItem>
-              <SelectItem value="server">Server</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select
-            value={outcome}
-            onValueChange={(value) => setOutcome(value as EventOutcome | "all")}
-          >
-            <SelectTrigger
-              aria-label="Outcome"
-              className="w-full bg-input-background px-3 data-[size=default]:h-11 lg:w-40 lg:data-[size=default]:h-9"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent
-              position="popper"
-              align="start"
-              className="w-[var(--radix-select-trigger-width)]"
-            >
-              <SelectItem value="all">All outcomes</SelectItem>
-              <SelectItem value="succeeded">Succeeded</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
-            </SelectContent>
-          </Select>
-          {filtersActive ? (
-            <p
-              className="shrink-0 px-1 text-xs text-text-muted lg:min-w-16 lg:text-right"
-              role="status"
-            >
-              {filteredEvents.length}{" "}
-              {filteredEvents.length === 1 ? "result" : "results"}
-            </p>
-          ) : null}
         </div>
       </div>
-
-      {filteredEvents.length ? (
-        <>
-          <div className="hidden 2xl:block">
-            <Table className="table-fixed">
-              <TableCaption className="sr-only">
-                Sample organization audit events
-              </TableCaption>
-              <TableHeader>
-                <TableRow className="border-b border-border hover:bg-transparent">
-                  <TableHead className="w-24 px-4 text-xs text-text-muted">
-                    Time
-                  </TableHead>
-                  <TableHead className="w-44 text-xs text-text-muted">
-                    Actor
-                  </TableHead>
-                  <TableHead className="w-[29%] text-xs text-text-muted">
-                    Event
-                  </TableHead>
-                  <TableHead className="w-[22%] text-xs text-text-muted">
-                    Target
-                  </TableHead>
-                  <TableHead className="w-[7rem] text-xs text-text-muted">
-                    Outcome
-                  </TableHead>
-                  <TableHead className="w-[10.5rem] pr-4 text-xs text-text-muted">
-                    Source
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredEvents.map((event) => (
-                  <TableRow
-                    key={event.id}
-                    onClick={() => setSelectedEvent(event)}
-                    className="cursor-pointer hover:bg-surface-elevated/80 focus-within:bg-surface-elevated/80"
-                  >
-                    <TableCell className="px-4 py-[11px] align-middle">
-                      <time dateTime={event.timestamp}>
-                        <span className="block text-sm font-medium text-foreground">
-                          {event.date.replace(", 2026", "")}
-                        </span>
-                        <span className="mt-0.5 block font-mono text-xs text-text-muted">
-                          {event.time}
-                        </span>
-                      </time>
-                    </TableCell>
-                    <TableCell className="py-[11px] align-middle">
-                      <span className="block text-sm text-foreground">
-                        {event.actor}
-                      </span>
-                      <span className="mt-0.5 block text-xs text-text-muted">
-                        {event.actorDetail}
-                      </span>
-                    </TableCell>
-                    <TableCell className="py-[11px] align-middle">
-                      <span className="block text-sm text-foreground">
-                        {event.action}
-                      </span>
-                      <span className="mt-1 block text-xs text-text-muted">
-                        {eventTypeLabels[event.type]}
-                      </span>
-                    </TableCell>
-                    <TableCell className="py-[11px] align-middle">
-                      <span className="block truncate text-sm text-foreground">
-                        {event.target}
-                      </span>
-                    </TableCell>
-                    <TableCell className="py-[11px] align-middle">
-                      <OutcomeBadge outcome={event.outcome} />
-                    </TableCell>
-                    <TableCell className="py-[11px] pr-4 align-middle">
-                      <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span className="truncate">{event.source}</span>
-                        <button
-                          type="button"
-                          aria-label={`View event: ${event.action} for ${event.target}`}
-                          aria-haspopup="dialog"
-                          onClick={(clickEvent) => {
-                            clickEvent.stopPropagation();
-                            setSelectedEvent(event);
-                          }}
-                          className="-m-1 shrink-0 rounded p-1 text-text-muted/60 outline-none transition-colors hover:text-text-muted focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          <ChevronRightIcon
-                            className="size-4"
-                            aria-hidden="true"
-                          />
-                        </button>
-                      </span>
-                    </TableCell>
+      <div className="overflow-hidden rounded-lg border border-border bg-card">
+        {filteredEvents.length ? (
+          <>
+            <div className="hidden @[880px]:block">
+              <Table className="table-fixed">
+                <TableCaption className="sr-only">
+                  Organization audit events, newest first. Times in EDT.
+                </TableCaption>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-[10%] pl-4 text-xs">Type</TableHead>
+                    <TableHead className="w-[13%] text-xs">
+                      Date <span className="text-text-muted">EDT</span>
+                    </TableHead>
+                    <TableHead className="w-[16%] text-xs">Actor</TableHead>
+                    <TableHead className="w-[20%] text-xs">Action</TableHead>
+                    <TableHead className="w-[16%] text-xs">Target</TableHead>
+                    <TableHead className="pr-4 text-xs">Details</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {filteredEvents.map((event) => (
+                    <TableRow
+                      key={event.id}
+                      onClick={() => setSelectedEvent(event)}
+                      className="cursor-pointer hover:bg-surface-elevated/80 focus-within:bg-surface-elevated/80"
+                    >
+                      <TableCell className="py-3 pl-4 text-xs text-muted-foreground">
+                        {eventTypeLabels[event.type]}
+                      </TableCell>
+                      <TableCell className="py-3">
+                        <time dateTime={event.timestamp}>
+                          <span className="block text-xs">{event.date}</span>
+                          <span className="mt-1 block text-xs tabular-nums text-text-muted">
+                            {event.time}
+                          </span>
+                        </time>
+                      </TableCell>
+                      <TableCell className="py-3">
+                        <span
+                          className="block truncate text-sm"
+                          title={event.actor}
+                        >
+                          {event.actor}
+                        </span>
+                        <span
+                          className="mt-1 block truncate text-xs text-text-muted"
+                          title={event.actorDetail}
+                        >
+                          {event.actorDetail}
+                        </span>
+                      </TableCell>
+                      <TableCell className="py-3">
+                        <span className="mb-1.5 block whitespace-normal text-sm">
+                          {event.action}
+                        </span>
+                        <OutcomeBadge outcome={event.outcome} />
+                      </TableCell>
+                      <TableCell className="py-3">
+                        <span
+                          className="block truncate text-sm"
+                          title={event.target}
+                        >
+                          {event.target}
+                        </span>
+                      </TableCell>
+                      <TableCell className="py-3 pr-4">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+                            title={event.metadata}
+                          >
+                            {event.metadata}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`View event: ${event.action} for ${event.target}`}
+                            aria-haspopup="dialog"
+                            onClick={(clickEvent) => {
+                              clickEvent.stopPropagation();
+                              setSelectedEvent(event);
+                            }}
+                            className="flex size-8 shrink-0 items-center justify-center rounded text-text-muted outline-none hover:bg-surface-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <ChevronRightIcon
+                              className="size-4"
+                              aria-hidden="true"
+                            />
+                          </button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
 
-          <ul className="divide-y divide-border 2xl:hidden">
-            {filteredEvents.map((event) => (
-              <li key={event.id}>
-                <button
-                  type="button"
-                  onClick={() => setSelectedEvent(event)}
-                  className="flex min-h-11 w-full items-start gap-3 px-4 py-4 text-left outline-none transition-colors hover:bg-surface-elevated/80 focus-visible:bg-surface-elevated/80 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                  aria-label={`View event: ${event.action} for ${event.target}`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="font-medium text-foreground">
-                        {event.action}
+            <ul className="divide-y divide-border @[880px]:hidden">
+              {filteredEvents.map((event) => (
+                <li key={event.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedEvent(event)}
+                    className="flex min-h-11 w-full items-start gap-3 px-4 py-4 text-left outline-none transition-colors hover:bg-surface-elevated/80 focus-visible:bg-surface-elevated/80 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    aria-label={`View event: ${event.action} for ${event.target}`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-medium text-foreground">
+                          {event.action}
+                        </p>
+                        <OutcomeBadge outcome={event.outcome} />
+                      </div>
+                      <p className="mt-1.5 truncate text-sm text-foreground">
+                        {event.target}
                       </p>
-                      <OutcomeBadge outcome={event.outcome} />
+                      <p className="mt-2 text-xs text-text-muted">
+                        {event.actor} · {event.date} at {event.time}
+                      </p>
                     </div>
-                    <p className="mt-1.5 truncate text-sm text-foreground">
-                      {event.target}
-                    </p>
-                    <p className="mt-2 text-xs text-text-muted">
-                      {event.actor} · {event.date.replace(", 2026", "")} at{" "}
-                      {event.time}
-                    </p>
-                  </div>
-                  <ChevronRightIcon
-                    className="mt-1 size-4 shrink-0 text-text-muted/60"
-                    aria-hidden="true"
-                  />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <div className="flex min-h-72 flex-col items-center justify-center px-6 py-12 text-center">
-          <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-surface-elevated">
-            <SearchXIcon
-              className="size-5 text-text-muted"
-              aria-hidden="true"
-            />
+                    <ChevronRightIcon
+                      className="mt-1 size-4 shrink-0 text-text-muted/60"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
+          <div className="flex min-h-72 flex-col items-center justify-center px-6 py-12 text-center">
+            <div className="flex size-10 items-center justify-center rounded-lg border border-border bg-surface-elevated">
+              <SearchXIcon
+                className="size-5 text-text-muted"
+                aria-hidden="true"
+              />
+            </div>
+            <h2 className="mt-4 text-base font-semibold">No matching events</h2>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              Try another search or clear your filters.
+            </p>
           </div>
-          <h2 className="mt-4 text-base font-semibold">No matching events</h2>
-          <p className="mt-1 max-w-sm text-sm text-muted-foreground">
-            Try another search or clear your filters.
-          </p>
-          <Button
-            variant="outline"
-            className="mt-4 h-11 lg:h-8"
-            onClick={clearFilters}
-          >
-            Clear filters
-          </Button>
-        </div>
-      )}
-
+        )}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-4 text-xs text-muted-foreground">
+        <p role="status">
+          {filteredEvents.length}{" "}
+          {filteredEvents.length === 1 ? "result" : "results"}
+          {filtersActive ? ` of ${events.length} events` : ""}
+        </p>
+        <p>Newest first · Times in EDT</p>
+      </div>
       <Sheet
         open={selectedEvent !== null}
         onOpenChange={(open) => {
@@ -561,7 +668,7 @@ export function AuditLog() {
         }}
       >
         <SheetContent
-          className="m-0 w-full gap-0 data-[side=right]:right-0! data-[side=right]:sm:max-w-[28.75rem]"
+          className="m-0 w-full gap-0 data-[side=right]:right-0! data-[side=right]:w-full! data-[side=right]:sm:max-w-[28.75rem]"
           closeButtonClassName="size-11 lg:size-7"
           overlayClassName="supports-backdrop-filter:backdrop-blur-[1px]"
         >

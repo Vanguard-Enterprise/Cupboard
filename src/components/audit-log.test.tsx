@@ -31,33 +31,13 @@ describe("Audit log", () => {
     render(<AuditLog />);
 
     const search = screen.getByLabelText("Search events");
-    expect(
-      document.querySelector('label[for="audit-search"]')?.className,
-    ).not.toContain("sr-only");
-    expect(search.className).toContain("h-11");
-    expect(search.className).toContain("lg:h-9");
-    expect(search.parentElement?.parentElement?.className).toContain(
-      "lg:flex-row",
-    );
-    expect(search.parentElement?.parentElement?.className).not.toContain(
-      "md:flex-row",
-    );
-    for (const select of ["Event type", "Outcome"]) {
-      const trigger = screen.getByRole("combobox", { name: select });
-      expect(trigger.className).toContain("data-[size=default]:h-11");
-      expect(trigger.className).toContain("lg:data-[size=default]:h-9");
-      expect(trigger.className).toContain("lg:w-");
-    }
-    expect(screen.queryByText(/results?$/)).toBeNull();
-    expect(screen.getByRole("columnheader", { name: "Source" })).toBeTruthy();
-    expect(
-      screen.getByRole("table").parentElement?.parentElement?.className,
-    ).toContain("2xl:block");
-    expect(screen.getByRole("list").className).toContain("2xl:hidden");
+    expect(screen.getByRole("columnheader", { name: "Details" })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: "Date EDT" })).toBeTruthy();
+    expect(screen.getByText("9 results")).toBeTruthy();
 
     await user.type(search, "credential");
 
-    expect(screen.getByText("1 result")).toBeTruthy();
+    expect(screen.getByText("1 result of 9 events")).toBeTruthy();
     expect(
       screen.getAllByText("Replaced RCON credential").length,
     ).toBeGreaterThan(0);
@@ -117,7 +97,7 @@ describe("Audit log", () => {
 
     await user.type(screen.getByLabelText("Search events"), "Approved action");
 
-    expect(screen.getByText("1 result")).toBeTruthy();
+    expect(screen.getByText("1 result of 9 events")).toBeTruthy();
     expect(screen.getAllByText("Restarted server").length).toBeGreaterThan(0);
     expect(screen.queryByText("Updated organization profile")).toBeNull();
   });
@@ -131,26 +111,24 @@ describe("Audit log", () => {
     await user.click(screen.getByRole("combobox", { name: "Outcome" }));
     await user.click(screen.getByRole("option", { name: "Failed" }));
     await user.type(screen.getByLabelText("Search events"), "not-an-event");
-    expect(screen.getByText("0 results")).toBeTruthy();
+    expect(screen.getByText("0 results of 9 events")).toBeTruthy();
     expect(screen.getByText("No matching events")).toBeTruthy();
     expect(
       screen.getByText("Try another search or clear your filters."),
     ).toBeTruthy();
 
     const clearFilters = screen.getByRole("button", { name: "Clear filters" });
-    expect(clearFilters.className).toContain("h-11");
-    expect(clearFilters.className).toContain("lg:h-8");
     await user.click(clearFilters);
-    expect(screen.queryByText(/results?$/)).toBeNull();
+    expect(screen.getByText("9 results")).toBeTruthy();
     expect(screen.getByLabelText("Search events").getAttribute("value")).toBe(
       "",
     );
     expect(
       screen.getByRole("combobox", { name: "Event type" }).textContent,
-    ).toContain("All event types");
+    ).toContain("Type");
     expect(
       screen.getByRole("combobox", { name: "Outcome" }).textContent,
-    ).toContain("All outcomes");
+    ).toContain("Outcome");
   });
 
   it("filters by event type and outcome with source-owned menus", async () => {
@@ -165,7 +143,7 @@ describe("Audit log", () => {
 
     eventType.focus();
     await user.keyboard("{Enter}{ArrowDown}{Enter}");
-    expect(screen.getByText("3 results")).toBeTruthy();
+    expect(screen.getByText("3 results of 9 events")).toBeTruthy();
 
     const outcome = screen.getByRole("combobox", { name: "Outcome" });
     await user.click(outcome);
@@ -175,10 +153,41 @@ describe("Audit log", () => {
 
     await user.click(outcome);
     await user.click(screen.getByRole("option", { name: "Failed" }));
-    expect(screen.getByText("1 result")).toBeTruthy();
+    expect(screen.getByText("1 result of 9 events")).toBeTruthy();
     expect(
       screen.getAllByText("Completed login challenge").length,
     ).toBeGreaterThan(0);
     expect(screen.queryByText("Changed member role")).toBeNull();
+  });
+  it("combines actor, action, target, and inclusive calendar dates", async () => {
+    const user = userEvent.setup();
+    render(<AuditLog />);
+    for (const [filter, option] of [
+      ["Actor", "Demo operator"],
+      ["Action", "Updated connection settings"],
+      ["Target", "Rusty Moose East"],
+    ]) {
+      await user.click(screen.getByRole("combobox", { name: filter }));
+      await user.click(screen.getByRole("option", { name: option }));
+    }
+    expect(screen.getByText("1 result of 9 events")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Select date range" }));
+    await user.click(
+      screen.getByRole("button", { name: /Sunday, September 13th, 2026/ }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Tuesday, September 15th, 2026/ }),
+    );
+    await user.keyboard("{Escape}");
+    expect(screen.getByText("1 result of 9 events")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByText("9 results")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Select date range" }));
+    await user.click(
+      screen.getByRole("button", { name: /Monday, September 14th, 2026/ }),
+    );
+    await user.keyboard("{Escape}");
+    expect(screen.getByText("3 results of 9 events")).toBeTruthy();
+    expect(screen.queryByText("Updated connection settings")).toBeNull();
   });
 });
