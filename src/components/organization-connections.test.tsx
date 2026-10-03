@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OrganizationConnections } from "./organization-connections";
@@ -25,9 +25,7 @@ describe("Organization connections", () => {
 
     expect(screen.queryByText("Preview only")).toBeNull();
     expect(screen.getByText("Needs attention")).toBeTruthy();
-    expect(screen.queryByText("Pterodactyl")).toBeNull();
-
-    await user.click(screen.getByRole("tab", { name: "Available" }));
+    expect(screen.queryByRole("tab")).toBeNull();
     expect(screen.getByText("Pterodactyl")).toBeTruthy();
     expect(screen.getByText("Cloudflare")).toBeTruthy();
 
@@ -43,17 +41,13 @@ describe("Organization connections", () => {
       expect(categoryBadge.className).not.toContain("text-text-muted/80");
     }
 
-    const available = screen.getByRole("region", {
-      name: "Available connections",
+    const connected = screen.getByRole("region", {
+      name: "Connected services",
     });
-    const catalogGrid = available.querySelector("ul")!;
-    expect(catalogGrid.className).toContain("md:grid-cols-2");
-    expect(catalogGrid.className).toContain("2xl:grid-cols-4");
-    expect(catalogGrid.className).not.toContain("grid-cols-3");
-    expect(available.querySelectorAll("li")).toHaveLength(4);
-    for (const card of available.querySelectorAll("li")) {
-      expect(card.className).toContain("h-[184px]");
-    }
+    expect(within(connected).getAllByRole("listitem")[0].textContent).toContain(
+      "Pelican Panel",
+    );
+    expect(within(connected).getAllByRole("listitem")).toHaveLength(2);
 
     const search = screen.getByRole("searchbox", {
       name: "Search available connections",
@@ -74,6 +68,19 @@ describe("Organization connections", () => {
     );
     await user.click(clearSearch);
     expect(screen.getByText("Pterodactyl")).toBeTruthy();
+    expect(document.activeElement).toBe(search);
+    expect(screen.getByText("Pelican Panel")).toBeTruthy();
+  });
+
+  it("moves focus to catalog search from Browse connections", async () => {
+    const user = userEvent.setup();
+    mount();
+    const browse = screen.getByRole("button", { name: "Browse connections" });
+    browse.focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(
+      screen.getByRole("searchbox", { name: "Search available connections" }),
+    );
   });
 
   it("filters connections independently of the browser locale", async () => {
@@ -86,7 +93,6 @@ describe("Organization connections", () => {
     const user = userEvent.setup();
     mount();
 
-    await user.click(screen.getByRole("tab", { name: "Available" }));
     await user.type(
       screen.getByRole("searchbox", {
         name: "Search available connections",
@@ -101,9 +107,8 @@ describe("Organization connections", () => {
     const user = userEvent.setup();
     mount();
 
-    await user.click(screen.getByRole("tab", { name: "Available" }));
     const setupCloudflare = screen.getByRole("button", {
-      name: "Set up Cloudflare",
+      name: "View Cloudflare requirements",
     });
     setupCloudflare.focus();
     await user.keyboard("{Enter}");
@@ -114,7 +119,7 @@ describe("Organization connections", () => {
     expect(document.getElementById(describedBy!)?.textContent).toContain(
       "sample data",
     );
-    const dialogTitle = screen.getByText("Connect Cloudflare");
+    const dialogTitle = screen.getByText("Cloudflare requirements");
     expect(document.activeElement).toBe(dialogTitle);
     expect(dialogTitle.className).toContain("focus-visible:ring-2");
     expect(dialogTitle.className).toContain("focus-visible:ring-ring/50");
@@ -132,24 +137,10 @@ describe("Organization connections", () => {
     expect(close.getAttribute("data-variant")).toBe("secondary");
     await user.click(close);
 
-    await user.click(screen.getByRole("tab", { name: "Connected" }));
-
-    expect(
-      screen.getByRole("button", {
-        name: "Manage Discord",
-        description:
-          /Connected.*Community roles and moderation events.*Northstar Rust.*Sync healthy.*Checked 2 minutes ago/i,
-      }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", {
-        name: "Resolve Pelican Panel",
-        description:
-          /Needs attention.*Server status and power controls.*Operations panel.*API key rejected.*Checked 18 minutes ago/i,
-      }),
-    ).toBeTruthy();
-
-    await user.click(screen.getByText("Community roles and moderation events"));
+    expect(document.activeElement).toBe(setupCloudflare);
+    await user.click(
+      screen.getByRole("button", { name: "View Discord details" }),
+    );
     expect(screen.getByText("Discord connection")).toBeTruthy();
     expect(
       screen.getByText(
@@ -157,15 +148,24 @@ describe("Organization connections", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("Access")).toBeTruthy();
+    expect(
+      within(screen.getByRole("dialog")).getByText("Northstar Rust"),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText(/API key|password|token/i)).toBeNull();
     expect(screen.getAllByText("Sync healthy")).toHaveLength(2);
     expect(screen.getByText("Read server and role details")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Close" }));
     await user.click(
-      screen.getByRole("button", { name: "Resolve Pelican Panel" }),
+      screen.getByRole("button", { name: "View Pelican Panel details" }),
     );
     expect(screen.getByText("Pelican Panel connection")).toBeTruthy();
     expect(screen.getAllByText("API key rejected")).toHaveLength(2);
     expect(screen.getByText("Send approved power actions")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "View Pelican Panel details" }),
+    );
   });
 });

@@ -110,8 +110,9 @@ acknowledgements. The organization audit log at
 `/dashboard/organization/security/audit-log` has searchable sample events and
 redacted event details until server-side audit storage exists. Organization
 connections are previewed at
-`/dashboard/organization/integrations/connections`; the page uses sample states
-and does not connect external accounts. Organization notification and
+`/dashboard/organization/integrations/connections`; the page shows connected services above a searchable catalog, with attention-needed
+connections first and dialogs for account details and setup requirements. It uses
+sample states and does not connect external accounts. Organization notification and
 browser-data settings live at
 `/dashboard/organization/settings/notifications-data`. Organization users and
 roles are managed from `/dashboard/organization/team/users` and

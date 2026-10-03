@@ -7,7 +7,6 @@ import {
   CloudIcon,
   GitBranchIcon,
   MessageSquareIcon,
-  PlusIcon,
   SearchIcon,
   ServerIcon,
   TriangleAlertIcon,
@@ -29,7 +28,6 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type ConnectionStatus = "connected" | "attention";
 
@@ -153,6 +151,8 @@ function StatusBadge({ status }: { status: ConnectionStatus }) {
 export function OrganizationConnections() {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<SelectedService>();
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const dialogTitleRef = useRef<HTMLHeadingElement>(null);
   const filteredCatalog = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -166,179 +166,170 @@ export function OrganizationConnections() {
 
   return (
     <>
-      <h1 className="mb-5 text-2xl font-semibold tracking-tight">
-        Connections
-      </h1>
-
-      <Tabs defaultValue="connected" className="gap-4">
-        <TabsList
-          aria-label="Connection sections"
-          className="h-9! gap-1 rounded-lg bg-surface-elevated p-1"
+      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Connections</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Review connected services and explore integrations for your
+            organization.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          className="min-h-11"
+          onClick={() => searchRef.current?.focus()}
         >
-          <TabsTrigger
-            value="connected"
-            className="h-7 rounded-md px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-          >
-            <ServerIcon /> Connected
-          </TabsTrigger>
-          <TabsTrigger
-            value="available"
-            className="h-7 rounded-md px-3 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
-          >
-            <PlusIcon /> Available
-          </TabsTrigger>
-        </TabsList>
+          Browse connections <ArrowRightIcon aria-hidden="true" />
+        </Button>
+      </header>
 
-        <TabsContent value="connected">
-          <section aria-labelledby="connected-heading">
-            <h2 id="connected-heading" className="sr-only">
-              Connected services
-            </h2>
-
-            <ul className="overflow-hidden rounded-xl border border-border bg-card">
-              {connectedServices.map((service) => (
-                <li
-                  key={service.id}
-                  className="border-b border-border last:border-b-0"
-                >
-                  <button
-                    type="button"
-                    aria-label={`${service.status === "connected" ? "Manage" : "Resolve"} ${service.name}`}
-                    aria-describedby={`${service.id}-connection-details ${service.id}-last-checked`}
-                    onClick={() => setSelected({ kind: "connected", service })}
-                    className={`group grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 border-l-2 px-3 py-2.5 text-left outline-none transition-colors focus-visible:bg-surface-elevated focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_7.5rem_5.75rem] ${
-                      service.status === "attention"
-                        ? "border-l-warning/60 hover:bg-surface-elevated/50"
-                        : "border-l-transparent hover:bg-surface-elevated/50"
-                    }`}
+      <section aria-labelledby="connected-heading">
+        <div className="mb-4 flex items-center gap-2">
+          <h2 id="connected-heading" className="text-base font-semibold">
+            Connected services
+          </h2>
+          <span className="text-sm text-muted-foreground">
+            {connectedServices.length}
+          </span>
+        </div>
+        <ul className="overflow-hidden rounded-xl border border-border bg-card">
+          {[...connectedServices]
+            .sort(
+              (a, b) =>
+                Number(b.status === "attention") -
+                Number(a.status === "attention"),
+            )
+            .map((service) => (
+              <li
+                key={service.id}
+                className={`grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3 border-b border-l-2 p-4 last:border-b-0 lg:grid-cols-[auto_minmax(0,1fr)_11rem_auto] lg:items-center ${service.status === "attention" ? "border-l-warning/60" : "border-l-transparent"}`}
+              >
+                <ServiceIcon icon={service.icon} />
+                <div className="min-w-0">
+                  <h3 className="font-medium">{service.name}</h3>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {service.account}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">
+                    {service.purpose}
+                  </p>
+                </div>
+                <div className="col-start-2 lg:col-start-auto">
+                  <StatusBadge status={service.status} />
+                  <p
+                    className={`mt-1.5 text-sm ${service.status === "attention" ? "text-warning" : "text-muted-foreground"}`}
                   >
-                    <ServiceIcon icon={service.icon} />
-                    <div
-                      id={`${service.id}-connection-details`}
-                      className="min-w-0"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium text-foreground">
-                          {service.name}
-                        </span>
-                        <StatusBadge status={service.status} />
-                      </div>
-                      <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                        {service.purpose}
-                      </p>
-                      <p className="mt-1 text-xs text-text-muted">
-                        <span className="text-muted-foreground">
-                          {service.account}
-                        </span>
-                        <span className="px-1.5" aria-hidden="true">
-                          ·
-                        </span>
-                        {service.statusDetail}
-                      </p>
-                    </div>
-                    <span
-                      id={`${service.id}-last-checked`}
-                      className="col-start-2 whitespace-nowrap pr-2 text-[11px] leading-4 text-text-muted sm:col-start-auto sm:text-right"
-                    >
-                      Checked {service.lastChecked}
-                    </span>
-                    <span
-                      aria-hidden="true"
-                      className={`col-start-2 inline-flex h-8 w-fit items-center justify-center gap-1.5 rounded-lg border px-2.5 text-sm font-medium transition-colors group-hover:border-border-strong sm:col-start-auto sm:w-full [@media(any-pointer:coarse)]:h-11 ${
-                        service.status === "attention"
-                          ? "border-warning/40 text-warning"
-                          : "border-border bg-input-background text-foreground"
-                      }`}
-                    >
-                      {service.status === "connected" ? "Manage" : "Resolve"}
-                      <ArrowRightIcon className="size-4" aria-hidden="true" />
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </TabsContent>
-
-        <TabsContent value="available">
-          <section aria-labelledby="catalog-heading">
-            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <h2 id="catalog-heading" className="sr-only">
-                Available connections
-              </h2>
-              <div className="w-full sm:ml-auto sm:w-64">
-                <InputGroup className="h-10 bg-input-background [@media(any-pointer:coarse)]:h-11">
-                  <InputGroupAddon>
-                    <SearchIcon aria-hidden="true" />
-                  </InputGroupAddon>
-                  <InputGroupInput
-                    id="connection-search"
-                    type="search"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search connections"
-                    aria-label="Search available connections"
-                  />
-                </InputGroup>
-              </div>
-            </div>
-
-            {filteredCatalog.length > 0 ? (
-              <ul className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-                {filteredCatalog.map((service) => (
-                  <li
-                    key={service.id}
-                    className="flex h-[184px] flex-col rounded-xl border border-border bg-card p-4 transition-colors hover:border-border-strong [@media(any-pointer:coarse)]:h-[196px]"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <ServiceIcon icon={service.icon} />
-                      <Badge
-                        variant="outline"
-                        className="-mt-0.5 -mr-0.5 border-transparent bg-surface-elevated/50 font-normal text-text-muted"
-                      >
-                        {service.category}
-                      </Badge>
-                    </div>
-                    <h3 className="mt-3 font-medium">{service.name}</h3>
-                    <p className="mt-0.5 line-clamp-2 text-sm leading-5 text-muted-foreground">
-                      {service.description}
-                    </p>
-                    <Button
-                      variant="ghost"
-                      className="mt-auto h-8 self-start px-0 text-primary hover:bg-transparent hover:text-primary [@media(any-pointer:coarse)]:h-11"
-                      aria-label={`Set up ${service.name}`}
-                      onClick={() => setSelected({ kind: "catalog", service })}
-                    >
-                      Set up
-                      <ArrowRightIcon data-icon="inline-end" />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="rounded-xl bg-card/50 px-5 py-10 text-center">
-                <SearchIcon
-                  className="mx-auto size-5 text-text-muted"
-                  aria-hidden="true"
-                />
-                <h3 className="mt-3 text-sm font-medium">
-                  No connections found
-                </h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Try a service name or category.
-                </p>
+                    {service.statusDetail}
+                  </p>
+                  <p className="mt-1 text-xs text-text-muted">
+                    Checked {service.lastChecked}
+                  </p>
+                </div>
                 <Button
-                  variant="secondary"
-                  className="mt-4"
-                  onClick={() => setQuery("")}
+                  variant="outline"
+                  className="col-start-2 min-h-11 justify-self-start lg:col-start-auto"
+                  aria-label={`View ${service.name} details`}
+                  onClick={(event) => {
+                    triggerRef.current = event.currentTarget;
+                    setSelected({ kind: "connected", service });
+                  }}
                 >
-                  Clear search
+                  View details <ArrowRightIcon aria-hidden="true" />
                 </Button>
-              </div>
-            )}
-          </section>
-        </TabsContent>
-      </Tabs>
+              </li>
+            ))}
+        </ul>
+      </section>
+
+      <section
+        aria-labelledby="catalog-heading"
+        className="mt-10 border-t border-border pt-8"
+      >
+        <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 id="catalog-heading" className="text-base font-semibold">
+              Available connections
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Find a service and review what you need to connect it.
+            </p>
+          </div>
+          <InputGroup className="h-11 w-full bg-input-background sm:w-64">
+            <InputGroupAddon>
+              <SearchIcon aria-hidden="true" />
+            </InputGroupAddon>
+            <InputGroupInput
+              ref={searchRef}
+              id="connection-search"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search connections"
+              aria-label="Search available connections"
+            />
+          </InputGroup>
+        </div>
+        <p role="status" className="sr-only">
+          {filteredCatalog.length} available connections
+        </p>
+        {filteredCatalog.length > 0 ? (
+          <ul className="grid gap-4 md:grid-cols-2">
+            {filteredCatalog.map((service) => (
+              <li
+                key={service.id}
+                className="flex flex-col rounded-xl border border-border bg-card p-5"
+              >
+                <div className="flex items-center gap-3">
+                  <ServiceIcon icon={service.icon} />
+                  <div>
+                    <h3 className="font-medium">{service.name}</h3>
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      {service.category}
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-4 text-sm leading-6 text-muted-foreground">
+                  {service.description}
+                </p>
+                <div className="mt-auto pt-4">
+                  <Button
+                    variant="outline"
+                    className="min-h-11"
+                    aria-label={`View ${service.name} requirements`}
+                    onClick={(event) => {
+                      triggerRef.current = event.currentTarget;
+                      setSelected({ kind: "catalog", service });
+                    }}
+                  >
+                    View requirements <ArrowRightIcon aria-hidden="true" />
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="rounded-xl bg-card/50 px-5 py-10 text-center">
+            <SearchIcon
+              className="mx-auto size-5 text-text-muted"
+              aria-hidden="true"
+            />
+            <h3 className="mt-3 text-sm font-medium">No connections found</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Try a service name or category.
+            </p>
+            <Button
+              variant="secondary"
+              className="mt-4 min-h-11"
+              onClick={() => {
+                setQuery("");
+                searchRef.current?.focus();
+              }}
+            >
+              Clear search
+            </Button>
+          </div>
+        )}
+      </section>
 
       <Dialog
         open={Boolean(selected)}
@@ -346,7 +337,11 @@ export function OrganizationConnections() {
       >
         {selected && (
           <DialogContent
-            className="gap-3 sm:max-w-sm"
+            className="gap-5 sm:max-w-md"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              triggerRef.current?.focus();
+            }}
             showCloseButton={false}
             onOpenAutoFocus={(event) => {
               event.preventDefault();
@@ -363,7 +358,7 @@ export function OrganizationConnections() {
                 >
                   {selected.kind === "connected"
                     ? `${selected.service.name} connection`
-                    : `Connect ${selected.service.name}`}
+                    : `${selected.service.name} requirements`}
                 </DialogTitle>
               </div>
               <DialogDescription>
@@ -374,7 +369,11 @@ export function OrganizationConnections() {
             </DialogHeader>
 
             {selected.kind === "connected" && (
-              <div className="flex items-center justify-between rounded-lg border border-border bg-input-background px-3 py-2.5">
+              <div className="space-y-3 rounded-lg border border-border bg-input-background p-4">
+                <div>
+                  <p className="text-xs text-text-muted">Linked account</p>
+                  <p className="mt-1 text-sm">{selected.service.account}</p>
+                </div>
                 <div>
                   <p className="text-xs text-text-muted">Status</p>
                   <p className="mt-0.5 text-sm">
@@ -382,6 +381,9 @@ export function OrganizationConnections() {
                   </p>
                 </div>
                 <StatusBadge status={selected.service.status} />
+                <p className="text-xs text-text-muted">
+                  Checked {selected.service.lastChecked}
+                </p>
               </div>
             )}
 
@@ -400,10 +402,7 @@ export function OrganizationConnections() {
 
             <DialogFooter className="bg-card py-3">
               <DialogClose asChild>
-                <Button
-                  variant="secondary"
-                  className="[@media(any-pointer:coarse)]:h-11"
-                >
+                <Button variant="secondary" className="min-h-11">
                   Close
                 </Button>
               </DialogClose>
