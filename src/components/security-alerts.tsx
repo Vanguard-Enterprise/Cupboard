@@ -12,12 +12,10 @@ import {
   type RefObject,
 } from "react";
 import {
-  CheckCircle2Icon,
-  CircleAlertIcon,
+  ArrowLeftIcon,
   Clock3Icon,
   SearchIcon,
   ServerIcon,
-  ShieldAlertIcon,
   ShieldCheckIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,6 +30,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -113,7 +112,7 @@ function AlertSeverityBadge({ severity }: { severity: AlertSeverity }) {
     <Badge
       variant="outline"
       className={cn(
-        "h-3.5 rounded px-1 py-0 text-[9px] font-medium",
+        "h-6 rounded-md px-2 py-0 text-xs font-medium",
         severityStyles[severity],
       )}
     >
@@ -152,12 +151,14 @@ function AlertDetail({
   onToggleAcknowledged,
   detailRef,
   onDetailFocus,
+  onBack,
 }: {
   alert: SecurityAlert;
   acknowledged: boolean;
   onToggleAcknowledged: () => void;
   detailRef: RefObject<HTMLElement | null>;
   onDetailFocus: () => void;
+  onBack: () => void;
 }) {
   return (
     <article
@@ -168,19 +169,24 @@ function AlertDetail({
       onFocusCapture={onDetailFocus}
       className="flex h-full min-w-0 flex-col outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
-      <div className="shrink-0 border-b border-border px-5 py-3.5 sm:px-6">
+      <div className="border-b border-border px-4 py-2 xl:hidden">
+        <Button variant="ghost" onClick={onBack} className="min-h-11">
+          <ArrowLeftIcon aria-hidden="true" /> Back to alerts
+        </Button>
+      </div>
+      <div className="shrink-0 border-b border-border px-5 py-5 sm:px-6">
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
           <AlertSeverityBadge severity={alert.severity} />
           <Badge
             variant="outline"
             className={cn(
-              "h-4 rounded px-1.5 py-0 text-[10px] font-medium",
+              "h-6 rounded-md px-2 py-0 text-xs font-medium",
               acknowledged
-                ? "border-primary/25 bg-primary/[0.07] text-primary"
+                ? "border-border text-muted-foreground"
                 : "border-border-strong text-muted-foreground",
             )}
           >
-            {acknowledged ? "Acknowledged" : "Open"}
+            {acknowledged ? "Acknowledged" : "Needs review"}
           </Badge>
           <span className="ml-auto font-mono text-xs text-text-muted">
             {alert.id}
@@ -204,28 +210,26 @@ function AlertDetail({
         </div>
       </div>
 
-      <div className="flex-1 space-y-3.5 px-5 pt-5 pb-3.5 sm:px-6">
+      <div className="flex-1 space-y-6 px-5 py-6 sm:px-6">
         <section aria-labelledby="evidence-heading">
-          <h3
-            id="evidence-heading"
-            className="mb-1.5 text-xs font-semibold text-muted-foreground"
-          >
+          <h3 id="evidence-heading" className="mb-2 text-sm font-semibold">
             Evidence
           </h3>
-          <p className="text-sm leading-5 text-text-muted">{alert.evidence}</p>
+          <p className="text-sm leading-6 text-muted-foreground">
+            {alert.evidence}
+          </p>
         </section>
         <section aria-labelledby="impact-heading">
-          <h3
-            id="impact-heading"
-            className="mb-1.5 text-xs font-semibold text-muted-foreground"
-          >
+          <h3 id="impact-heading" className="mb-2 text-sm font-semibold">
             Why it matters
           </h3>
-          <p className="text-sm leading-5 text-text-muted">{alert.impact}</p>
+          <p className="text-sm leading-6 text-muted-foreground">
+            {alert.impact}
+          </p>
         </section>
         <section
           aria-labelledby="next-step-heading"
-          className="rounded-lg border border-primary/15 bg-primary/[0.06] p-2.5"
+          className="rounded-lg border border-border bg-surface-elevated/50 p-4"
         >
           <div className="flex gap-2">
             <ShieldCheckIcon
@@ -253,7 +257,7 @@ function AlertDetail({
 
       <footer
         aria-live="polite"
-        className="mt-auto shrink-0 border-t border-border bg-card px-6 py-4"
+        className="sticky bottom-0 mt-auto shrink-0 border-t border-border bg-card px-5 py-4 sm:px-6"
       >
         <div className="flex min-h-10 flex-wrap items-center gap-3">
           <Button
@@ -262,7 +266,7 @@ function AlertDetail({
             onClick={onToggleAcknowledged}
             className="min-h-11 xl:min-h-10"
           >
-            {acknowledged ? "Reopen alert" : "Acknowledge alert"}
+            {acknowledged ? "Mark as needs review" : "Acknowledge alert"}
           </Button>
         </div>
       </footer>
@@ -279,9 +283,12 @@ export function SecurityAlerts() {
     subscribe: subscribeToAcknowledgements,
     snapshot: acknowledgementSnapshot,
   } = storage;
-  const [status, setStatus] = useState<StatusFilter>("all");
+  const [status, setStatus] = useState<StatusFilter>("open");
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [query, setQuery] = useState("");
+  const [server, setServer] = useState("all");
+  const [mobileDetailId, setMobileDetailId] = useState<string | null>(null);
+  const mobileDetail = mobileDetailId !== null;
   const [selectedId, setSelectedId] = useState(securityAlerts[0].id);
   const pendingFocusTarget = useRef<PendingFocusTarget | null>(null);
   const focusedAlert = useRef<PendingFocusTarget | null>(null);
@@ -357,13 +364,26 @@ export function SecurityAlerts() {
           [alert.title, alert.id, alert.server, alert.source].some((value) =>
             value.toLowerCase().includes(normalizedQuery),
           );
-        return matchesStatus && matchesSeverity && matchesQuery;
+        return (
+          matchesStatus &&
+          matchesSeverity &&
+          matchesQuery &&
+          (server === "all" || alert.server === server)
+        );
       })
       .sort(
         (left, right) =>
           severityOrder[left.severity] - severityOrder[right.severity],
       );
-  }, [acknowledgedIds, query, severity, status]);
+  }, [acknowledgedIds, query, severity, status, server]);
+
+  // Reveal the queue before restoring focus when an acknowledgement removes the detail.
+  if (
+    mobileDetailId &&
+    !visibleAlerts.some((alert) => alert.id === mobileDetailId)
+  ) {
+    setMobileDetailId(null);
+  }
 
   const selectedAlert =
     visibleAlerts.find((alert) => alert.id === selectedId) ?? visibleAlerts[0];
@@ -373,7 +393,8 @@ export function SecurityAlerts() {
   const openAlerts = securityAlerts.filter(
     (alert) => !acknowledgedIds.has(alert.id),
   );
-  const affectedServers = new Set(openAlerts.map((alert) => alert.server)).size;
+  const affectedServers = new Set(securityAlerts.map((alert) => alert.server))
+    .size;
 
   useEffect(() => {
     const clearFocusedAlert = (event: FocusEvent | PointerEvent) => {
@@ -393,6 +414,12 @@ export function SecurityAlerts() {
   useLayoutEffect(() => {
     const pendingTarget = pendingFocusTarget.current;
     if (pendingTarget) {
+      if (pendingTarget.id === "detail") {
+        pendingFocusTarget.current = null;
+        detailPanelRef.current?.focus({ preventScroll: true });
+        detailPanelRef.current?.scrollIntoView({ block: "start" });
+        return;
+      }
       let target =
         pendingTarget.id === "status-filter"
           ? statusFilterRef.current
@@ -431,7 +458,7 @@ export function SecurityAlerts() {
         statusFilterRef.current?.focus();
       }
     }
-  }, [visibleAlerts]);
+  }, [visibleAlerts, mobileDetail, selectedId]);
 
   function toggleAcknowledged(alert: SecurityAlert) {
     const next = new Set(acknowledgedIds);
@@ -462,7 +489,9 @@ export function SecurityAlerts() {
       storage.set(JSON.stringify([...next]));
       setSessionAcknowledgementOverrides(new Map());
       toast.success(
-        willBeAcknowledged ? "Alert acknowledged." : "Alert reopened.",
+        willBeAcknowledged
+          ? "Alert acknowledged."
+          : "Alert marked as needs review.",
       );
     } catch {
       const nextOverrides = new Map(effectiveSessionOverrides);
@@ -483,286 +512,382 @@ export function SecurityAlerts() {
   function selectAlert(alertId: string) {
     setSelectedId(alertId);
     if (!window.matchMedia?.("(max-width: 1279px)").matches) return;
-    window.requestAnimationFrame(() => {
-      detailPanelRef.current?.focus({ preventScroll: true });
-      detailPanelRef.current?.scrollIntoView({ block: "start" });
-    });
+    pendingFocusTarget.current = { id: "detail" };
+    setMobileDetailId(alertId);
   }
 
-  const metrics = [
+  function backToAlerts() {
+    pendingFocusTarget.current = { id: selectedAlert?.id ?? "status-filter" };
+    setMobileDetailId(null);
+  }
+
+  const hasFilters = Boolean(
+    query.trim() || severity !== "all" || server !== "all",
+  );
+  function clearFilters() {
+    setQuery("");
+    setSeverity("all");
+    setServer("all");
+    statusFilterRef.current?.focus();
+  }
+
+  const statusTabs = [
+    { value: "open", label: "Needs review", count: openAlerts.length },
     {
-      label: "Unresolved alerts",
-      value: String(openAlerts.length),
-      detail: `${openAlerts.filter((alert) => alert.severity === "critical").length} critical`,
-      icon: CircleAlertIcon,
-      iconClassName: "text-destructive",
-    },
-    {
+      value: "acknowledged",
       label: "Acknowledged",
-      value: String(acknowledgedIds.size),
-      detail: `of ${securityAlerts.length} alerts`,
-      icon: CheckCircle2Icon,
-      iconClassName: "text-primary",
+      count: acknowledgedIds.size,
     },
-    {
-      label: "Affected servers",
-      value: String(affectedServers),
-      detail: "With open alerts",
-      icon: ServerIcon,
-      iconClassName: "text-warning",
-    },
-    {
-      label: "Last evaluation",
-      value: "2m",
-      detail: "Sample snapshot",
-      icon: Clock3Icon,
-      iconClassName: "text-muted-foreground",
-    },
+    { value: "all", label: "All", count: securityAlerts.length },
   ] as const;
 
   return (
     <div className="space-y-4">
-      <section
+      <dl
         aria-label="Security alert summary"
-        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+        className={cn(
+          "flex flex-wrap gap-x-6 gap-y-2 text-sm",
+          mobileDetail && "hidden xl:flex",
+        )}
       >
-        {metrics.map(({ label, value, detail, icon: Icon, iconClassName }) => (
-          <div
-            key={label}
-            className="flex h-[88px] flex-col rounded-xl border border-border bg-card px-5 py-3.5"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs font-medium text-muted-foreground">
-                {label}
-              </p>
-              <Icon
-                className={cn("size-4", iconClassName)}
-                aria-hidden="true"
-              />
-            </div>
-            <div className="mt-auto flex items-baseline gap-2 pt-2">
-              <p className="font-mono text-[2rem] leading-none font-semibold tracking-tight tabular-nums">
-                {value}
-              </p>
-              <p className="text-[10px] leading-none font-normal text-text-muted">
-                {detail}
-              </p>
-            </div>
-          </div>
-        ))}
-      </section>
+        <div className="flex items-baseline gap-2">
+          <dt className="text-muted-foreground">Needs review</dt>
+          <dd className="font-semibold tabular-nums">{openAlerts.length}</dd>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <dt className="text-muted-foreground">Critical findings</dt>
+          <dd className="font-semibold tabular-nums text-destructive">
+            {
+              securityAlerts.filter((alert) => alert.severity === "critical")
+                .length
+            }
+          </dd>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <dt className="text-muted-foreground">Affected servers</dt>
+          <dd className="font-semibold tabular-nums">{affectedServers}</dd>
+        </div>
+      </dl>
 
-      <section
-        aria-label="Security alert review"
-        className="overflow-hidden rounded-xl border border-border bg-card"
+      <Tabs
+        value={status}
+        onValueChange={(value) => setStatus(value as StatusFilter)}
+        className="gap-0"
       >
-        <div className="border-b border-border px-4 py-4 sm:px-5">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-baseline gap-1.5">
-              <h2 className="text-base font-semibold">Alert queue</h2>
-              <p className="text-xs text-text-muted">
+        <section
+          aria-label="Security alert review"
+          className="overflow-clip rounded-xl border border-border bg-card"
+        >
+          <div
+            className={cn(
+              "border-b border-border px-4 pt-3 sm:px-5",
+              mobileDetail && "hidden xl:block",
+            )}
+          >
+            <TabsList
+              aria-label="Alert status"
+              variant="line"
+              className="h-auto min-h-11 w-full justify-start gap-0 p-0 sm:w-auto sm:gap-2"
+            >
+              {statusTabs.map((tab) => (
+                <TabsTrigger
+                  key={tab.value}
+                  value={tab.value}
+                  ref={status === tab.value ? statusFilterRef : undefined}
+                  className="min-h-11 gap-1 px-1 text-xs sm:gap-1.5 sm:px-3 sm:text-sm data-[state=active]:text-foreground dark:data-[state=active]:text-foreground after:bg-primary motion-reduce:transition-none"
+                >
+                  {tab.label}{" "}
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {tab.count}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            <div className="grid gap-3 py-4 lg:grid-cols-[minmax(12rem,1fr)_auto_auto]">
+              <label className="min-w-0 self-end">
+                <span className="sr-only">Search alerts</span>
+                <span className="relative block">
+                  <SearchIcon
+                    className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-text-muted"
+                    aria-hidden="true"
+                  />
+                  <Input
+                    type="search"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search by title, server, source or ID"
+                    className="h-11 pl-9 xl:h-10"
+                  />
+                </span>
+              </label>
+              <div>
+                <span
+                  id="severity-label"
+                  className="mb-1.5 block text-xs text-muted-foreground"
+                >
+                  Severity
+                </span>
+                <Select
+                  value={severity}
+                  onValueChange={(value) =>
+                    setSeverity(value as SeverityFilter)
+                  }
+                >
+                  <SelectTrigger
+                    className="w-full data-[size=default]:h-11 lg:w-40 xl:data-[size=default]:h-10"
+                    aria-label="Filter by severity"
+                    aria-describedby="severity-label"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper" align="start">
+                    <SelectItem value="all" className="min-h-11 xl:min-h-8">
+                      All severities
+                    </SelectItem>
+                    <SelectItem
+                      value="critical"
+                      className="min-h-11 xl:min-h-8"
+                    >
+                      Critical
+                    </SelectItem>
+                    <SelectItem value="high" className="min-h-11 xl:min-h-8">
+                      High
+                    </SelectItem>
+                    <SelectItem value="medium" className="min-h-11 xl:min-h-8">
+                      Medium
+                    </SelectItem>
+                    <SelectItem value="low" className="min-h-11 xl:min-h-8">
+                      Low
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <span
+                  id="server-label"
+                  className="mb-1.5 block text-xs text-muted-foreground"
+                >
+                  Server
+                </span>
+                <Select value={server} onValueChange={setServer}>
+                  <SelectTrigger
+                    aria-label="Filter by server"
+                    aria-describedby="server-label"
+                    className="w-full data-[size=default]:h-11 lg:w-44 xl:data-[size=default]:h-10"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent position="popper" align="start">
+                    <SelectItem value="all" className="min-h-11 xl:min-h-8">
+                      All servers
+                    </SelectItem>
+                    {[...new Set(securityAlerts.map((alert) => alert.server))]
+                      .sort()
+                      .map((name) => (
+                        <SelectItem
+                          key={name}
+                          value={name}
+                          className="min-h-11 xl:min-h-8"
+                        >
+                          {name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex min-h-11 items-center justify-between gap-3 pb-3">
+              <p className="text-xs text-muted-foreground">
                 {visibleAlerts.length}{" "}
                 {visibleAlerts.length === 1 ? "alert" : "alerts"}
+                <span className="mx-2" aria-hidden="true">
+                  ·
+                </span>
+                Highest severity first
               </p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-[11rem_auto_auto]">
-              <label className="relative min-w-0 sm:mr-1.5">
-                <span className="sr-only">Search alerts</span>
-                <SearchIcon
-                  className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-text-muted"
-                  aria-hidden="true"
-                />
-                <Input
-                  type="search"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search alerts"
-                  className="h-11 pl-8 xl:h-9"
-                />
-              </label>
-              <Select
-                value={status}
-                onValueChange={(value) => setStatus(value as StatusFilter)}
-              >
-                <SelectTrigger
-                  ref={statusFilterRef}
-                  className="w-full data-[size=default]:h-11 sm:w-36 xl:data-[size=default]:h-9"
-                  aria-label="Filter by status"
+              {hasFilters && (
+                <Button
+                  variant="ghost"
+                  onClick={clearFilters}
+                  className="min-h-11 xl:min-h-9"
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper" align="start">
-                  <SelectItem value="all" className="min-h-11 xl:min-h-8">
-                    All statuses
-                  </SelectItem>
-                  <SelectItem value="open" className="min-h-11 xl:min-h-8">
-                    Open
-                  </SelectItem>
-                  <SelectItem
-                    value="acknowledged"
-                    className="min-h-11 xl:min-h-8"
-                  >
-                    Acknowledged
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Select
-                value={severity}
-                onValueChange={(value) => setSeverity(value as SeverityFilter)}
-              >
-                <SelectTrigger
-                  className="w-full data-[size=default]:h-11 sm:w-36 xl:data-[size=default]:h-9"
-                  aria-label="Filter by severity"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper" align="start">
-                  <SelectItem value="all" className="min-h-11 xl:min-h-8">
-                    All severities
-                  </SelectItem>
-                  <SelectItem value="critical" className="min-h-11 xl:min-h-8">
-                    Critical
-                  </SelectItem>
-                  <SelectItem value="high" className="min-h-11 xl:min-h-8">
-                    High
-                  </SelectItem>
-                  <SelectItem value="medium" className="min-h-11 xl:min-h-8">
-                    Medium
-                  </SelectItem>
-                  <SelectItem value="low" className="min-h-11 xl:min-h-8">
-                    Low
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+                  Clear filters
+                </Button>
+              )}
             </div>
           </div>
-        </div>
 
-        <div className="grid min-h-[580px] xl:grid-cols-[minmax(28rem,1.16fr)_minmax(24rem,0.84fr)]">
-          <div className="border-b border-border xl:border-r xl:border-b-0">
-            {visibleAlerts.length ? (
-              <div role="list" aria-label="Security alerts">
-                {visibleAlerts.map((alert, alertIndex) => {
-                  const isSelected = alert.id === selectedAlert?.id;
-                  const acknowledged = acknowledgedIds.has(alert.id);
-                  return (
-                    <div
-                      role="listitem"
-                      key={alert.id}
-                      className="border-b border-border last:border-b-0"
-                    >
-                      <button
-                        type="button"
-                        ref={(node) => {
-                          if (node) alertRowRefs.current.set(alert.id, node);
-                          else alertRowRefs.current.delete(alert.id);
-                        }}
-                        data-alert-id={alert.id}
-                        aria-pressed={isSelected}
-                        onFocus={() => {
-                          focusedAlert.current = {
-                            id: alert.id,
-                            previousIndex: alertIndex,
-                          };
-                        }}
-                        onClick={() => selectAlert(alert.id)}
-                        className={cn(
-                          "block min-h-[100px] w-full border-l-2 border-l-transparent px-4 py-3.5 text-left outline-none transition-colors hover:bg-surface-elevated/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                          isSelected &&
-                            "border-l-primary/70 bg-surface-elevated/55 hover:bg-surface-elevated/55",
-                        )}
-                      >
-                        <span className="block min-w-0">
-                          <span className="flex items-center justify-between gap-3">
-                            <span className="flex flex-wrap items-center gap-2">
-                              <AlertSeverityBadge severity={alert.severity} />
-                              {acknowledged && (
-                                <span className="text-xs text-text-muted">
-                                  Acknowledged
+          <TabsContent value={status} className="m-0">
+            <div
+              className={cn(
+                "grid xl:min-h-[580px]",
+                selectedAlert &&
+                  "xl:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.15fr)]",
+              )}
+            >
+              <div
+                className={cn(
+                  "min-w-0",
+                  selectedAlert && "xl:border-r xl:border-border",
+                  mobileDetail && "hidden xl:block",
+                )}
+              >
+                {visibleAlerts.length ? (
+                  <div role="list" aria-label="Security alerts">
+                    {visibleAlerts.map((alert, alertIndex) => {
+                      const isSelected = alert.id === selectedAlert?.id;
+                      const acknowledged = acknowledgedIds.has(alert.id);
+                      return (
+                        <div
+                          role="listitem"
+                          key={alert.id}
+                          className="border-b border-border last:border-b-0"
+                        >
+                          <button
+                            type="button"
+                            ref={(node) => {
+                              if (node)
+                                alertRowRefs.current.set(alert.id, node);
+                              else alertRowRefs.current.delete(alert.id);
+                            }}
+                            data-alert-id={alert.id}
+                            aria-pressed={isSelected}
+                            onFocus={() => {
+                              focusedAlert.current = {
+                                id: alert.id,
+                                previousIndex: alertIndex,
+                              };
+                            }}
+                            onClick={() => selectAlert(alert.id)}
+                            className={cn(
+                              "block min-h-[100px] w-full border-l-2 border-l-transparent px-4 py-4 text-left outline-none transition-colors motion-reduce:transition-none hover:bg-surface-elevated/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                              isSelected &&
+                                "border-l-primary/70 bg-surface-elevated/55 hover:bg-surface-elevated/55",
+                            )}
+                          >
+                            <span className="block min-w-0">
+                              <span className="flex items-center justify-between gap-3">
+                                <span className="flex flex-wrap items-center gap-2">
+                                  <AlertSeverityBadge
+                                    severity={alert.severity}
+                                  />
+                                  {acknowledged && (
+                                    <span className="text-xs text-text-muted">
+                                      Acknowledged
+                                    </span>
+                                  )}
                                 </span>
-                              )}
+                                <span className="shrink-0 text-xs text-text-muted">
+                                  {alert.lastSeen}
+                                </span>
+                              </span>
+                              <span
+                                className={cn(
+                                  "mt-2.5 block text-sm leading-5 font-medium",
+                                  acknowledged
+                                    ? "text-muted-foreground"
+                                    : "text-foreground",
+                                )}
+                              >
+                                {alert.title}
+                              </span>
+                              <span
+                                className={cn(
+                                  "mt-2 block text-xs",
+                                  acknowledged
+                                    ? "text-text-muted"
+                                    : "text-foreground/80",
+                                )}
+                              >
+                                {alert.server}
+                              </span>
                             </span>
-                            <span className="shrink-0 text-xs text-text-muted">
-                              {alert.lastSeen}
-                            </span>
-                          </span>
-                          <span
-                            className={cn(
-                              "mt-2.5 block text-sm leading-5 font-medium",
-                              acknowledged
-                                ? "text-muted-foreground"
-                                : "text-foreground",
-                            )}
-                          >
-                            {alert.title}
-                          </span>
-                          <span
-                            className={cn(
-                              "mt-2 block text-xs",
-                              acknowledged
-                                ? "text-text-muted"
-                                : "text-foreground/80",
-                            )}
-                          >
-                            {alert.server}
-                          </span>
-                        </span>
-                      </button>
-                    </div>
-                  );
-                })}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <Empty className="min-h-80 border-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ShieldCheckIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>
+                        {hasFilters
+                          ? "No matching alerts"
+                          : status === "open"
+                            ? "No alerts need review"
+                            : "No acknowledged alerts"}
+                      </EmptyTitle>
+                      <EmptyDescription>
+                        {hasFilters
+                          ? "Try another search or clear the filters."
+                          : status === "open"
+                            ? "All findings have been acknowledged. They may still need a fix."
+                            : "Alerts you acknowledge will appear here."}
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    {hasFilters ? (
+                      <Button
+                        variant="outline"
+                        onClick={clearFilters}
+                        className="min-h-11"
+                      >
+                        Clear filters
+                      </Button>
+                    ) : status === "open" ? (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          pendingFocusTarget.current = { id: "status-filter" };
+                          setStatus("acknowledged");
+                        }}
+                        className="min-h-11"
+                      >
+                        View acknowledged alerts
+                      </Button>
+                    ) : null}
+                  </Empty>
+                )}
               </div>
-            ) : (
-              <Empty className="min-h-80 border-0">
-                <EmptyHeader>
-                  <EmptyMedia variant="icon">
-                    <ShieldCheckIcon />
-                  </EmptyMedia>
-                  <EmptyTitle>No matching alerts</EmptyTitle>
-                  <EmptyDescription>
-                    Change the search or filters to see another part of the
-                    queue.
-                  </EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            )}
-          </div>
 
-          {selectedAlert ? (
-            <AlertDetail
-              alert={selectedAlert}
-              acknowledged={acknowledgedIds.has(selectedAlert.id)}
-              onToggleAcknowledged={() => toggleAcknowledged(selectedAlert)}
-              detailRef={detailPanelRef}
-              onDetailFocus={() => {
-                focusedAlert.current = {
-                  id: selectedAlert.id,
-                  previousIndex: selectedAlertIndex,
-                };
-              }}
-            />
-          ) : (
-            <Empty className="min-h-80 border-0">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <ShieldAlertIcon />
-                </EmptyMedia>
-                <EmptyTitle>No alert selected</EmptyTitle>
-                <EmptyDescription>
-                  Change the filters to review an alert and its evidence.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
+              <div
+                className={cn(
+                  "min-w-0",
+                  mobileDetail ? "block" : "hidden xl:block",
+                  !selectedAlert && "xl:hidden",
+                )}
+              >
+                {selectedAlert ? (
+                  <AlertDetail
+                    alert={selectedAlert}
+                    acknowledged={acknowledgedIds.has(selectedAlert.id)}
+                    onToggleAcknowledged={() =>
+                      toggleAcknowledged(selectedAlert)
+                    }
+                    detailRef={detailPanelRef}
+                    onBack={backToAlerts}
+                    onDetailFocus={() => {
+                      focusedAlert.current = {
+                        id: selectedAlert.id,
+                        previousIndex: selectedAlertIndex,
+                      };
+                    }}
+                  />
+                ) : null}
+              </div>
+            </div>
+          </TabsContent>
+          {storageError && (
+            <div className="border-t border-border px-4 py-2.5 sm:px-5">
+              <Alert variant="destructive">
+                <AlertDescription>{storageError}</AlertDescription>
+              </Alert>
+            </div>
           )}
-        </div>
-        {storageError && (
-          <div className="border-t border-border px-4 py-2.5 sm:px-5">
-            <Alert variant="destructive">
-              <AlertDescription>{storageError}</AlertDescription>
-            </Alert>
-          </div>
-        )}
-      </section>
+        </section>
+      </Tabs>
     </div>
   );
 }
