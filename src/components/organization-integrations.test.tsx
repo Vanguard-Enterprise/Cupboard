@@ -978,7 +978,7 @@ describe("Organization credentials and webhooks", () => {
       screen.getByRole("button", { name: "Manage Operations relay" }),
     );
     await user.click(screen.getByRole("menuitem", { name: "Resume" }));
-    expect(screen.getByText("Active")).toBeTruthy();
+    expect(screen.getByText("Enabled")).toBeTruthy();
     expect(
       JSON.parse(localStorage.getItem(organizationIntegrationsKey)!).webhooks[0]
         .enabled,
@@ -1304,6 +1304,34 @@ describe("Organization credentials and webhooks", () => {
     expect(toast.success).not.toHaveBeenCalledWith("Operations relay updated.");
   });
 
+  it.each([true, false])(
+    "keeps configuration status visible after a failed delivery (enabled=%s)",
+    async (enabled) => {
+      const user = userEvent.setup();
+      const data = structuredClone(defaultOrganizationIntegrations);
+      data.webhooks[0].enabled = enabled;
+      data.webhooks[0].lastDelivery = {
+        status: 503,
+        deliveredAt: "4 minutes ago",
+      };
+      localStorage.setItem(organizationIntegrationsKey, JSON.stringify(data));
+      render(<OrganizationIntegrations />);
+      const status = enabled ? "Enabled" : "Paused";
+      expect(screen.getByText(status)).toBeTruthy();
+      expect(screen.getByText(/Delivery failed/)).toBeTruthy();
+      await user.click(screen.getByText("Operations relay").closest("button")!);
+      const details = screen.getByRole("dialog", { name: "Operations relay" });
+      expect(within(details).getByText(status)).toBeTruthy();
+      expect(within(details).getByText("Delivery failed")).toBeTruthy();
+      expect(within(details).getByText("HTTP 503")).toBeTruthy();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByText("Operations relay").closest("button"),
+      );
+    },
+  );
+
   it("does not report a simulated webhook retry as delivered", async () => {
     const user = userEvent.setup();
     const data = structuredClone(defaultOrganizationIntegrations);
@@ -1315,8 +1343,8 @@ describe("Organization credentials and webhooks", () => {
 
     render(<OrganizationIntegrations />);
 
-    expect(screen.getByText("Delivery failed")).toBeTruthy();
-    expect(screen.getByText("Last delivery failed 4 minutes ago")).toBeTruthy();
+    expect(screen.getByText(/Delivery failed/)).toBeTruthy();
+    expect(screen.getByText("4 minutes ago")).toBeTruthy();
 
     await user.click(screen.getByText("Operations relay").closest("button")!);
     const details = screen.getByRole("dialog", { name: "Operations relay" });
