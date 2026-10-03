@@ -244,6 +244,7 @@ export const dashboardNavigation = [
   },
 ];
 
+export const serversPath = "/dashboard/servers";
 export const profilePath = "/dashboard/organization/settings/profile";
 export const usagePath = "/dashboard/organization/settings/usage";
 export const credentialsPath =
@@ -259,7 +260,7 @@ export const usersPath = "/dashboard/organization/team/users";
 export const rolesPath = "/dashboard/organization/team/roles";
 
 export function navigationHref(id: string): string | undefined {
-  if (id === "servers") return "/dashboard/servers";
+  if (id === "servers") return serversPath;
   if (id === "connections") return connectionsPath;
   if (id === "organization") return profilePath;
   if (id === "billing") return usagePath;

@@ -29,6 +29,7 @@ import {
   notificationsDataPath,
   profilePath,
   rolesPath,
+  serversPath,
   securityAlertsPath,
   usagePath,
   usersPath,
@@ -107,7 +108,7 @@ export function Workspace({
           }
         : undefined;
   const serverPage =
-    pathname === "/dashboard/servers"
+    pathname === serversPath
       ? {
           activeSection: "servers",
           crumbs: ["Operations", "Game servers", "Server inventory"],
