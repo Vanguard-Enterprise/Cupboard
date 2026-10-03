@@ -294,6 +294,7 @@ export function OrganizationRoles() {
     reorderRoles,
     reload,
   } = useOrganizationTeam();
+  const rolesHeading = useRef<HTMLHeadingElement | null>(null);
   const detailsTrigger = useRef<HTMLButtonElement | null>(null);
   const editorReturnFocus = useRef<HTMLButtonElement | null>(null);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
@@ -661,7 +662,13 @@ export function OrganizationRoles() {
     <>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Roles</h1>
+          <h1
+            ref={rolesHeading}
+            tabIndex={-1}
+            className="text-2xl font-semibold tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Roles
+          </h1>
         </div>
         <Button
           className="h-11 sm:h-9"
@@ -1028,7 +1035,12 @@ export function OrganizationRoles() {
           className="data-[side=right]:w-full data-[side=right]:sm:max-w-lg motion-reduce:animate-none"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            if (!dialogOpen) detailsTrigger.current?.focus();
+            if (!dialogOpen) {
+              const target = detailsTrigger.current?.isConnected
+                ? detailsTrigger.current
+                : rolesHeading.current;
+              target?.focus();
+            }
           }}
         >
           {selectedRole ? (
@@ -1126,9 +1138,12 @@ export function OrganizationRoles() {
         <DialogContent
           className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl"
           onCloseAutoFocus={(event) => {
-            if (editorReturnFocus.current?.isConnected) {
+            if (editorReturnFocus.current) {
               event.preventDefault();
-              editorReturnFocus.current.focus();
+              const target = editorReturnFocus.current.isConnected
+                ? editorReturnFocus.current
+                : rolesHeading.current;
+              target?.focus();
               editorReturnFocus.current = null;
             }
           }}

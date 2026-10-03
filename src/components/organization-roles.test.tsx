@@ -282,3 +282,25 @@ it.each(["cancel", "escape", "save"])(
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   },
 );
+
+it("moves focus to Roles when a refresh removes the inspected role", async () => {
+  const user = userEvent.setup();
+  mount();
+  const heading = await screen.findByRole("heading", { name: "Roles" });
+  await user.click(
+    within(screen.getByRole("table")).getByRole("button", {
+      name: "View Viewer role",
+    }),
+  );
+  expect(screen.getByRole("dialog", { name: "Viewer" })).toBeTruthy();
+  api.state.team.roles = api.state.team.roles.filter(
+    (role) => role.id !== "viewer",
+  );
+  api.state.team.users = api.state.team.users.map((member) => ({
+    ...member,
+    roleIds: member.roleIds.map((id) => (id === "viewer" ? "operator" : id)),
+  }));
+  fireEvent.focus(window);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(heading));
+});
