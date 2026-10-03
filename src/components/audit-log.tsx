@@ -357,6 +357,10 @@ export function AuditLog() {
     setDateRange(undefined);
   }
 
+  const selectedDates = dateRange?.from
+    ? `${format(dateRange.from, "MMM d, yyyy")}${dateRange.to && dateRange.to.getTime() !== dateRange.from.getTime() ? ` – ${format(dateRange.to, "MMM d, yyyy")}` : ""}`
+    : "";
+
   const filters = [
     {
       label: "Event type",
@@ -450,11 +454,14 @@ export function AuditLog() {
               <Button
                 variant="outline"
                 className="h-11 max-w-full gap-2 sm:h-9"
+                aria-label={
+                  selectedDates
+                    ? `Select date range: ${selectedDates}`
+                    : "Select date range"
+                }
               >
                 <CalendarIcon aria-hidden="true" className="size-4" />
-                {dateRange?.from
-                  ? `${format(dateRange.from, "MMM d, yyyy")}${dateRange.to && dateRange.to.getTime() !== dateRange.from.getTime() ? ` – ${format(dateRange.to, "MMM d, yyyy")}` : ""}`
-                  : "Select date range"}
+                {selectedDates || "Select date range"}
               </Button>
             </PopoverTrigger>
             <PopoverContent

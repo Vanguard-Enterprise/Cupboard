@@ -192,6 +192,15 @@ describe("Audit log", () => {
       screen.getByRole("button", { name: /Tuesday, September 15th, 2026/ }),
     );
     await user.keyboard("{Escape}");
+    await user.click(
+      screen.getByRole("button", {
+        name: "Select date range: Sep 13, 2026 – Sep 15, 2026",
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Filter by date range" }),
+    ).toBeTruthy();
+    await user.keyboard("{Escape}");
     expect(screen.getByText("1 result of 9 events")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByText("9 results")).toBeTruthy();
@@ -201,6 +210,9 @@ describe("Audit log", () => {
     );
     await user.keyboard("{Escape}");
     expect(screen.getByText("3 results of 9 events")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Select date range: Sep 14, 2026" }),
+    ).toBeTruthy();
     expect(screen.queryByText("Updated connection settings")).toBeNull();
   });
 });
