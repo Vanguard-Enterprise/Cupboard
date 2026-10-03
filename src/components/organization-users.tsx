@@ -4,6 +4,9 @@ import { useMemo, useState, type MouseEvent } from "react";
 import { flushSync } from "react-dom";
 import {
   FilterIcon,
+  CopyIcon,
+  XIcon,
+  LockKeyholeIcon,
   MoreHorizontalIcon,
   PlusIcon,
   Trash2Icon,
@@ -41,6 +44,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -241,6 +250,7 @@ function UserFields({
                 className="flex min-h-8 items-center gap-2 text-sm"
               >
                 <Checkbox
+                  aria-label={role.name}
                   checked={draft.roleIds.includes(role.id)}
                   disabled={lockAccess || role.id === "owner"}
                   onCheckedChange={(checked) =>
@@ -252,7 +262,12 @@ function UserFields({
                     })
                   }
                 />
-                {role.name}
+                <span>
+                  <span className="block font-medium">{role.name}</span>
+                  <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                    {role.description || "No role description."}
+                  </span>
+                </span>
               </label>
             ))}
           </div>
@@ -319,9 +334,10 @@ export function OrganizationUsers() {
   } = useOrganizationTeam();
   const [query, setQuery] = useState("");
   const [roleFilters, setRoleFilters] = useState<Set<string>>(new Set());
-  const [statusFilters, setStatusFilters] = useState<
-    Set<OrganizationUserStatus>
-  >(new Set());
+  const [statusFilter, setStatusFilter] = useState<
+    OrganizationUserStatus | "all"
+  >("all");
+  const [copyStatus, setCopyStatus] = useState("");
   const [sort, setSort] = useState<UserSort>("name");
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -358,7 +374,7 @@ export function OrganizationUsers() {
         roleFilters.size === 0 ||
         user.roleIds.some((id) => roleFilters.has(id));
       const matchesStatus =
-        statusFilters.size === 0 || statusFilters.has(user.status);
+        statusFilter === "all" || statusFilter === user.status;
       return matchesQuery && matchesRole && matchesStatus;
     });
     return filtered.toSorted((left, right) => {
@@ -391,7 +407,7 @@ export function OrganizationUsers() {
     rolesById,
     settings.users,
     sort,
-    statusFilters,
+    statusFilter,
   ]);
 
   if (!ready) {
@@ -419,18 +435,57 @@ export function OrganizationUsers() {
     });
   }
 
-  function toggleStatusFilter(status: OrganizationUserStatus) {
-    setStatusFilters((current) => {
-      const next = new Set(current);
-      if (next.has(status)) next.delete(status);
-      else next.add(status);
-      return next;
-    });
-  }
-
   function clearFilters() {
     setRoleFilters(new Set());
-    setStatusFilters(new Set());
+    setStatusFilter("all");
+  }
+
+  function accessRestriction(user: OrganizationUser) {
+    if (!canManage)
+      return "You need organization management permission to change access.";
+    if (user.id === currentOperatorId)
+      return "You cannot change your own organization access.";
+    if (user.roleIds.includes("owner"))
+      return "The organization owner's access cannot be changed.";
+    if (!authority.canManageUser(user))
+      return "You can only manage users whose roles are below yours and whose permissions you can grant.";
+    return null;
+  }
+
+  function protectedAccess(user: OrganizationUser) {
+    const reason = accessRestriction(user);
+    if (!reason) return null;
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-11 sm:size-9"
+            aria-label={`Access restriction for ${user.name}`}
+          >
+            <LockKeyholeIcon className="size-4 text-muted-foreground" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          className="max-w-64 text-sm"
+          aria-label="Access restriction"
+        >
+          {reason}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  async function copyInvitation() {
+    try {
+      await navigator.clipboard.writeText(invitationLink);
+      setCopyStatus("Link copied.");
+    } catch {
+      setCopyStatus("Could not copy the link. Select it and copy it manually.");
+      document.getElementById("invitation-link")?.focus();
+    }
   }
 
   function validateDraft(
@@ -578,12 +633,17 @@ export function OrganizationUsers() {
   }
 
   const resultLabel = `${users.length} ${users.length === 1 ? "user" : "users"}`;
-  const activeFilterCount = roleFilters.size + statusFilters.size;
+  const activeFilterCount = roleFilters.size + (statusFilter === "all" ? 0 : 1);
 
   return (
     <>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Manage organization members and their access.
+          </p>
+        </div>
         <Button
           className="h-11 sm:h-9"
           disabled={saving || !canManage}
@@ -597,207 +657,344 @@ export function OrganizationUsers() {
           <PlusIcon /> Invite user
         </Button>
       </div>
-      <div className="space-y-4">
-        {storageError ? (
-          <Alert variant="destructive">
-            <AlertDescription>
-              {storageError}
-              <Button variant="outline" onClick={() => void reload()}>
-                Refresh users
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        <section
-          aria-label="Organization users"
-          className="overflow-hidden rounded-xl border border-border bg-card"
+      <Tabs
+        value={statusFilter}
+        onValueChange={(value) =>
+          setStatusFilter(value as OrganizationUserStatus | "all")
+        }
+        className="gap-4"
+      >
+        <TabsList
+          aria-label="User status"
+          variant="line"
+          className="grid h-auto! w-full grid-cols-2 gap-1 sm:flex sm:w-fit"
         >
-          <div className="flex flex-wrap items-center gap-3 border-b border-border p-3">
-            <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
-              <TeamSearch
-                id="user-search"
-                label="Search users"
-                value={query}
-                onChange={setQuery}
-                className="sm:w-72 sm:flex-none lg:w-80"
-              />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11 bg-input-background lg:h-9"
-                    aria-label={`Filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`}
-                  >
-                    <FilterIcon aria-hidden="true" />
-                    Filters
-                    {activeFilterCount ? (
-                      <Badge
-                        variant="secondary"
-                        className="ml-0.5 min-w-5 justify-center px-1.5"
-                        aria-hidden="true"
-                      >
-                        {activeFilterCount}
-                      </Badge>
-                    ) : null}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
-                  <DropdownMenuLabel>Role</DropdownMenuLabel>
-                  {settings.roles.map((role) => (
-                    <DropdownMenuCheckboxItem
-                      key={role.id}
-                      checked={roleFilters.has(role.id)}
-                      onCheckedChange={() => toggleRoleFilter(role.id)}
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      {role.name}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>Status</DropdownMenuLabel>
-                  {(
-                    Object.entries(statusLabels) as [
-                      OrganizationUserStatus,
-                      string,
-                    ][]
-                  ).map(([status, label]) => (
-                    <DropdownMenuCheckboxItem
-                      key={status}
-                      checked={statusFilters.has(status)}
-                      onCheckedChange={() => toggleStatusFilter(status)}
-                      onSelect={(event) => event.preventDefault()}
-                    >
-                      {label}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                  {activeFilterCount ? (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={clearFilters}>
-                        Clear filters
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <Select
-              value={`${sort}:${direction}`}
-              onValueChange={(value) => {
-                const [nextSort, nextDirection] = value.split(":") as [
-                  UserSort,
-                  SortDirection,
-                ];
-                setSort(nextSort);
-                setDirection(nextDirection);
-              }}
-            >
-              <SelectTrigger
-                aria-label="Sort users"
-                className="h-11 w-full bg-input-background sm:w-48 md:hidden"
+          {(["all", "active", "invited", "suspended"] as const).map(
+            (status) => (
+              <TabsTrigger
+                key={status}
+                value={status}
+                aria-label={`${status === "all" ? "All" : statusLabels[status]} ${status === "all" ? settings.users.length : settings.users.filter((user) => user.status === status).length}`}
+                className="min-h-11 px-3 data-[state=active]:text-primary dark:data-[state=active]:text-primary after:bg-primary"
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper" align="end">
-                <SelectItem value="name:asc">Name, A to Z</SelectItem>
-                <SelectItem value="name:desc">Name, Z to A</SelectItem>
-                <SelectItem value="role:asc">Role</SelectItem>
-                <SelectItem value="status:asc">Status</SelectItem>
-                <SelectItem value="lastActive:desc">Recently active</SelectItem>
-              </SelectContent>
-            </Select>
-            <p
-              className="ml-auto shrink-0 px-1 text-xs text-text-muted"
-              role="status"
-            >
-              {resultLabel}
-            </p>
-          </div>
+                {status === "all" ? "All" : statusLabels[status]}
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {status === "all"
+                    ? settings.users.length
+                    : settings.users.filter((user) => user.status === status)
+                        .length}
+                </span>
+              </TabsTrigger>
+            ),
+          )}
+        </TabsList>
+        <TabsContent value={statusFilter} className="space-y-4">
+          {storageError ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                {storageError}
+                <Button variant="outline" onClick={() => void reload()}>
+                  Refresh users
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <section
+            aria-label="Organization users"
+            className="overflow-hidden rounded-xl border border-border bg-card"
+          >
+            <div className="flex flex-wrap items-center gap-3 border-b border-border p-3">
+              <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
+                <TeamSearch
+                  id="user-search"
+                  label="Search users"
+                  value={query}
+                  onChange={setQuery}
+                  className="sm:w-72 sm:flex-none lg:w-80"
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11 bg-input-background lg:h-9"
+                      aria-label={`Filter by role${roleFilters.size ? `, ${roleFilters.size} active` : ""}`}
+                    >
+                      <FilterIcon aria-hidden="true" />
+                      Role
+                      {roleFilters.size ? (
+                        <Badge
+                          variant="secondary"
+                          className="ml-0.5 min-w-5 justify-center px-1.5"
+                          aria-hidden="true"
+                        >
+                          {roleFilters.size}
+                        </Badge>
+                      ) : null}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuLabel>Role</DropdownMenuLabel>
+                    {settings.roles.map((role) => (
+                      <DropdownMenuCheckboxItem
+                        key={role.id}
+                        checked={roleFilters.has(role.id)}
+                        onCheckedChange={() => toggleRoleFilter(role.id)}
+                        onSelect={(event) => event.preventDefault()}
+                      >
+                        {role.name}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                    {roleFilters.size ? (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() => setRoleFilters(new Set())}
+                        >
+                          Clear roles
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <Select
+                value={`${sort}:${direction}`}
+                onValueChange={(value) => {
+                  const [nextSort, nextDirection] = value.split(":") as [
+                    UserSort,
+                    SortDirection,
+                  ];
+                  setSort(nextSort);
+                  setDirection(nextDirection);
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Sort users"
+                  className="h-11 w-full bg-input-background sm:w-48 md:hidden"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" align="end">
+                  <SelectItem value="name:asc">Name, A to Z</SelectItem>
+                  <SelectItem value="name:desc">Name, Z to A</SelectItem>
+                  <SelectItem value="role:asc">Role</SelectItem>
+                  <SelectItem value="status:asc">Status</SelectItem>
+                  <SelectItem value="lastActive:desc">
+                    Recently active
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p
+                className="ml-auto shrink-0 px-1 text-xs text-text-muted"
+                role="status"
+              >
+                {resultLabel}
+              </p>
+            </div>
 
-          {users.length ? (
-            <>
-              <div className="hidden md:block">
-                <Table>
-                  <TableCaption className="sr-only">
-                    Organization users
-                  </TableCaption>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="px-4">
-                        <SortButton
-                          label="User"
-                          active={sort === "name"}
-                          direction={direction}
-                          onClick={() => changeSort("name")}
-                        />
-                      </TableHead>
-                      <TableHead>
-                        <SortButton
-                          label="Role"
-                          active={sort === "role"}
-                          direction={direction}
-                          onClick={() => changeSort("role")}
-                        />
-                      </TableHead>
-                      <TableHead>
-                        <SortButton
-                          label="Status"
-                          active={sort === "status"}
-                          direction={direction}
-                          onClick={() => changeSort("status")}
-                        />
-                      </TableHead>
-                      <TableHead>
-                        <SortButton
-                          label="Last active"
-                          active={sort === "lastActive"}
-                          direction={direction}
-                          onClick={() => changeSort("lastActive")}
-                        />
-                      </TableHead>
-                      <TableHead className="w-14">
-                        <span className="sr-only">Actions</span>
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {users.map((user) => (
-                      <TableRow key={user.id}>
-                        <TableCell className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface-elevated text-xs font-medium">
-                              {initials(user.name)}
-                            </span>
-                            <span className="min-w-0">
-                              <span className="block font-medium">
-                                {user.name}
+            {roleFilters.size > 0 && (
+              <div
+                className="flex flex-wrap gap-2 border-b p-3"
+                aria-label="Selected roles"
+              >
+                {[...roleFilters].map((id) => (
+                  <Button
+                    key={id}
+                    variant="secondary"
+                    size="sm"
+                    className="h-11 sm:h-8"
+                    onClick={() => toggleRoleFilter(id)}
+                    aria-label={`Remove ${rolesById.get(id)?.name ?? "unknown role"} filter`}
+                  >
+                    {rolesById.get(id)?.name ?? "Unknown role"}
+                    <XIcon className="size-3" />
+                  </Button>
+                ))}
+              </div>
+            )}
+            {users.length ? (
+              <>
+                <div className="hidden md:block">
+                  <Table>
+                    <TableCaption className="sr-only">
+                      Organization users
+                    </TableCaption>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="px-4">
+                          <SortButton
+                            label="User"
+                            active={sort === "name"}
+                            direction={direction}
+                            onClick={() => changeSort("name")}
+                          />
+                        </TableHead>
+                        <TableHead>
+                          <SortButton
+                            label="Roles"
+                            active={sort === "role"}
+                            direction={direction}
+                            onClick={() => changeSort("role")}
+                          />
+                        </TableHead>
+                        <TableHead>
+                          <SortButton
+                            label="Status"
+                            active={sort === "status"}
+                            direction={direction}
+                            onClick={() => changeSort("status")}
+                          />
+                        </TableHead>
+                        <TableHead>
+                          <SortButton
+                            label="Last active"
+                            active={sort === "lastActive"}
+                            direction={direction}
+                            onClick={() => changeSort("lastActive")}
+                          />
+                        </TableHead>
+                        <TableHead className="w-14">
+                          <span className="sr-only">Actions</span>
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {users.map((user) => (
+                        <TableRow key={user.id}>
+                          <TableCell className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-surface-elevated text-xs font-medium">
+                                {initials(user.name)}
                               </span>
-                              <span className="block text-xs text-text-muted">
-                                {user.email}
+                              <span className="min-w-0">
+                                <span className="block font-medium">
+                                  {user.name}
+                                  {user.id === currentOperatorId && (
+                                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                      You
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="block text-xs text-text-muted">
+                                  {user.email}
+                                </span>
                               </span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {user.roleIds
+                              .map(
+                                (id) =>
+                                  rolesById.get(id)?.name ?? "Unknown role",
+                              )
+                              .join(", ")}
+                          </TableCell>
+                          <TableCell>
+                            <UserStatusBadge status={user.status} />
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {formatLastActive(user.lastActiveAt)}
+                          </TableCell>
+                          <TableCell className="pr-3 text-right">
+                            {accessRestriction(user) ? (
+                              protectedAccess(user)
+                            ) : (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    aria-label={`Manage ${user.name}`}
+                                    disabled={
+                                      saving || !authority.canManageUser(user)
+                                    }
+                                  >
+                                    <MoreHorizontalIcon />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  align="end"
+                                  className="w-48"
+                                >
+                                  <DropdownMenuItem
+                                    onSelect={() => {
+                                      clearStorageError();
+                                      setEditError("");
+                                      setEditErrorField(null);
+                                      setEditing(user);
+                                      setEditDraft({
+                                        name: user.name,
+                                        email: user.email,
+                                        roleIds: user.roleIds,
+                                        status: user.status,
+                                      });
+                                    }}
+                                  >
+                                    <UserRoundPenIcon /> Manage access
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    disabled={!authority.canManageUser(user)}
+                                    onSelect={() => openRemoveUser(user)}
+                                  >
+                                    <Trash2Icon />{" "}
+                                    {user.status === "invited"
+                                      ? "Cancel invitation"
+                                      : "Remove user"}
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                <ul
+                  aria-label="Organization users"
+                  className="divide-y divide-border md:hidden"
+                >
+                  {users.map((user) => (
+                    <li key={user.id} className="p-4">
+                      <div className="flex items-start gap-3">
+                        <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface-elevated text-xs font-medium">
+                          {initials(user.name)}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium">
+                            {user.name}
+                            {user.id === currentOperatorId && (
+                              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                You
+                              </span>
+                            )}
+                          </p>
+                          <p className="truncate text-xs text-text-muted">
+                            {user.email}
+                          </p>
+                          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                            <span>
+                              {user.roleIds
+                                .map((id) => rolesById.get(id)?.name)
+                                .join(", ")}
                             </span>
+                            <span aria-hidden="true">·</span>
+                            <UserStatusBadge status={user.status} />
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          {user.roleIds
-                            .map(
-                              (id) => rolesById.get(id)?.name ?? "Unknown role",
-                            )
-                            .join(", ")}
-                        </TableCell>
-                        <TableCell>
-                          <UserStatusBadge status={user.status} />
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {formatLastActive(user.lastActiveAt)}
-                        </TableCell>
-                        <TableCell className="pr-3 text-right">
+                        </div>
+                        {accessRestriction(user) ? (
+                          protectedAccess(user)
+                        ) : (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button
-                                variant="ghost"
-                                size="icon-sm"
+                                variant="outline"
+                                size="icon"
+                                className="size-11"
                                 aria-label={`Manage ${user.name}`}
                                 disabled={
                                   saving || !authority.canManageUser(user)
@@ -806,10 +1003,7 @@ export function OrganizationUsers() {
                                 <MoreHorizontalIcon />
                               </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent
-                              align="end"
-                              className="w-28 min-w-28"
-                            >
+                            <DropdownMenuContent align="end" className="w-48">
                               <DropdownMenuItem
                                 onSelect={() => {
                                   clearStorageError();
@@ -824,7 +1018,7 @@ export function OrganizationUsers() {
                                   });
                                 }}
                               >
-                                <UserRoundPenIcon /> Edit
+                                <UserRoundPenIcon /> Manage access
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem
@@ -832,120 +1026,54 @@ export function OrganizationUsers() {
                                 disabled={!authority.canManageUser(user)}
                                 onSelect={() => openRemoveUser(user)}
                               >
-                                <Trash2Icon /> Remove
+                                <Trash2Icon />{" "}
+                                {user.status === "invited"
+                                  ? "Cancel invitation"
+                                  : "Remove user"}
                               </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              <ul
-                aria-label="Organization users"
-                className="divide-y divide-border md:hidden"
-              >
-                {users.map((user) => (
-                  <li key={user.id} className="p-4">
-                    <div className="flex items-start gap-3">
-                      <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface-elevated text-xs font-medium">
-                        {initials(user.name)}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium">{user.name}</p>
-                        <p className="truncate text-xs text-text-muted">
-                          {user.email}
-                        </p>
-                        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                          <span>
-                            {user.roleIds
-                              .map((id) => rolesById.get(id)?.name)
-                              .join(", ")}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                          <UserStatusBadge status={user.status} />
-                        </div>
+                        )}
                       </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="size-11"
-                            aria-label={`Manage ${user.name}`}
-                            disabled={saving || !authority.canManageUser(user)}
-                          >
-                            <MoreHorizontalIcon />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          className="w-28 min-w-28"
-                        >
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              clearStorageError();
-                              setEditError("");
-                              setEditErrorField(null);
-                              setEditing(user);
-                              setEditDraft({
-                                name: user.name,
-                                email: user.email,
-                                roleIds: user.roleIds,
-                                status: user.status,
-                              });
-                            }}
-                          >
-                            <UserRoundPenIcon /> Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            variant="destructive"
-                            disabled={!authority.canManageUser(user)}
-                            onSelect={() => openRemoveUser(user)}
-                          >
-                            <Trash2Icon /> Remove
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <div className="px-6 py-12 text-center">
-              <h2 className="text-base font-semibold">No matching users</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {activeFilterCount
-                  ? "Try another search or remove a filter."
-                  : "Try another name, email, role, or status."}
-              </p>
-              <Button
-                variant="outline"
-                className="mt-4 h-11 sm:h-9"
-                onClick={() => {
-                  setQuery("");
-                  clearFilters();
-                }}
-              >
-                {activeFilterCount && query
-                  ? "Clear all"
-                  : activeFilterCount
-                    ? "Clear filters"
-                    : "Clear search"}
-              </Button>
-            </div>
-          )}
-        </section>
-      </div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <div className="px-6 py-12 text-center">
+                <h2 className="text-base font-semibold">No matching users</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {activeFilterCount
+                    ? "Try another search or remove a filter."
+                    : "Try another name, email, role, or status."}
+                </p>
+                <Button
+                  variant="outline"
+                  className="mt-4 h-11 sm:h-9"
+                  onClick={() => {
+                    setQuery("");
+                    clearFilters();
+                  }}
+                >
+                  {activeFilterCount && query
+                    ? "Clear all"
+                    : activeFilterCount
+                      ? "Clear filters"
+                      : "Clear search"}
+                </Button>
+              </div>
+            )}
+          </section>
+        </TabsContent>
+      </Tabs>
 
       <Dialog
         open={Boolean(invitationLink)}
         onOpenChange={(open) => {
-          if (!open) clearInvitation();
+          if (!open) {
+            clearInvitation();
+            setCopyStatus("");
+          }
         }}
       >
         <DialogContent>
@@ -964,9 +1092,18 @@ export function OrganizationUsers() {
             readOnly
             onFocus={(event) => event.target.select()}
           />
+          {copyStatus && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {copyStatus}
+            </p>
+          )}
           <DialogFooter>
+            <Button onClick={() => void copyInvitation()}>
+              <CopyIcon />
+              Copy link
+            </Button>
             <DialogClose asChild>
-              <Button>Done</Button>
+              <Button variant="outline">Done</Button>
             </DialogClose>
           </DialogFooter>
         </DialogContent>
@@ -1014,7 +1151,7 @@ export function OrganizationUsers() {
               disabled={saving}
               onClick={createUser}
             >
-              Create invitation
+              {saving ? "Creating invitation..." : "Create invitation link"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1032,7 +1169,7 @@ export function OrganizationUsers() {
       >
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Edit user</DialogTitle>
+            <DialogTitle>Manage access</DialogTitle>
             <DialogDescription>
               Change this user&apos;s roles or suspend access to this
               organization. Saving applies the change to their current session.
@@ -1068,7 +1205,7 @@ export function OrganizationUsers() {
               disabled={saving}
               onClick={updateUser}
             >
-              Save user
+              {saving ? "Saving..." : "Save changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1085,10 +1222,15 @@ export function OrganizationUsers() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {removing?.status === "invited"
+                ? `Cancel invitation for ${removing.name}?`
+                : `Remove ${removing?.name}?`}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This revokes access to the organization and cancels any pending
-              invitation. You can invite the user again later.
+              {removing?.status === "invited"
+                ? "This invitation link will stop working. You can create a new invitation later."
+                : "This revokes access to the organization. You can invite the user again later."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           {removeError || storageError ? (
@@ -1097,13 +1239,17 @@ export function OrganizationUsers() {
             </Alert>
           ) : null}
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep user</AlertDialogCancel>
+            <AlertDialogCancel>
+              {removing?.status === "invited" ? "Keep invitation" : "Keep user"}
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               disabled={saving}
               onClick={removeUser}
             >
-              Remove user
+              {removing?.status === "invited"
+                ? "Cancel invitation"
+                : "Remove user"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

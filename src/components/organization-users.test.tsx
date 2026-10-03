@@ -58,7 +58,7 @@ describe("Organization users backed by the API", () => {
       within(dialog).getByRole("checkbox", { name: "Operator" }),
     );
     await user.click(
-      within(dialog).getByRole("button", { name: "Create invitation" }),
+      within(dialog).getByRole("button", { name: "Create invitation link" }),
     );
     const share = await screen.findByRole("dialog", {
       name: "Share invitation",
@@ -90,8 +90,8 @@ describe("Organization users backed by the API", () => {
         name: "Manage Maya Chen",
       }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
-    const dialog = screen.getByRole("dialog", { name: "Edit user" });
+    await user.click(screen.getByRole("menuitem", { name: "Manage access" }));
+    const dialog = screen.getByRole("dialog", { name: "Manage access" });
     expect(
       (within(dialog).getByLabelText("Email") as HTMLInputElement).disabled,
     ).toBe(true);
@@ -99,7 +99,9 @@ describe("Organization users backed by the API", () => {
       within(dialog).getByRole("combobox", { name: "User status" }),
     );
     await user.click(screen.getByRole("option", { name: "Suspended" }));
-    await user.click(within(dialog).getByRole("button", { name: "Save user" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save changes" }),
+    );
     await waitFor(() =>
       expect(within(dialog).getByRole("alert").textContent).toContain(
         "permission",
@@ -132,11 +134,13 @@ it("saves multiple role assignments on an existing member", async () => {
       name: "Manage Maya Chen",
     }),
   );
-  await user.click(screen.getByRole("menuitem", { name: "Edit" }));
-  const dialog = screen.getByRole("dialog", { name: "Edit user" });
+  await user.click(screen.getByRole("menuitem", { name: "Manage access" }));
+  const dialog = screen.getByRole("dialog", { name: "Manage access" });
   expect(within(dialog).queryByRole("checkbox", { name: "Owner" })).toBeNull();
   await user.click(within(dialog).getByRole("checkbox", { name: "Viewer" }));
-  await user.click(within(dialog).getByRole("button", { name: "Save user" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save changes" }),
+  );
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(
     api.state.team.users.find((entry) => entry.name === "Maya Chen")?.roleIds,
@@ -147,20 +151,21 @@ it("disables editing users with equal or higher roles", async () => {
   mount();
   await screen.findByRole("heading", { name: "Users" });
   const table = screen.getByRole("table");
-  expect(
-    (
+  const user = userEvent.setup();
+  for (const name of ["Demo operator", "Priya Shah"]) {
+    expect(
+      within(table).queryByRole("button", { name: `Manage ${name}` }),
+    ).toBeNull();
+    await user.click(
       within(table).getByRole("button", {
-        name: "Manage Demo operator",
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(true);
-  expect(
-    (
-      within(table).getByRole("button", {
-        name: "Manage Priya Shah",
-      }) as HTMLButtonElement
-    ).disabled,
-  ).toBe(true);
+        name: `Access restriction for ${name}`,
+      }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Access restriction" }),
+    ).toBeTruthy();
+    await user.keyboard("{Escape}");
+  }
   expect(
     (
       within(table).getByRole("button", {
@@ -184,14 +189,104 @@ it("disables member actions for lower roles with permissions the manager lacks",
   const table = screen.getByRole("table");
   for (const name of ["Noah Williams", "Lena Ortiz"]) {
     expect(
-      (
-        within(table).getByRole("button", {
-          name: `Manage ${name}`,
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
+      within(table).queryByRole("button", { name: `Manage ${name}` }),
+    ).toBeNull();
+    expect(
+      within(table).getByRole("button", {
+        name: `Access restriction for ${name}`,
+      }),
+    ).toBeTruthy();
   }
   expect(
     api.fetcher.mock.calls.every(([, options]) => options?.method !== "POST"),
   ).toBe(true);
 });
+
+it("filters by status with keyboard tabs and removable role selections", async () => {
+  const user = userEvent.setup();
+  mount();
+  const all = await screen.findByRole("tab", { name: "All 5" });
+  all.focus();
+  await user.keyboard("{ArrowRight}{ArrowRight}");
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("tab", { name: "Invited 1" })
+        .getAttribute("aria-selected"),
+    ).toBe("true"),
+  );
+  expect(
+    within(screen.getByRole("table")).getByText("Noah Williams"),
+  ).toBeTruthy();
+  expect(within(screen.getByRole("table")).queryByText("Maya Chen")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "Filter by role" }));
+  await user.click(screen.getByRole("menuitemcheckbox", { name: "Operator" }));
+  await user.keyboard("{Escape}");
+  expect(
+    screen.getByRole("heading", { name: "No matching users" }),
+  ).toBeTruthy();
+  await user.click(
+    screen.getByRole("button", { name: "Remove Operator filter" }),
+  );
+  expect(
+    within(screen.getByRole("table")).getByText("Noah Williams"),
+  ).toBeTruthy();
+  expect(screen.getByRole("tab", { name: "All 5" })).toBeTruthy();
+});
+
+it("cancels pending invitations only after confirmation", async () => {
+  const user = userEvent.setup();
+  mount();
+  await screen.findByRole("heading", { name: "Users" });
+  await user.click(
+    within(screen.getByRole("table")).getByRole("button", {
+      name: "Manage Noah Williams",
+    }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Cancel invitation" }));
+  const dialog = screen.getByRole("alertdialog", {
+    name: "Cancel invitation for Noah Williams?",
+  });
+  expect(
+    api.fetcher.mock.calls.every(([, options]) => options?.method !== "POST"),
+  ).toBe(true);
+  await user.click(
+    within(dialog).getByRole("button", { name: "Cancel invitation" }),
+  );
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(
+    api.state.team.users.some((user) => user.name === "Noah Williams"),
+  ).toBe(false);
+});
+
+it.each([true, false])(
+  "reports clipboard outcome without storing the link, success=%s",
+  async (success) => {
+    const user = userEvent.setup();
+    const write = vi.spyOn(navigator.clipboard, "writeText");
+    if (success) write.mockResolvedValue();
+    else write.mockRejectedValue(new Error("Denied"));
+    mount();
+    await screen.findByRole("heading", { name: "Users" });
+    await user.click(screen.getByRole("button", { name: "Invite user" }));
+    const dialog = screen.getByRole("dialog", { name: "Invite user" });
+    await user.type(within(dialog).getByLabelText("Name"), "New member");
+    await user.type(within(dialog).getByLabelText("Email"), "new@example.com");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Viewer" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Create invitation link" }),
+    );
+    const share = await screen.findByRole("dialog", {
+      name: "Share invitation",
+    });
+    await user.click(within(share).getByRole("button", { name: "Copy link" }));
+    expect((await within(share).findByRole("status")).textContent).toBe(
+      success
+        ? "Link copied."
+        : "Could not copy the link. Select it and copy it manually.",
+    );
+    expect(localStorage.length).toBe(0);
+    await user.click(within(share).getByRole("button", { name: "Done" }));
+    expect(screen.queryByLabelText("Invitation link")).toBeNull();
+  },
+);
