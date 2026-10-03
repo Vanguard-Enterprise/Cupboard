@@ -4,14 +4,22 @@ import { usePreviewStorage } from "./preview-storage";
 
 import { useMemo, useState, useSyncExternalStore } from "react";
 import {
+  ChevronRightIcon,
   KeyRoundIcon,
   ServerCogIcon,
-  ShieldCheckIcon,
   WalletCardsIcon,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -51,6 +59,9 @@ function AccessEditor({
     organizationAccessKey,
     organizationAccessChangedEvent,
   );
+  const [confirmSave, setConfirmSave] = useState(false);
+  const [selectedId, setSelectedId] =
+    useState<ApprovalRule["id"]>("server-lifecycle");
   const [draft, setDraft] = useState<OrganizationAccessSettings>(saved);
   const [baseline, setBaseline] = useState(saved);
   const [baselineVersion, setBaselineVersion] = useState(sourceVersion);
@@ -87,10 +98,13 @@ function AccessEditor({
   }
 
   function saveChanges() {
+    setConfirmSave(false);
     try {
       storage.set(JSON.stringify(draft));
       setStorageError("");
-      setSaveMessage("Approval settings saved.");
+      setSaveMessage(
+        "Approval preferences saved in this browser. They do not enforce approvals.",
+      );
     } catch {
       setSaveMessage("");
       setStorageError("Could not save approval settings in this browser.");
@@ -109,7 +123,7 @@ function AccessEditor({
       className="space-y-5"
       onSubmit={(event) => {
         event.preventDefault();
-        if ((dirty || needsReplacement) && !conflict) saveChanges();
+        if ((dirty || needsReplacement) && !conflict) setConfirmSave(true);
       }}
     >
       {storageError && (
@@ -118,78 +132,125 @@ function AccessEditor({
         </Alert>
       )}
 
-      <section
-        aria-labelledby="approval-heading"
-        className="overflow-hidden rounded-xl border border-border bg-card"
-      >
-        <div className="border-b border-border px-4 py-5 sm:px-6">
-          <div className="flex items-center gap-3">
-            <ShieldCheckIcon
-              className="size-5 shrink-0 text-primary"
-              aria-hidden="true"
-            />
-            <h2 id="approval-heading" className="text-lg font-semibold">
-              Approval rules
-            </h2>
-          </div>
-          <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            Saved in this browser. These rules do not block sensitive actions.
-          </p>
-        </div>
-        <div className="divide-y divide-border">
-          {draft.rules.map((rule) => {
-            const Icon = ruleIcons[rule.id];
-            return (
-              <div
-                key={rule.id}
-                data-testid={`approval-rule-${rule.id}`}
-                className="grid gap-4 px-4 py-5 sm:grid-cols-[minmax(0,1fr)_6rem] sm:items-center sm:gap-5 sm:px-6"
-              >
-                <div className="flex min-w-0 items-start gap-3">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated text-muted-foreground">
-                    <Icon className="size-4" aria-hidden="true" />
+      <div className="grid items-start gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <section aria-label="Approval rules">
+          <div className="overflow-hidden rounded-xl border border-border bg-card">
+            {draft.rules.map((rule) => {
+              const Icon = ruleIcons[rule.id];
+              const selected = selectedId === rule.id;
+              return (
+                <button
+                  key={rule.id}
+                  type="button"
+                  aria-pressed={selected}
+                  aria-controls="approval-detail"
+                  onClick={() => setSelectedId(rule.id)}
+                  data-testid={`approval-rule-${rule.id}`}
+                  className={`flex min-h-20 w-full items-center gap-3 border-b border-border px-4 py-4 text-left last:border-b-0 transition-colors duration-150 hover:bg-surface-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none ${selected ? "bg-surface-elevated" : ""}`}
+                >
+                  <span
+                    className={`flex size-10 shrink-0 items-center justify-center rounded-lg ${selected ? "bg-primary/10 text-primary" : "bg-surface-elevated text-muted-foreground"}`}
+                  >
+                    <Icon className="size-5" aria-hidden="true" />
                   </span>
-                  <div className="min-w-0 pt-0.5">
-                    <h3 className="text-sm font-medium">{rule.title}</h3>
-                    <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">
+                      {rule.title}
+                    </span>{" "}
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {rule.approvals === 0
+                        ? "No approval required"
+                        : `${rule.approvals} ${rule.approvals === 1 ? "approval" : "approvals"} required`}
+                    </span>
+                  </span>
+                  <ChevronRightIcon
+                    className={`size-4 shrink-0 ${selected ? "text-primary" : "text-muted-foreground"}`}
+                    aria-hidden="true"
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        <section
+          id="approval-detail"
+          aria-labelledby="policy-heading"
+          className="min-w-0 overflow-hidden rounded-xl border border-border bg-card"
+        >
+          {draft.rules
+            .filter((rule) => rule.id === selectedId)
+            .map((rule) => {
+              const Icon = ruleIcons[rule.id];
+              return (
+                <div key={rule.id} className="space-y-6 px-5 py-6">
+                  <div className="flex items-center gap-3">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Icon className="size-5" aria-hidden="true" />
+                    </span>
+                    <div>
+                      <p className="text-xs text-muted-foreground">
+                        Approval rule
+                      </p>
+                      <h2
+                        id="policy-heading"
+                        className="mt-1 text-base font-semibold"
+                      >
+                        {rule.title}
+                      </h2>
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium">Applies to</h3>
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
                       {rule.description}
                     </p>
                   </div>
-                </div>
-                <div className="flex items-center justify-between gap-3 sm:justify-end">
-                  <Label
-                    htmlFor={`${rule.id}-approvers`}
-                    className="text-sm font-normal text-muted-foreground sm:sr-only"
-                  >
-                    Approvals required
-                  </Label>
-                  <Select
-                    value={String(rule.approvals)}
-                    onValueChange={(value) =>
-                      updateRule(rule.id, {
-                        approvals: Number(value) as 0 | 1 | 2,
-                      })
-                    }
-                  >
-                    <SelectTrigger
-                      id={`${rule.id}-approvers`}
-                      aria-label={`Approvals required for ${rule.title}`}
-                      className="h-11 w-24 border-border bg-input-background sm:h-10"
+                  <div className="rounded-lg bg-surface-elevated p-4">
+                    <Label
+                      htmlFor={`${rule.id}-approvers`}
+                      className="text-sm font-medium"
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent position="popper" align="end">
-                      <SelectItem value="0">None</SelectItem>
-                      <SelectItem value="1">1</SelectItem>
-                      <SelectItem value="2">2</SelectItem>
-                    </SelectContent>
-                  </Select>
+                      Approvals required
+                    </Label>
+                    <Select
+                      value={String(rule.approvals)}
+                      onValueChange={(value) =>
+                        updateRule(rule.id, {
+                          approvals: Number(value) as 0 | 1 | 2,
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        id={`${rule.id}-approvers`}
+                        aria-label={`Approvals required for ${rule.title}`}
+                        className="mt-3 w-full border-border bg-input-background data-[size=default]:h-11 sm:data-[size=default]:h-10"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent position="popper" align="end">
+                        <SelectItem value="0">No approval required</SelectItem>
+                        <SelectItem value="1">1 approval</SelectItem>
+                        <SelectItem value="2">2 approvals</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                      {rule.approvals === 0
+                        ? "Selected preference: no additional approval."
+                        : `Selected preference: ${rule.approvals === 1 ? "one approval" : "two approvals"}.`}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border px-4 py-4 sm:px-6">
+              );
+            })}
+        </section>
+      </div>
+      <div className="border-t border-border pt-5">
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {dirty && !conflict && (
+            <p className="mr-auto text-sm text-muted-foreground">
+              Unsaved changes
+            </p>
+          )}
           {conflict && (
             <Alert
               variant="destructive"
@@ -238,7 +299,35 @@ function AccessEditor({
             Save changes
           </Button>
         </div>
-      </section>
+      </div>
+      <Dialog open={confirmSave} onOpenChange={setConfirmSave}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save approval preferences?</DialogTitle>
+            <DialogDescription>
+              These preferences are saved only in this browser. They do not
+              block server, credential, or billing actions or require anyone to
+              approve them.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmSave(false)}
+            >
+              Keep editing
+            </Button>
+            <Button
+              type="button"
+              disabled={conflict || (!dirty && !needsReplacement)}
+              onClick={saveChanges}
+            >
+              Save preferences
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   );
 }
