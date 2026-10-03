@@ -985,3 +985,123 @@ async fn role_migration_preserves_existing_memberships() {
     tx.rollback().await.unwrap();
     pool.close().await;
 }
+
+#[tokio::test]
+async fn server_inventory_permissions_isolation_and_secret_storage() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::servers::SecretKey::parse(&"ab".repeat(32)).unwrap(),
+    ));
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    assert_eq!(
+        anonymous.request("GET", "servers", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    owner
+        .signup(&format!("server-owner-{suffix}@example.com"))
+        .await;
+    assert_eq!(
+        owner.request("GET", "servers", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    owner.create_organization().await;
+    other
+        .signup(&format!("server-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let input = json!({"name":" Main server ","rconHost":"127.0.0.1","rconPort":28016,"rconPassword":"rcon-secret-never-returned","a2sHost":"rust.example.com","a2sPort":28017});
+    let (status, created) = owner.request("POST", "servers", input.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["name"], "Main server");
+    assert!(!created.to_string().contains("secret"));
+    let (_, listed) = owner.request("GET", "servers", json!(null)).await;
+    assert_eq!(listed, json!([created.clone()]));
+    let reconnected = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let mut restarted = Client::new(&router_with_auth(
+        reconnected.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    ));
+    restarted.cookie = owner.cookie.clone();
+    assert_eq!(
+        restarted.request("GET", "servers", json!(null)).await.1,
+        json!([created.clone()])
+    );
+    reconnected.close().await;
+    assert!(!listed.to_string().contains("secret"));
+    let (status, listed) = other.request("GET", "servers", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed, json!([]));
+    let encrypted: Vec<u8> =
+        sqlx::query_scalar("SELECT rcon_password_encrypted FROM servers WHERE id=$1")
+            .bind(created["id"].as_str().unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        !encrypted
+            .windows(b"rcon-secret-never-returned".len())
+            .any(|w| w == b"rcon-secret-never-returned")
+    );
+    let mut invalid = input.clone();
+    invalid["rconHost"] = json!("https://bad:123");
+    invalid["rconPort"] = json!(0);
+    invalid["rconPassword"] = json!("");
+    let (status, response) = owner.request("POST", "servers", invalid).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(response["fields"]["rconHost"].is_string());
+    assert!(response["fields"]["rconPort"].is_string());
+    assert!(response["fields"]["rconPassword"].is_string());
+    let (status, response) = owner
+        .request(
+            "POST",
+            "servers",
+            json!({"organizationId":"spoofed","name":"test"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!response.to_string().contains("rcon-secret"));
+    // Removing role permissions applies to existing sessions immediately.
+    let org: String = sqlx::query_scalar("SELECT organization_id FROM servers WHERE id=$1")
+        .bind(created["id"].as_str().unwrap())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE organizations SET owner_account_id=(SELECT account_id FROM organization_members WHERE organization_id<>$1 LIMIT 1) WHERE id=$1").bind(&org).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['servers.view']::text[] WHERE organization_id=$1").bind(&org).execute(&pool).await.unwrap();
+    assert_eq!(
+        owner.request("GET", "servers", json!(null)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner.request("POST", "servers", input.clone()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query(
+        "UPDATE organization_roles SET permissions=ARRAY[]::text[] WHERE organization_id=$1",
+    )
+    .bind(&org)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owner.request("GET", "servers", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+}

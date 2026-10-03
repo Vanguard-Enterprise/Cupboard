@@ -106,7 +106,16 @@ export function Workspace({
             crumbs: ["Organization", "Members & teams", "Roles"],
           }
         : undefined;
-  const page = identity.organization ? (currentPage ?? teamPage) : undefined;
+  const serverPage =
+    pathname === "/dashboard/servers"
+      ? {
+          activeSection: "servers",
+          crumbs: ["Operations", "Game servers", "Server inventory"],
+        }
+      : undefined;
+  const page = identity.organization
+    ? (serverPage ?? currentPage ?? teamPage)
+    : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
     <PreviewStorageProvider

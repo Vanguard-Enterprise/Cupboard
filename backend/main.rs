@@ -17,6 +17,9 @@ async fn run() -> Result<(), &'static str> {
         .unwrap_or_else(|_| "0.0.0.0:8080".into())
         .parse()
         .map_err(|_| "CUPBOARD_API_BIND must be an IP address and port")?;
+    let key = cupboard::servers::SecretKey::parse(
+        &env::var("CUPBOARD_SECRET_KEY").map_err(|_| "CUPBOARD_SECRET_KEY is required")?,
+    )?;
     let pool = cupboard::connect(&url).await?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -30,10 +33,13 @@ async fn run() -> Result<(), &'static str> {
             .collect(),
         secure_cookies: env::var("CUPBOARD_INSECURE_COOKIES").as_deref() != Ok("1"),
     };
-    let result = axum::serve(listener, cupboard::router_with_auth(pool.clone(), config))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .map_err(|_| "API listener failed");
+    let result = axum::serve(
+        listener,
+        cupboard::router_with_auth(pool.clone(), config).layer(axum::Extension(key)),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await
+    .map_err(|_| "API listener failed");
     pool.close().await;
     result
 }

@@ -29,7 +29,7 @@ pub struct Context {
     pub position: i32,
     pub permissions: Vec<String>,
 }
-async fn organization_id(session: &Session) -> ApiResult<String> {
+pub(crate) async fn organization_id(session: &Session) -> ApiResult<String> {
     session
         .get("organization_id")
         .await
@@ -41,7 +41,11 @@ pub async fn context(pool: &PgPool, user: &Account, session: &Session) -> ApiRes
     context_on(&mut conn, &user.id, &organization_id(session).await?).await
 }
 // Tenant membership is checked here, alongside data access, not trusted from a route or client ID.
-async fn context_on(conn: &mut PgConnection, user_id: &str, org: &str) -> ApiResult<Context> {
+pub(crate) async fn context_on(
+    conn: &mut PgConnection,
+    user_id: &str,
+    org: &str,
+) -> ApiResult<Context> {
     let mut ctx: Context = sqlx::query_as("SELECT o.id AS organization_id,o.name AS organization_name,m.id AS member_id,(o.owner_account_id=m.account_id) AS is_owner,COALESCE((SELECT min(r.position) FROM organization_member_roles mr JOIN organization_roles r ON r.organization_id=mr.organization_id AND r.id=mr.role_id WHERE mr.organization_id=o.id AND mr.member_id=m.id),2147483647) AS position,ARRAY(SELECT DISTINCT p FROM organization_member_roles mr JOIN organization_roles r ON r.organization_id=mr.organization_id AND r.id=mr.role_id CROSS JOIN unnest(r.permissions) p WHERE mr.organization_id=o.id AND mr.member_id=m.id) AS permissions FROM organizations o JOIN organization_members m ON m.organization_id=o.id WHERE o.id=$1 AND m.account_id=$2 AND m.status='active'")
         .bind(org).bind(user_id).fetch_optional(conn).await?.ok_or_else(forbidden)?;
     if ctx.is_owner {

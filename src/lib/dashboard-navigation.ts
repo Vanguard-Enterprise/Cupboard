@@ -259,6 +259,7 @@ export const usersPath = "/dashboard/organization/team/users";
 export const rolesPath = "/dashboard/organization/team/roles";
 
 export function navigationHref(id: string): string | undefined {
+  if (id === "servers") return "/dashboard/servers";
   if (id === "connections") return connectionsPath;
   if (id === "organization") return profilePath;
   if (id === "billing") return usagePath;
