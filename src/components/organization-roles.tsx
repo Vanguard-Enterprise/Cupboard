@@ -295,6 +295,7 @@ export function OrganizationRoles() {
     reload,
   } = useOrganizationTeam();
   const detailsTrigger = useRef<HTMLButtonElement | null>(null);
+  const editorReturnFocus = useRef<HTMLButtonElement | null>(null);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const pointerDrag = useRef<{
@@ -484,7 +485,11 @@ export function OrganizationRoles() {
     }
   }
 
-  function openRoleDialog(role?: OrganizationRole) {
+  function openRoleDialog(
+    role?: OrganizationRole,
+    returnFocus: HTMLButtonElement | null = null,
+  ) {
+    editorReturnFocus.current = returnFocus;
     clearStorageError();
     setFormError("");
     setFormErrorField(null);
@@ -1023,7 +1028,7 @@ export function OrganizationRoles() {
           className="data-[side=right]:w-full data-[side=right]:sm:max-w-lg motion-reduce:animate-none"
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            detailsTrigger.current?.focus();
+            if (!dialogOpen) detailsTrigger.current?.focus();
           }}
         >
           {selectedRole ? (
@@ -1100,7 +1105,7 @@ export function OrganizationRoles() {
                   }
                   onClick={() => {
                     setSelectedRoleId(null);
-                    openRoleDialog(selectedRole);
+                    openRoleDialog(selectedRole, detailsTrigger.current);
                   }}
                 >
                   Edit role
@@ -1118,7 +1123,16 @@ export function OrganizationRoles() {
           if (!open) setEditing(null);
         }}
       >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
+        <DialogContent
+          className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl"
+          onCloseAutoFocus={(event) => {
+            if (editorReturnFocus.current?.isConnected) {
+              event.preventDefault();
+              editorReturnFocus.current.focus();
+              editorReturnFocus.current = null;
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{editing ? "Edit role" : "Add role"}</DialogTitle>
             <DialogDescription>

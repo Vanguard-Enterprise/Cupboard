@@ -252,3 +252,33 @@ it("shows missing permissions and opens an editable role from its details", asyn
     ).disabled,
   ).toBe(false);
 });
+
+it.each(["cancel", "escape", "save"])(
+  "restores the role trigger after %s in an editor opened from details",
+  async (action) => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("heading", { name: "Roles" });
+    const trigger = within(screen.getByRole("table")).getByRole("button", {
+      name: "View Operator role",
+    });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Operator" })).getByRole(
+        "button",
+        { name: "Edit role" },
+      ),
+    );
+    const editor = screen.getByRole("dialog", { name: "Edit role" });
+    if (action === "escape") await user.keyboard("{Escape}");
+    else
+      await user.click(
+        within(editor).getByRole("button", {
+          name: action === "save" ? "Save role" : "Cancel",
+        }),
+      );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  },
+);
