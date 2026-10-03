@@ -52,54 +52,81 @@ afterEach(() => {
 });
 
 describe("Organization approvals", () => {
-  it("shows approval counts in a responsive column", async () => {
+  it("shows a selectable policy list and selected detail", async () => {
+    const user = userEvent.setup();
     mount();
-
+    await screen.findByRole("region", { name: "Approval rules" });
+    const server = screen.getByRole("button", {
+      name: "Server lifecycle 1 approval required",
+    });
+    expect(server.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    const credentials = screen.getByRole("button", {
+      name: "Credentials 2 approvals required",
+    });
+    credentials.focus();
+    await user.keyboard("{Enter}");
+    expect(credentials.getAttribute("aria-pressed")).toBe("true");
+    expect(server.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("heading", { name: "Credentials" })).toBeTruthy();
     expect(
-      await screen.findByRole("heading", { name: "Approval rules" }),
+      screen.getByLabelText("Approvals required for Credentials"),
     ).toBeTruthy();
-    expect(screen.queryByText("Member access", { selector: "h2" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Invite member" })).toBeNull();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Save changes",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
 
-    const serverRule = screen.getByTestId("approval-rule-server-lifecycle");
-    expect(serverRule.className).toContain("grid");
-    expect(serverRule.className).toContain("sm:grid-cols-");
-    const approvalLabels = screen.getAllByText("Approvals required");
-    expect(approvalLabels).toHaveLength(3);
-    expect(approvalLabels[0].className).toContain("sm:sr-only");
-    const serverApprovers = screen.getByLabelText(
-      "Approvals required for Server lifecycle",
+  it("preserves changes across policy selection and saves all rules", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Approval rules" });
+    await user.click(
+      screen.getByLabelText("Approvals required for Server lifecycle"),
     );
-    expect(serverApprovers.className).toContain("h-11");
-    expect(serverApprovers.className).toContain("sm:h-10");
-
-    expect(screen.queryByRole("switch")).toBeNull();
-    const cancel = screen.getByRole("button", {
-      name: "Cancel",
-    }) as HTMLButtonElement;
-    expect(cancel.disabled).toBe(true);
-    const save = screen.getByRole("button", { name: "Save changes" });
-    expect(save.className).toContain("h-11");
-    expect(save.className).toContain("w-full");
+    await user.click(screen.getByRole("option", { name: "2 approvals" }));
+    await user.click(
+      screen.getByRole("button", { name: "Billing No approval required" }),
+    );
+    await user.click(screen.getByLabelText("Approvals required for Billing"));
+    await user.click(screen.getByRole("option", { name: "1 approval" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Server lifecycle 2 approvals required",
+      }),
+    );
+    expect(
+      screen.getByLabelText("Approvals required for Server lifecycle")
+        .textContent,
+    ).toContain("2 approvals");
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    const stored = parseOrganizationAccess(
+      localStorage.getItem(organizationAccessKey)!,
+    );
+    expect(stored.rules.map((rule) => rule.approvals)).toEqual([2, 2, 1]);
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
   });
 
   it("saves approver changes", async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
-    expect(
-      screen.getByText(
-        "Saved in this browser. These rules do not block sensitive actions.",
-      ),
-    ).toBeTruthy();
+    await screen.findByRole("region", { name: "Approval rules" });
 
     const save = screen.getByRole("button", {
       name: "Save changes",
     }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
 
+    await user.click(
+      screen.getByRole("button", { name: "Billing No approval required" }),
+    );
     await user.click(screen.getByLabelText("Approvals required for Billing"));
-    await user.click(screen.getByRole("option", { name: "2" }));
+    await user.click(screen.getByRole("option", { name: "2 approvals" }));
     expect(save.disabled).toBe(false);
     await user.click(save);
 
@@ -116,7 +143,10 @@ describe("Organization approvals", () => {
   it("cancels unsaved approval changes", async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
+    await screen.findByRole("region", { name: "Approval rules" });
+    await user.click(
+      screen.getByRole("button", { name: "Billing No approval required" }),
+    );
     const billing = screen.getByLabelText("Approvals required for Billing");
     const cancel = screen.getByRole("button", {
       name: "Cancel",
@@ -126,12 +156,12 @@ describe("Organization approvals", () => {
     }) as HTMLButtonElement;
 
     await user.click(billing);
-    await user.click(screen.getByRole("option", { name: "2" }));
+    await user.click(screen.getByRole("option", { name: "2 approvals" }));
     expect(billing.textContent).toContain("2");
     expect(cancel.disabled).toBe(false);
 
     await user.click(cancel);
-    expect(billing.textContent).toContain("None");
+    expect(billing.textContent).toContain("No approval required");
     expect(cancel.disabled).toBe(true);
     expect(save.disabled).toBe(true);
     expect(localStorage.getItem(organizationAccessKey)).toBeNull();
@@ -140,12 +170,14 @@ describe("Organization approvals", () => {
   it("saves a rule with no approval requirement", async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
+    await screen.findByRole("region", { name: "Approval rules" });
 
     await user.click(
       screen.getByLabelText("Approvals required for Server lifecycle"),
     );
-    await user.click(screen.getByRole("option", { name: "None" }));
+    await user.click(
+      screen.getByRole("option", { name: "No approval required" }),
+    );
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(
@@ -157,12 +189,12 @@ describe("Organization approvals", () => {
   it("preserves a dirty draft when another tab saves", async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
+    await screen.findByRole("region", { name: "Approval rules" });
     const serverApprovers = screen.getByLabelText(
       "Approvals required for Server lifecycle",
     );
     await user.click(serverApprovers);
-    await user.click(screen.getByRole("option", { name: "2" }));
+    await user.click(screen.getByRole("option", { name: "2 approvals" }));
 
     const external = structuredClone(defaultOrganizationAccess);
     external.rules[1].approvals = 1;
@@ -187,7 +219,7 @@ describe("Organization approvals", () => {
 
   it("loads another tab's save when the draft is clean", async () => {
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
+    await screen.findByRole("region", { name: "Approval rules" });
     const external = structuredClone(defaultOrganizationAccess);
     external.rules[0].approvals = 2;
     externalSave(external);
@@ -202,9 +234,12 @@ describe("Organization approvals", () => {
   it("keeps the draft when browser storage fails", async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
+    await screen.findByRole("region", { name: "Approval rules" });
+    await user.click(
+      screen.getByRole("button", { name: "Billing No approval required" }),
+    );
     await user.click(screen.getByLabelText("Approvals required for Billing"));
-    await user.click(screen.getByRole("option", { name: "2" }));
+    await user.click(screen.getByRole("option", { name: "2 approvals" }));
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("Storage unavailable");
     });
@@ -228,7 +263,7 @@ describe("Organization approvals", () => {
     localStorage.setItem(organizationAccessKey, "not-json");
     const user = userEvent.setup();
     mount();
-    await screen.findByRole("heading", { name: "Approval rules" });
+    await screen.findByRole("region", { name: "Approval rules" });
 
     expect(screen.getByRole("alert").textContent).toContain(
       "could not be loaded",
