@@ -105,11 +105,34 @@ describe("Organization approvals", () => {
     ).toContain("2 approvals");
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
     const stored = parseOrganizationAccess(
       localStorage.getItem(organizationAccessKey)!,
     );
     expect(stored.rules.map((rule) => rule.approvals)).toEqual([2, 2, 1]);
     expect(screen.queryByText("Unsaved changes")).toBeNull();
+  });
+
+  it("explains local saving before committing preferences", async () => {
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Approval rules" });
+    await user.click(
+      screen.getByLabelText("Approvals required for Server lifecycle"),
+    );
+    await user.click(screen.getByRole("option", { name: "2 approvals" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "They do not block server, credential, or billing actions",
+    );
+    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.getByLabelText("Approvals required for Server lifecycle")
+        .textContent,
+    ).toContain("2 approvals");
+    expect(localStorage.getItem(organizationAccessKey)).toBeNull();
   });
 
   it("saves approver changes", async () => {
@@ -129,13 +152,14 @@ describe("Organization approvals", () => {
     await user.click(screen.getByRole("option", { name: "2 approvals" }));
     expect(save.disabled).toBe(false);
     await user.click(save);
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
 
     const stored = parseOrganizationAccess(
       localStorage.getItem(organizationAccessKey)!,
     );
     expect(stored.rules[2].approvals).toBe(2);
     expect(screen.getByRole("status").textContent).toContain(
-      "Approval settings saved.",
+      "Approval preferences saved in this browser. They do not enforce approvals.",
     );
     expect(save.disabled).toBe(true);
   });
@@ -179,6 +203,7 @@ describe("Organization approvals", () => {
       screen.getByRole("option", { name: "No approval required" }),
     );
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
 
     expect(
       parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!)
@@ -245,6 +270,7 @@ describe("Organization approvals", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
 
     const storageAlert = screen.getByRole("alert");
     expect(storageAlert.getAttribute("data-slot")).toBe("alert");
@@ -274,12 +300,13 @@ describe("Organization approvals", () => {
     expect(save.disabled).toBe(false);
 
     await user.click(save);
+    await user.click(screen.getByRole("button", { name: "Save preferences" }));
 
     expect(
       parseOrganizationAccess(localStorage.getItem(organizationAccessKey)!),
     ).toEqual(defaultOrganizationAccess);
     expect(screen.getByRole("status").textContent).toContain(
-      "Approval settings saved.",
+      "Approval preferences saved in this browser. They do not enforce approvals.",
     );
     expect(screen.queryByRole("alert")).toBeNull();
     expect(save.disabled).toBe(true);

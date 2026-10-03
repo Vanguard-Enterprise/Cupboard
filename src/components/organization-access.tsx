@@ -13,6 +13,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -51,6 +59,7 @@ function AccessEditor({
     organizationAccessKey,
     organizationAccessChangedEvent,
   );
+  const [confirmSave, setConfirmSave] = useState(false);
   const [selectedId, setSelectedId] =
     useState<ApprovalRule["id"]>("server-lifecycle");
   const [draft, setDraft] = useState<OrganizationAccessSettings>(saved);
@@ -89,10 +98,13 @@ function AccessEditor({
   }
 
   function saveChanges() {
+    setConfirmSave(false);
     try {
       storage.set(JSON.stringify(draft));
       setStorageError("");
-      setSaveMessage("Approval settings saved.");
+      setSaveMessage(
+        "Approval preferences saved in this browser. They do not enforce approvals.",
+      );
     } catch {
       setSaveMessage("");
       setStorageError("Could not save approval settings in this browser.");
@@ -111,7 +123,7 @@ function AccessEditor({
       className="space-y-5"
       onSubmit={(event) => {
         event.preventDefault();
-        if ((dirty || needsReplacement) && !conflict) saveChanges();
+        if ((dirty || needsReplacement) && !conflict) setConfirmSave(true);
       }}
     >
       {storageError && (
@@ -223,8 +235,8 @@ function AccessEditor({
                     </Select>
                     <p className="mt-3 text-xs leading-5 text-muted-foreground">
                       {rule.approvals === 0
-                        ? "No additional approval is configured for these actions."
-                        : `These actions are configured to require ${rule.approvals === 1 ? "one approval" : "two approvals"}.`}
+                        ? "Selected preference: no additional approval."
+                        : `Selected preference: ${rule.approvals === 1 ? "one approval" : "two approvals"}.`}
                     </p>
                   </div>
                 </div>
@@ -288,6 +300,34 @@ function AccessEditor({
           </Button>
         </div>
       </div>
+      <Dialog open={confirmSave} onOpenChange={setConfirmSave}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save approval preferences?</DialogTitle>
+            <DialogDescription>
+              These preferences are saved only in this browser. They do not
+              block server, credential, or billing actions or require anyone to
+              approve them.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirmSave(false)}
+            >
+              Keep editing
+            </Button>
+            <Button
+              type="button"
+              disabled={conflict || (!dirty && !needsReplacement)}
+              onClick={saveChanges}
+            >
+              Save preferences
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </form>
   );
 }
