@@ -9,13 +9,11 @@ import {
   CircleAlertIcon,
   ClipboardIcon,
   EyeIcon,
-  KeyRoundIcon,
   MoreHorizontalIcon,
   PauseIcon,
   PencilIcon,
   PlayIcon,
   PlusIcon,
-  RadioTowerIcon,
   RefreshCwIcon,
   Trash2Icon,
 } from "lucide-react";
@@ -140,22 +138,20 @@ function CredentialRow({
   disabled: boolean;
 }) {
   return (
-    <div className="grid gap-3 px-5 py-4 sm:px-6 md:grid-cols-[minmax(0,1.4fr)_10rem_10rem_auto] md:items-center">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 px-5 py-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_8rem_8rem_2.25rem] lg:items-center">
       <div className="min-w-0">
-        <p className="font-medium">{credential.name}</p>
+        <p className="break-words font-medium">{credential.name}</p>
         <code className="mt-1.5 block font-mono text-xs text-muted-foreground">
           {credential.prefix}
         </code>
       </div>
-      <div className="grid grid-cols-[5rem_1fr] items-baseline gap-2 md:block">
-        <p className="text-xs text-text-muted">Created</p>
-        <p className="text-sm text-muted-foreground md:mt-1">
-          {credential.createdAt}
-        </p>
+      <div className="col-start-1 grid grid-cols-[5rem_1fr] items-baseline gap-2 lg:col-auto lg:block">
+        <p className="text-xs text-text-muted lg:sr-only">Created</p>
+        <p className="text-sm text-muted-foreground">{credential.createdAt}</p>
       </div>
-      <div className="grid grid-cols-[5rem_1fr] items-baseline gap-2 md:block">
-        <p className="text-xs text-text-muted">Last used</p>
-        <p className="text-sm text-muted-foreground md:mt-1">
+      <div className="col-start-1 grid grid-cols-[5rem_1fr] items-baseline gap-2 lg:col-auto lg:block">
+        <p className="text-xs text-text-muted lg:sr-only">Last used</p>
+        <p className="text-sm text-muted-foreground">
           {credential.lastUsed ?? "Never used"}
         </p>
       </div>
@@ -164,7 +160,7 @@ function CredentialRow({
           <Button
             variant="ghost"
             size="icon"
-            className="size-9 justify-self-start text-text-muted [@media(any-pointer:coarse)]:size-11 md:justify-self-end"
+            className="col-start-2 row-start-1 size-11 self-start text-text-muted lg:col-auto lg:row-auto lg:size-9 lg:self-center lg:justify-self-end [@media(any-pointer:coarse)]:size-11"
             aria-label={`Credential actions for ${credential.name}`}
             disabled={disabled}
           >
@@ -212,60 +208,70 @@ function WebhookRow({
   const failed = Boolean(
     webhook.lastDelivery && webhook.lastDelivery.status >= 400,
   );
-  const status = !webhook.enabled
-    ? "Paused"
-    : failed
-      ? "Delivery failed"
-      : "Active";
-  const delivery = webhook.lastDelivery
-    ? failed
-      ? `Last delivery failed ${webhook.lastDelivery.deliveredAt}`
-      : `Last delivery ${webhook.lastDelivery.deliveredAt}`
-    : "No deliveries yet";
   return (
     <div className="group grid grid-cols-[minmax(0,1fr)_auto] items-center transition-colors hover:bg-surface-elevated focus-within:bg-surface-elevated">
       <button
         type="button"
         className="min-w-0 px-5 py-4 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 sm:px-6"
+        id={`webhook-details-${webhook.id}`}
         onClick={() => onOpen(webhook)}
         disabled={disabled}
       >
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-medium text-foreground">{webhook.name}</p>
-              <Badge
-                variant={failed ? "destructive" : "outline"}
-                className={
-                  failed
-                    ? undefined
-                    : webhook.enabled
-                      ? "border-primary/30 bg-primary/10 text-primary"
-                      : "text-muted-foreground"
-                }
-              >
-                <span
-                  className={`size-1.5 rounded-full ${failed ? "bg-destructive" : webhook.enabled ? "bg-primary" : "bg-text-muted"}`}
-                />
-                {status}
-              </Badge>
-            </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 lg:grid-cols-[minmax(0,1fr)_3rem_5rem_9rem] lg:items-center lg:gap-4">
+          <div className="col-span-2 min-w-0 lg:col-span-1">
+            <p className="break-words font-medium text-foreground">
+              {webhook.name}
+            </p>
             <p className="mt-1.5 truncate font-mono text-xs text-muted-foreground">
               {webhook.url}
             </p>
-            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-              <span>
-                {webhook.events.length}{" "}
-                {webhook.events.length === 1
-                  ? "subscribed event"
-                  : "subscribed events"}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className={failed ? "text-destructive" : undefined}>
-                {delivery}
-              </span>
-            </div>
           </div>
+          <span className="text-xs text-muted-foreground">
+            {webhook.events.length}
+            <span className="lg:sr-only">
+              {" "}
+              subscribed {webhook.events.length === 1 ? "event" : "events"}
+            </span>
+          </span>
+          <span>
+            <Badge
+              variant="outline"
+              className={
+                webhook.enabled
+                  ? "border-primary/30 bg-primary/10 text-primary"
+                  : "text-muted-foreground"
+              }
+            >
+              {webhook.enabled ? "Enabled" : "Paused"}
+            </Badge>
+          </span>
+          <span className="col-span-2 text-xs text-muted-foreground lg:col-span-1">
+            {webhook.lastDelivery ? (
+              <>
+                <span
+                  className={`flex items-center gap-1.5 ${failed ? "text-destructive" : "text-foreground"}`}
+                >
+                  {failed ? (
+                    <CircleAlertIcon className="size-3.5" aria-hidden="true" />
+                  ) : (
+                    <CheckCircle2Icon
+                      className="size-3.5 text-primary"
+                      aria-hidden="true"
+                    />
+                  )}
+                  {failed ? "Delivery failed" : "Delivered"}
+                  <span className="font-mono text-text-muted">
+                    {webhook.lastDelivery.status}
+                  </span>
+                </span>
+                <span className="mt-1 block">
+                  {webhook.lastDelivery.deliveredAt}
+                </span>
+              </>
+            ) : (
+              "No deliveries yet"
+            )}
+          </span>
         </div>
       </button>
       <div className="pr-4 sm:pr-5">
@@ -274,7 +280,7 @@ function WebhookRow({
             <Button
               variant="ghost"
               size="icon"
-              className="size-9 text-muted-foreground [@media(any-pointer:coarse)]:size-11"
+              className="size-11 text-muted-foreground lg:size-9 [@media(any-pointer:coarse)]:size-11"
               aria-label={`Manage ${webhook.name}`}
               disabled={disabled}
             >
@@ -419,6 +425,7 @@ export function OrganizationIntegrations() {
   const [suspendedDraftDialog, setSuspendedDraftDialog] = useState<
     "credential" | "webhook" | null
   >(null);
+  const webhookReturnFocusId = useRef<string | null>(null);
   const credentialNameRef = useRef<HTMLInputElement>(null);
   const webhookNameRef = useRef<HTMLInputElement>(null);
   const webhookUrlRef = useRef<HTMLInputElement>(null);
@@ -850,7 +857,7 @@ export function OrganizationIntegrations() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-8">
       {feedback && (
         <Alert variant="destructive">
           <AlertDescription>{feedback.message}</AlertDescription>
@@ -884,15 +891,12 @@ export function OrganizationIntegrations() {
       >
         <div className="flex flex-col items-stretch gap-3 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-surface-elevated text-primary">
-              <KeyRoundIcon className="size-4" aria-hidden="true" />
-            </div>
             <h2 id="credentials-heading" className="text-base font-semibold">
               API credentials
             </h2>
           </div>
           <Button
-            className="h-10 w-full sm:w-auto [@media(any-pointer:coarse)]:min-h-11"
+            className="h-11 w-full sm:w-auto lg:h-10 [@media(any-pointer:coarse)]:min-h-11"
             onClick={openCredentialDialog}
             disabled={storageUnreadable}
           >
@@ -900,6 +904,17 @@ export function OrganizationIntegrations() {
             Create credential
           </Button>
         </div>
+        {data.credentials.length > 0 && (
+          <div
+            aria-hidden="true"
+            className="hidden grid-cols-[minmax(0,1fr)_8rem_8rem_2.25rem] gap-3 border-b bg-input-background px-6 py-3 text-xs text-muted-foreground lg:grid"
+          >
+            <span>Name / key prefix</span>
+            <span>Created</span>
+            <span>Last used</span>
+            <span />
+          </div>
+        )}
         <div className="divide-y">
           {data.credentials.length ? (
             data.credentials.map((credential) => (
@@ -925,9 +940,9 @@ export function OrganizationIntegrations() {
             ))
           ) : (
             <div className="px-6 py-10 text-center">
-              <p className="text-sm font-medium">No API credentials</p>
+              <p className="text-sm font-medium">No API credentials yet</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Create a sample credential to preview this flow.
+                Create a credential to keep its name and key details here.
               </p>
             </div>
           )}
@@ -940,16 +955,13 @@ export function OrganizationIntegrations() {
       >
         <div className="flex flex-col items-stretch gap-3 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-surface-elevated text-primary">
-              <RadioTowerIcon className="size-4" aria-hidden="true" />
-            </div>
             <h2 id="webhooks-heading" className="text-base font-semibold">
               Webhooks
             </h2>
           </div>
           <Button
             variant="outline"
-            className="h-10 w-full sm:w-auto [@media(any-pointer:coarse)]:min-h-11"
+            className="h-11 w-full sm:w-auto lg:h-10 [@media(any-pointer:coarse)]:min-h-11"
             onClick={openWebhookDialog}
             disabled={storageUnreadable}
           >
@@ -957,6 +969,17 @@ export function OrganizationIntegrations() {
             Add webhook
           </Button>
         </div>
+        {data.webhooks.length > 0 && (
+          <div
+            aria-hidden="true"
+            className="hidden grid-cols-[minmax(0,1fr)_3rem_5rem_9rem] gap-4 border-b bg-input-background py-3 pl-6 pr-20 text-xs text-muted-foreground lg:grid"
+          >
+            <span>Endpoint</span>
+            <span>Events</span>
+            <span>Status</span>
+            <span>Last delivery</span>
+          </div>
+        )}
         <div className="divide-y">
           {data.webhooks.length ? (
             data.webhooks.map((webhook) => (
@@ -964,6 +987,7 @@ export function OrganizationIntegrations() {
                 key={webhook.id}
                 webhook={webhook}
                 onOpen={(item) => {
+                  webhookReturnFocusId.current = `webhook-details-${item.id}`;
                   setSelectedWebhookId(item.id);
                 }}
                 onEdit={editWebhook}
@@ -980,9 +1004,9 @@ export function OrganizationIntegrations() {
             ))
           ) : (
             <div className="px-6 py-10 text-center">
-              <p className="text-sm font-medium">No webhooks</p>
+              <p className="text-sm font-medium">No webhooks yet</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Add a sample endpoint to preview this flow.
+                Add an endpoint and choose the events it subscribes to.
               </p>
             </div>
           )}
@@ -1288,7 +1312,20 @@ export function OrganizationIntegrations() {
           }
         }}
       >
-        <SheetContent className="w-full gap-0 sm:max-w-[452px]">
+        <SheetContent
+          className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[452px]"
+          closeButtonClassName="size-11 sm:size-8"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (
+              !webhookDialogOpen &&
+              !webhookToDelete &&
+              webhookReturnFocusId.current
+            ) {
+              document.getElementById(webhookReturnFocusId.current)?.focus();
+            }
+          }}
+        >
           {selectedWebhook && (
             <>
               <SheetHeader className="border-b px-6 py-5 pr-14">
@@ -1297,27 +1334,14 @@ export function OrganizationIntegrations() {
                     {selectedWebhook.name}
                   </SheetTitle>
                   <Badge
-                    variant={
-                      selectedWebhook.lastDelivery &&
-                      selectedWebhook.lastDelivery.status >= 400
-                        ? "destructive"
-                        : "outline"
-                    }
+                    variant="outline"
                     className={
-                      selectedWebhook.lastDelivery &&
-                      selectedWebhook.lastDelivery.status >= 400
-                        ? undefined
-                        : selectedWebhook.enabled
-                          ? "border-primary/30 bg-primary/10 text-primary"
-                          : "text-muted-foreground"
+                      selectedWebhook.enabled
+                        ? "border-primary/30 bg-primary/10 text-primary"
+                        : "text-muted-foreground"
                     }
                   >
-                    {selectedWebhook.lastDelivery &&
-                    selectedWebhook.lastDelivery.status >= 400
-                      ? "Delivery failed"
-                      : selectedWebhook.enabled
-                        ? "Active"
-                        : "Paused"}
+                    {selectedWebhook.enabled ? "Enabled" : "Paused"}
                   </Badge>
                 </div>
                 <SheetDescription className="sr-only">
