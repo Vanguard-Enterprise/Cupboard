@@ -151,3 +151,36 @@ it("retains the last successful load time after refresh failure and clears stale
     expect(screen.queryByText(/The server list may be out of date/)).toBeNull(),
   );
 });
+
+it("clears rejected edits and validation errors when Cancel closes the form", async () => {
+  vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(
+      Response.json(
+        {
+          error: "Check the highlighted fields.",
+          fields: { name: "Enter a name." },
+        },
+        { status: 422 },
+      ),
+    );
+  const user = userEvent.setup();
+  render(<ServerInventory identity={identity} />);
+  await screen.findByText("No servers yet");
+  await user.click(screen.getByRole("button", { name: "Add server" }));
+  await user.type(screen.getByLabelText("RCON password"), "discarded-secret");
+  await user.click(
+    screen.getAllByRole("button", { name: "Add server" }).at(-1)!,
+  );
+  await screen.findByText("Enter a name.");
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await user.click(screen.getByRole("button", { name: "Add server" }));
+  expect(screen.queryByText("Enter a name.")).toBeNull();
+  expect(screen.queryByText("Check the highlighted fields.")).toBeNull();
+  expect(
+    screen.getByLabelText("Server name").getAttribute("aria-invalid"),
+  ).toBe("false");
+  expect(
+    (screen.getByLabelText("RCON password") as HTMLInputElement).value,
+  ).toBe("");
+});

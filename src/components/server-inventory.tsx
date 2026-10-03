@@ -254,6 +254,8 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                     onClick={() => {
                       setOpen(false);
                       setDraft(empty);
+                      setFields({});
+                      setFormError("");
                     }}
                   >
                     Cancel
