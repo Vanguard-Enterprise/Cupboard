@@ -4,6 +4,8 @@ import { roleAuthority } from "@/lib/organization-team";
 import { useMemo, useRef, useState, type MouseEvent } from "react";
 import { flushSync } from "react-dom";
 import {
+  CheckIcon,
+  MinusIcon,
   GripVerticalIcon,
   LockKeyholeIcon,
   ArrowUpIcon,
@@ -45,6 +47,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -102,20 +112,23 @@ function matchesEditableRole(
 }
 
 function PermissionBadges({ permissions }: { permissions: PermissionId[] }) {
-  const definitions = permissionDefinitions.filter(({ id }) =>
-    permissions.includes(id),
-  );
+  const labels = [
+    permissions.includes("servers.manage")
+      ? "Server management"
+      : permissions.includes("servers.view")
+        ? "Server viewing"
+        : null,
+    permissions.includes("players.moderate") ? "Moderation" : null,
+    permissions.includes("organization.manage")
+      ? "Organization management"
+      : null,
+    permissions.includes("integrations.manage") ? "Integrations" : null,
+    permissions.includes("billing.manage") ? "Billing" : null,
+  ].filter(Boolean);
   return (
-    <div className="flex max-w-lg flex-wrap gap-1.5">
-      {definitions.slice(0, 3).map((permission) => (
-        <Badge key={permission.id} variant="secondary">
-          {permission.label}
-        </Badge>
-      ))}
-      {definitions.length > 3 ? (
-        <Badge variant="outline">+{definitions.length - 3}</Badge>
-      ) : null}
-    </div>
+    <p className="max-w-lg text-sm leading-6 text-muted-foreground">
+      {labels.join(" · ") || "No permissions"}
+    </p>
   );
 }
 
@@ -194,8 +207,20 @@ function RoleFields({
         <legend className="text-sm font-medium">Permissions</legend>
         {groups.map((group) => (
           <div key={group} className="grid gap-2">
-            <p className="text-xs font-medium text-text-muted">{group}</p>
-            <div className="grid gap-2 sm:grid-cols-2">
+            <p className="flex justify-between text-sm font-medium">
+              {group}
+              <span className="text-xs text-muted-foreground">
+                {
+                  permissionDefinitions.filter(
+                    (permission) =>
+                      permission.group === group &&
+                      draft.permissions.includes(permission.id),
+                  ).length
+                }{" "}
+                selected
+              </span>
+            </p>
+            <div className="divide-y divide-border rounded-lg border border-border">
               {permissionDefinitions
                 .filter((permission) => permission.group === group)
                 .map((permission) => {
@@ -203,7 +228,7 @@ function RoleFields({
                   return (
                     <label
                       key={permission.id}
-                      className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-input-background p-3 has-disabled:cursor-not-allowed has-disabled:opacity-60"
+                      className="flex cursor-pointer items-start gap-3 p-3 transition-colors hover:bg-surface-elevated has-disabled:cursor-not-allowed has-disabled:opacity-60"
                     >
                       <Checkbox
                         id={`role-permission-${permission.id}`}
@@ -269,6 +294,8 @@ export function OrganizationRoles() {
     reorderRoles,
     reload,
   } = useOrganizationTeam();
+  const detailsTrigger = useRef<HTMLButtonElement | null>(null);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const pointerDrag = useRef<{
     id: string;
@@ -320,6 +347,9 @@ export function OrganizationRoles() {
     });
   }, [direction, query, settings.roles, sort, userCounts]);
 
+  const selectedRole = settings.roles.find(
+    (role) => role.id === selectedRoleId,
+  );
   const authority = roleAuthority(settings, currentOperatorId);
   const orderedRoles = settings.roles.toSorted(
     (a, b) => a.position - b.position,
@@ -627,10 +657,6 @@ export function OrganizationRoles() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Roles</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Higher roles manage lower roles. Drag to reorder, or use Move up and
-            Move down. Owner and Administrator stay at the top.
-          </p>
         </div>
         <Button
           className="h-11 sm:h-9"
@@ -733,7 +759,7 @@ export function OrganizationRoles() {
                       </TableHead>
                       <TableHead>
                         <SortButton
-                          label="Users"
+                          label="Members"
                           active={sort === "users"}
                           direction={direction}
                           onClick={() => changeSort("users")}
@@ -741,7 +767,7 @@ export function OrganizationRoles() {
                       </TableHead>
                       <TableHead>
                         <SortButton
-                          label="Permissions"
+                          label="Access summary"
                           active={sort === "permissions"}
                           direction={direction}
                           onClick={() => changeSort("permissions")}
@@ -794,7 +820,16 @@ export function OrganizationRoles() {
                           <TableCell>{reorderHandle(role)}</TableCell>
                           <TableCell className="max-w-sm px-4 py-3 whitespace-normal">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-medium">{role.name}</span>
+                              <button
+                                className="rounded-sm text-left font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                aria-label={`View ${role.name} role`}
+                                onClick={(event) => {
+                                  detailsTrigger.current = event.currentTarget;
+                                  setSelectedRoleId(role.id);
+                                }}
+                              >
+                                {role.name}
+                              </button>
                               {role.system ? (
                                 <Badge variant="outline">Built in</Badge>
                               ) : null}
@@ -879,7 +914,16 @@ export function OrganizationRoles() {
                       {reorderHandle(role)}
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-medium">{role.name}</p>
+                          <button
+                            className="min-h-11 rounded-sm text-left font-medium hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                            aria-label={`View ${role.name} role`}
+                            onClick={(event) => {
+                              detailsTrigger.current = event.currentTarget;
+                              setSelectedRoleId(role.id);
+                            }}
+                          >
+                            {role.name}
+                          </button>
                           {role.system ? (
                             <Badge variant="outline">Built in</Badge>
                           ) : null}
@@ -969,6 +1013,104 @@ export function OrganizationRoles() {
         </section>
       </div>
 
+      <Sheet
+        open={Boolean(selectedRole)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRoleId(null);
+        }}
+      >
+        <SheetContent
+          className="data-[side=right]:w-full data-[side=right]:sm:max-w-lg motion-reduce:animate-none"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            detailsTrigger.current?.focus();
+          }}
+        >
+          {selectedRole ? (
+            <>
+              <SheetHeader className="border-b border-border p-6 pr-12">
+                <SheetTitle>{selectedRole.name}</SheetTitle>
+                <SheetDescription>
+                  {selectedRole.description ||
+                    "Review the access granted by this role."}
+                </SheetDescription>
+              </SheetHeader>
+              <div className="flex-1 space-y-6 overflow-y-auto px-6 pb-6">
+                <p className="text-sm text-muted-foreground">
+                  {userCounts.get(selectedRole.id) ?? 0} members ·{" "}
+                  {selectedRole.permissions.length} permissions
+                </p>
+                {selectedRole.system ? (
+                  <p className="text-sm text-muted-foreground">
+                    Built-in roles cannot be edited, moved, or deleted.
+                  </p>
+                ) : !authority.canGrant(selectedRole) ? (
+                  <p className="text-sm text-muted-foreground">
+                    You can only manage roles below your highest role.
+                  </p>
+                ) : (userCounts.get(selectedRole.id) ?? 0) > 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Reassign this role&apos;s members before deleting it.
+                  </p>
+                ) : null}
+                {["Servers", "Community", "Organization"].map((group) => (
+                  <section key={group}>
+                    <h3 className="mb-2 font-medium">{group}</h3>
+                    <ul className="divide-y divide-border">
+                      {permissionDefinitions
+                        .filter((permission) => permission.group === group)
+                        .map((permission) => {
+                          const granted = selectedRole.permissions.includes(
+                            permission.id,
+                          );
+                          return (
+                            <li
+                              key={permission.id}
+                              className="flex items-start gap-3 py-3"
+                            >
+                              {granted ? (
+                                <CheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                              ) : (
+                                <MinusIcon className="mt-0.5 size-4 shrink-0 text-text-muted" />
+                              )}
+                              <div>
+                                <p>
+                                  {permission.label}
+                                  <span className="sr-only">
+                                    {granted ? ": Granted" : ": Not granted"}
+                                  </span>
+                                </p>
+                                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                  {permission.description}
+                                </p>
+                              </div>
+                            </li>
+                          );
+                        })}
+                    </ul>
+                  </section>
+                ))}
+              </div>
+              <SheetFooter className="border-t border-border p-6">
+                <Button
+                  disabled={
+                    saving ||
+                    selectedRole.system ||
+                    !authority.canGrant(selectedRole)
+                  }
+                  onClick={() => {
+                    setSelectedRoleId(null);
+                    openRoleDialog(selectedRole);
+                  }}
+                >
+                  Edit role
+                </Button>
+              </SheetFooter>
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
+
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
@@ -981,11 +1123,21 @@ export function OrganizationRoles() {
             <DialogTitle>{editing ? "Edit role" : "Add role"}</DialogTitle>
             <DialogDescription>
               Choose the permissions granted to this role. Saving changes access
-              for every user assigned to it. Organization management controls
+              for every member assigned to it. Organization management controls
               users and roles. Other permissions apply as their features become
               available.
             </DialogDescription>
           </DialogHeader>
+          {editing ? (
+            <p className="text-sm text-muted-foreground">
+              Changes affect {userCounts.get(editing.id) ?? 0} members.
+              {editing.system
+                ? " Built-in roles cannot be edited."
+                : !authority.canGrant(editing)
+                  ? " You can only manage roles below your highest role."
+                  : ""}
+            </p>
+          ) : null}
           <RoleFields
             draft={draft}
             error={formError || storageError}
@@ -1000,7 +1152,7 @@ export function OrganizationRoles() {
               setFormErrorField(null);
             }}
           />
-          <DialogFooter className="sticky bottom-0">
+          <DialogFooter className="sticky -bottom-6 border-t border-border bg-popover py-4">
             <DialogClose asChild>
               <Button variant="outline" className="h-11 sm:h-9">
                 Cancel

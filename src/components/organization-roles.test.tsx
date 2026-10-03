@@ -197,3 +197,58 @@ it("reorders with pointer handles and cancels without saving", async () => {
   await waitFor(() => expect(api.state.team.roles[2].id).toBe("viewer"));
   delete (document as Partial<Document>).elementFromPoint;
 });
+
+it("inspects built-in permissions by keyboard and restores focus", async () => {
+  const user = userEvent.setup();
+  mount();
+  await screen.findByRole("heading", { name: "Roles" });
+  const trigger = within(screen.getByRole("table")).getByRole("button", {
+    name: "View Owner role",
+  });
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  const drawer = screen.getByRole("dialog", { name: "Owner" });
+  expect(
+    within(drawer).getByText(
+      "Built-in roles cannot be edited, moved, or deleted.",
+    ),
+  ).toBeTruthy();
+  expect(
+    (
+      within(drawer).getByRole("button", {
+        name: "Edit role",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(within(drawer).getAllByText(": Granted").length).toBeGreaterThan(0);
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
+it("shows missing permissions and opens an editable role from its details", async () => {
+  const user = userEvent.setup();
+  mount();
+  await screen.findByRole("heading", { name: "Roles" });
+  expect(
+    screen.queryByText("Control what organization members can access."),
+  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Edit hierarchy" })).toBeNull();
+  await user.click(
+    within(screen.getByRole("table")).getByRole("button", {
+      name: "View Operator role",
+    }),
+  );
+  const drawer = screen.getByRole("dialog", { name: "Operator" });
+  expect(within(drawer).getAllByText(": Not granted").length).toBeGreaterThan(
+    0,
+  );
+  await user.click(within(drawer).getByRole("button", { name: "Edit role" }));
+  const editor = screen.getByRole("dialog", { name: "Edit role" });
+  expect(within(editor).getByText(/Changes affect/)).toBeTruthy();
+  expect(
+    (
+      within(editor).getByRole("button", {
+        name: "Save role",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+});
