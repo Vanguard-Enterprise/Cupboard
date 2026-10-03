@@ -497,8 +497,10 @@ describe("Security alert triage", () => {
     render(<SecurityAlerts />);
     expect(screen.getByText("No alerts need review")).toBeTruthy();
     expect(screen.getByText(/They may still need a fix/)).toBeTruthy();
-    await user.click(
-      screen.getByRole("button", { name: "View acknowledged alerts" }),
+    screen.getByRole("button", { name: "View acknowledged alerts" }).focus();
+    await user.keyboard("{Enter}");
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { name: "Acknowledged 5" }),
     );
     expect(screen.getAllByRole("listitem")).toHaveLength(5);
     await user.type(

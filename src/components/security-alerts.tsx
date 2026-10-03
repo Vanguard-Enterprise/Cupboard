@@ -839,7 +839,10 @@ export function SecurityAlerts() {
                     ) : status === "open" ? (
                       <Button
                         variant="outline"
-                        onClick={() => setStatus("acknowledged")}
+                        onClick={() => {
+                          pendingFocusTarget.current = { id: "status-filter" };
+                          setStatus("acknowledged");
+                        }}
                         className="min-h-11"
                       >
                         View acknowledged alerts
