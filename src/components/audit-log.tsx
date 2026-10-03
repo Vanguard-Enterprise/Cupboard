@@ -316,6 +316,7 @@ export function AuditLog() {
           event.target,
           event.source,
           event.id,
+          event.metadata,
         ]
           .join(" ")
           .toLowerCase()

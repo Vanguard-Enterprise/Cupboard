@@ -102,6 +102,19 @@ describe("Audit log", () => {
     expect(screen.queryByText("Updated organization profile")).toBeNull();
   });
 
+  it.each([
+    ["  SCOPES: deploy:read  ", "Created API token"],
+    ["Connection timed out", "Created backup"],
+  ])("finds visible details matching %s", async (query, action) => {
+    const user = userEvent.setup();
+    render(<AuditLog />);
+    await user.click(screen.getByLabelText("Search events"));
+    await user.paste(query);
+    expect(screen.getByText("1 result of 9 events")).toBeTruthy();
+    expect(within(screen.getByRole("table")).getByText(action)).toBeTruthy();
+    expect(screen.queryByText("Updated organization profile")).toBeNull();
+  });
+
   it("shows an empty state and clears all filters", async () => {
     const user = userEvent.setup();
     render(<AuditLog />);
