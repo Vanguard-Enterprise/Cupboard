@@ -46,6 +46,7 @@ function endpoint(host: string, port: number) {
 export function ServerInventory({ identity }: { identity: Identity }) {
   const [servers, setServers] = useState<Server[] | null>(null);
   const [error, setError] = useState("");
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(empty);
@@ -59,6 +60,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
     setRefreshing(true);
     try {
       setServers(await apiRequest<Server[]>("servers"));
+      setLoadedAt(Date.now());
       setError("");
     } catch (cause) {
       setError(
@@ -73,7 +75,10 @@ export function ServerInventory({ identity }: { identity: Identity }) {
     let active = true;
     apiRequest<Server[]>("servers")
       .then((value) => {
-        if (active) setServers(value);
+        if (active) {
+          setServers(value);
+          setLoadedAt(Date.now());
+        }
       })
       .catch((cause) => {
         if (active) setError(cause.message);
@@ -274,6 +279,15 @@ export function ServerInventory({ identity }: { identity: Identity }) {
               <AlertDescription>
                 {servers ? "The server list may be out of date. " : ""}
                 {error}
+                {servers && loadedAt !== null && (
+                  <span className="block">
+                    Last loaded{" "}
+                    <time dateTime={new Date(loadedAt).toISOString()}>
+                      {new Date(loadedAt).toLocaleString()}
+                    </time>
+                    .
+                  </span>
+                )}
                 <Button variant="outline" disabled={refreshing} onClick={load}>
                   {refreshing ? "Refreshing..." : "Try again"}
                 </Button>

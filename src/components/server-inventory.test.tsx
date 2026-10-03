@@ -116,3 +116,38 @@ it("displays IPv6 endpoints with brackets and preserves hostname formatting", as
   expect(screen.getByText("rust.example.com:28016")).not.toBeNull();
   expect(screen.getByText("rust.example.com:28017")).not.toBeNull();
 });
+
+it("retains the last successful load time after refresh failure and clears stale state on retry", async () => {
+  const loadedAt = Date.parse("2026-10-03T12:00:00Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(loadedAt);
+  vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([server]))
+    .mockResolvedValueOnce(
+      Response.json({ ...server, id: "new", name: "Another Rust" }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({ error: "Refresh failed." }, { status: 503 }),
+    )
+    .mockResolvedValueOnce(Response.json([server]));
+  const user = userEvent.setup();
+  const { container } = render(<ServerInventory identity={identity} />);
+  await screen.findByText("Main Rust");
+  clock.mockReturnValue(loadedAt + 60000);
+  await user.click(screen.getByRole("button", { name: "Add server" }));
+  await user.type(screen.getByLabelText("Server name"), "Another Rust");
+  await user.type(screen.getByLabelText("RCON host"), "rust.example.com");
+  await user.type(screen.getByLabelText("A2S host"), "rust.example.com");
+  await user.type(screen.getByLabelText("RCON password"), "new-secret");
+  await user.click(
+    screen.getAllByRole("button", { name: "Add server" }).at(-1)!,
+  );
+  await screen.findByText(/The server list may be out of date/);
+  expect(screen.getByText("Main Rust")).not.toBeNull();
+  expect(container.querySelector("time")?.getAttribute("dateTime")).toBe(
+    "2026-10-03T12:00:00.000Z",
+  );
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() =>
+    expect(screen.queryByText(/The server list may be out of date/)).toBeNull(),
+  );
+});
