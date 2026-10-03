@@ -96,3 +96,23 @@ it("does not load inventory without viewing permission", async () => {
   );
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it("displays IPv6 endpoints with brackets and preserves hostname formatting", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json([
+      server,
+      {
+        ...server,
+        id: "ipv6",
+        name: "IPv6 Rust",
+        rconHost: "2001:db8::1",
+        a2sHost: "2001:db8::2",
+      },
+    ]),
+  );
+  render(<ServerInventory identity={identity} />);
+  expect(await screen.findByText("[2001:db8::1]:28016")).not.toBeNull();
+  expect(screen.getByText("[2001:db8::2]:28017")).not.toBeNull();
+  expect(screen.getByText("rust.example.com:28016")).not.toBeNull();
+  expect(screen.getByText("rust.example.com:28017")).not.toBeNull();
+});

@@ -40,6 +40,9 @@ const labels = {
   a2sHost: "A2S host",
   a2sPort: "A2S port",
 };
+function endpoint(host: string, port: number) {
+  return `${host.includes(":") ? `[${host}]` : host}:${port}`;
+}
 export function ServerInventory({ identity }: { identity: Identity }) {
   const [servers, setServers] = useState<Server[] | null>(null);
   const [error, setError] = useState("");
@@ -301,13 +304,13 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                     <div>
                       <dt className="text-muted-foreground">RCON</dt>
                       <dd className="break-all font-mono">
-                        {server.rconHost}:{server.rconPort}
+                        {endpoint(server.rconHost, server.rconPort)}
                       </dd>
                     </div>
                     <div>
                       <dt className="text-muted-foreground">A2S</dt>
                       <dd className="break-all font-mono">
-                        {server.a2sHost}:{server.a2sPort}
+                        {endpoint(server.a2sHost, server.a2sPort)}
                       </dd>
                     </div>
                   </dl>
