@@ -288,13 +288,18 @@ Before finishing a user-facing change, check that:
 The file library follows Google Drive's compact list/grid switching and selected
 file toolbar, adapted to Cupboard's charcoal and sage tokens. Search and filtering
 sit above the content, with file type and sort options in one menu beside search.
+Place New folder beside Upload file in the page header. The folder dialog accepts
+slash-separated paths to create subdirectories in one action.
 The browser remembers the view per account and organization. List view aligns
 filenames, upload dates, and sizes. Grid view lazily loads authenticated PNG, JPEG,
 GIF, and WebP previews after checking their byte signatures. Images use a white
 backdrop so transparent dark artwork remains legible. Other files and failed
 previews use extension-based icons. File and folder context menus match the overflow menus, including copy, cut,
 rename, share, details, and confirmed deletion. Empty-space menus offer new folder,
-upload, paste, and refresh. Keep folder navigation visible as a path and distinguish
+upload, and paste. Show folder navigation in the page heading only inside a folder.
+Place the item count beside the view switch and show the selection toolbar only
+when an item is selected. Update after mutations and check for changes while the
+page is visible, without a manual Refresh button. Distinguish
 cut entries with reduced opacity until pasted or canceled. Public link creation
 explains who can download, the expiry, and how to revoke access; folder sharing
 uses organization links. Upload uses a dialog with browsing and drag/drop. Keep mobile actions at

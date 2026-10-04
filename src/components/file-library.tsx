@@ -11,7 +11,6 @@ import {
   LayoutGridIcon,
   MoreVerticalIcon,
   XIcon,
-  RefreshCwIcon,
   SlidersHorizontalIcon,
   CheckIcon,
   InfoIcon,
@@ -134,7 +133,8 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   const [removing, setRemoving] = useState<StoredFile | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const syncVersion = useRef(0);
   const [folder, setFolder] = useState<string | null>(null);
   const [clipboard, setClipboard] = useState<{
     file: StoredFile;
@@ -206,37 +206,66 @@ export function FileLibrary({ identity }: { identity: Identity }) {
         }
       })
       .catch((cause: Error) => {
-        if (active) setError(cause.message);
+        if (active) setSyncError(cause.message);
       });
     return () => {
       active = false;
     };
   }, [allowed, organization]);
-  async function refresh() {
-    setRefreshing(true);
-    try {
-      const result = await fileRequest<StoredFile[]>("files", organization);
-      setFiles(result);
-      if (folder && !result.some((file) => file.id === folder))
-        openFolder(null);
-      setLoadedAt(new Date());
-      setError("");
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Files could not be loaded.",
-      );
-    } finally {
-      setRefreshing(false);
+  useEffect(() => {
+    if (!allowed || busy) return;
+    let active = true;
+    let pending = false;
+    async function update() {
+      if (pending || document.visibilityState === "hidden") return;
+      pending = true;
+      const version = syncVersion.current;
+      try {
+        const result = await fileRequest<StoredFile[]>("files", organization);
+        if (!active || version !== syncVersion.current) return;
+        setFiles(result);
+        setFolder((current) =>
+          current && !result.some((file) => file.id === current)
+            ? null
+            : current,
+        );
+        setDetails((current) =>
+          current
+            ? (result.find((file) => file.id === current.id) ?? null)
+            : null,
+        );
+        setLoadedAt(new Date());
+        setSyncError("");
+      } catch (cause) {
+        if (active && version === syncVersion.current)
+          setSyncError(
+            cause instanceof Error
+              ? cause.message
+              : "File updates failed. Retrying automatically.",
+          );
+      } finally {
+        pending = false;
+      }
     }
-  }
+    const timer = window.setInterval(update, 15000);
+    window.addEventListener("focus", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [allowed, organization, busy]);
   async function upload(event: React.FormEvent) {
     event.preventDefault();
-    if (!selected || busy || refreshing || files === null) return;
+    if (!selected || busy || files === null) return;
     if (selected.size > maxSize) {
       setUploadError("Choose a file no larger than 10 MiB.");
       choose.current?.focus();
       return;
     }
+    syncVersion.current += 1;
     setBusy(true);
     setUploading(true);
     setUploadError("");
@@ -272,6 +301,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   }
   async function remove() {
     if (!removing || busy) return;
+    syncVersion.current += 1;
     setBusy(true);
     setDeleteError("");
     try {
@@ -302,6 +332,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   }
   async function download(file: StoredFile) {
     if (busy) return;
+    syncVersion.current += 1;
     setBusy(true);
     setError("");
     try {
@@ -350,7 +381,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   const extensions = [
     ...new Set(files?.map((file) => extension(file.name) || "none") ?? []),
   ].sort();
-  const disabled = busy || refreshing;
+  const disabled = busy;
   function select(file: StoredFile) {
     setActiveId(activeId === file.id ? null : file.id);
   }
@@ -382,20 +413,24 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   async function saveName(event: React.FormEvent) {
     event.preventDefault();
     if (!naming || busy) return;
+    syncVersion.current += 1;
     setBusy(true);
     setNameError("");
     try {
-      const result = await fileRequest<StoredFile>(
+      const result = await fileRequest<StoredFile | StoredFile[]>(
         naming.file ? `files/${naming.file.id}/rename` : "files/folders",
         organization,
         naming.file ? { name } : { name, parentId: folder },
       );
+      const entries = Array.isArray(result) ? result : [result];
       setFiles((previous) => [
-        result,
-        ...(previous ?? []).filter((file) => file.id !== result.id),
+        ...entries,
+        ...(previous ?? []).filter(
+          (file) => !entries.some((entry) => entry.id === file.id),
+        ),
       ]);
       setNaming(null);
-      setActiveId(result.id);
+      setActiveId(entries[0]?.id ?? null);
       toast.success(naming.file ? "Renamed." : "Folder created.");
     } catch (cause) {
       setNameError(
@@ -413,6 +448,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   }
   async function paste(destination = folder) {
     if (!clipboard || busy) return;
+    syncVersion.current += 1;
     setBusy(true);
     setError("");
     try {
@@ -516,10 +552,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
           <ClipboardPasteIcon />
           Paste
         </Item>
-        <Item {...itemProps} onSelect={refresh}>
-          <RefreshCwIcon />
-          Refresh
-        </Item>
       </>
     );
   }
@@ -551,41 +583,19 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   }
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 md:p-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">Files</h1>
-        </div>
-        {allowed && (
-          <Button
-            className="h-11 shrink-0 md:h-10"
-            ref={uploadTrigger}
-            onClick={openUpload}
-            disabled={disabled || files === null}
-          >
-            <UploadIcon />
-            Upload file
-          </Button>
-        )}
-      </div>
-      {!allowed ? (
-        <Alert>
-          <AlertDescription>
-            You need organization management permission to access files.
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          {folder ? (
             <nav
               aria-label="Folder path"
               className="flex min-w-0 flex-wrap items-center gap-1 text-sm"
             >
               <Button
                 variant="ghost"
-                className="h-11"
+                className="h-11 px-0 text-2xl font-semibold tracking-tight"
                 onClick={() => openFolder(null)}
               >
-                All files
+                Files
               </Button>
               {ancestors.map((item) => (
                 <span key={item.id} className="flex min-w-0 items-center">
@@ -600,40 +610,63 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 </span>
               ))}
             </nav>
-            <div className="flex flex-wrap items-center gap-2">
-              {clipboard && (
-                <>
-                  <Button
-                    variant="outline"
-                    className="h-11"
-                    disabled={disabled}
-                    onClick={() => paste()}
-                  >
-                    <ClipboardPasteIcon />
-                    Paste
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-11"
-                    aria-label="Cancel copy or cut"
-                    onClick={() => setClipboard(null)}
-                  >
-                    <XIcon />
-                  </Button>
-                </>
-              )}
+          ) : (
+            <h1 className="text-2xl font-semibold tracking-tight">Files</h1>
+          )}
+        </div>
+        {allowed && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              className="h-11 md:h-10"
+              disabled={disabled || files === null}
+              onClick={() => startName()}
+            >
+              <FolderPlusIcon />
+              New folder
+            </Button>
+            <Button
+              className="h-11 shrink-0 md:h-10"
+              ref={uploadTrigger}
+              onClick={openUpload}
+              disabled={disabled || files === null}
+            >
+              <UploadIcon />
+              Upload file
+            </Button>
+          </div>
+        )}
+      </div>
+      {!allowed ? (
+        <Alert>
+          <AlertDescription>
+            You need organization management permission to access files.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <>
+          {clipboard && (
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 className="h-11"
-                disabled={disabled || files === null}
-                onClick={() => startName()}
+                disabled={disabled}
+                onClick={() => paste()}
               >
-                <FolderPlusIcon />
-                New folder
+                <ClipboardPasteIcon />
+                Paste
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11"
+                aria-label="Cancel copy or cut"
+                onClick={() => setClipboard(null)}
+              >
+                <XIcon />
               </Button>
             </div>
-          </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-0 flex-1 basis-40">
               <SearchIcon className="pointer-events-none absolute top-3.5 left-3 size-4 text-muted-foreground" />
@@ -726,21 +759,15 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-11 md:size-9"
-                disabled={disabled}
-                onClick={refresh}
-                aria-label={refreshing ? "Refreshing files" : "Refresh"}
-                title="Refresh"
-              >
-                <RefreshCwIcon
-                  className={
-                    refreshing ? "animate-spin motion-reduce:animate-none" : ""
-                  }
-                />
-              </Button>
+              {files !== null && (
+                <span
+                  className="whitespace-nowrap text-xs text-muted-foreground"
+                  aria-live="polite"
+                >
+                  {visible?.length ?? 0}{" "}
+                  {(visible?.length ?? 0) === 1 ? "item" : "items"}
+                </span>
+              )}
               <ToggleGroup
                 type="single"
                 value={view}
@@ -770,15 +797,8 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               </ToggleGroup>
             </div>
           </div>
-          <div
-            className={cn(
-              "flex min-h-11 flex-wrap items-center gap-2 rounded-lg px-3 text-sm",
-              active
-                ? "bg-primary/10 text-foreground"
-                : "bg-muted/30 text-muted-foreground",
-            )}
-          >
-            {active ? (
+          {active && (
+            <div className="flex min-h-11 flex-wrap items-center gap-2 rounded-lg bg-primary/10 px-3 text-sm text-foreground">
               <>
                 <Button
                   variant="ghost"
@@ -821,20 +841,16 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 >
                   <Trash2Icon />
                 </Button>
-              </>
-            ) : (
-              <span>
-                {files === null
-                  ? "Shared library"
-                  : `${visible?.length ?? 0} ${(visible?.length ?? 0) === 1 ? "file" : "files"}${query || type !== "all" ? ` of ${files.length}` : ""}`}
-              </span>
-            )}
-          </div>
-          {error && (
+              </>{" "}
+            </div>
+          )}
+          {(error || syncError) && (
             <Alert variant="destructive">
               <AlertDescription>
-                {error}
-                {loadedAt && ` Last loaded ${loadedAt.toLocaleTimeString()}.`}
+                {error || syncError}
+                {syncError &&
+                  loadedAt &&
+                  ` Last loaded ${loadedAt.toLocaleTimeString()}.`}
               </AlertDescription>
             </Alert>
           )}
@@ -894,8 +910,8 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               >
                 {files === null ? (
                   <p role="status" className="text-sm text-muted-foreground">
-                    {error
-                      ? "Files could not be loaded. Use Refresh to try again."
+                    {syncError
+                      ? "Files could not be loaded. Retrying automatically."
                       : "Loading files..."}
                   </p>
                 ) : visible?.length === 0 ? (
@@ -1117,7 +1133,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 <DialogDescription>
                   {naming?.file
                     ? "Choose a new name."
-                    : "Create a folder in the current location."}
+                    : "Use / to create subfolders, for example configs/plugins/custom. Existing folders are reused."}
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={saveName} className="space-y-4">

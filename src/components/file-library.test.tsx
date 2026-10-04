@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -26,6 +27,7 @@ const file = {
 };
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -112,7 +114,7 @@ it("retains the list after refresh failure and filters filenames", async () => {
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
   await screen.findByText("config.txt");
-  await user.click(screen.getByRole("button", { name: "Refresh" }));
+  fireEvent.focus(window);
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toContain("Last loaded"),
   );
@@ -298,7 +300,7 @@ it("offers right-click copy and cut, navigates folders, and pastes into the dest
   expect(
     screen.queryByRole("button", { name: "Cancel copy or cut" }),
   ).toBeNull();
-  await user.click(screen.getByRole("button", { name: "All files" }));
+  await user.click(screen.getByRole("button", { name: "Files" }));
   expect(screen.queryByText("config.txt")).toBeNull();
 });
 it("creates folders from the empty-area context menu and retains invalid names for correction", async () => {
@@ -364,4 +366,113 @@ it("closes the overflow menu after Copy and preserves the clipboard after a fail
   await user.click(screen.getByRole("button", { name: "Paste" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("button", { name: "Paste" })).not.toBeNull();
+});
+
+it("creates a slash-separated folder path and displays its nested folders", async () => {
+  const folders = [
+    {
+      id: "configs",
+      name: "configs",
+      parentId: null,
+      isFolder: true,
+      size: 0,
+      createdAt: 1,
+    },
+    {
+      id: "plugins",
+      name: "plugins",
+      parentId: "configs",
+      isFolder: true,
+      size: 0,
+      createdAt: 1,
+    },
+    {
+      id: "custom",
+      name: "custom",
+      parentId: "plugins",
+      isFolder: true,
+      size: 0,
+      createdAt: 1,
+    },
+  ];
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(Response.json(folders));
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("Your files, together");
+  await user.click(screen.getByRole("button", { name: "New folder" }));
+  await user.type(screen.getByLabelText("Name"), "configs/plugins/custom");
+  await user.click(screen.getByRole("button", { name: "Create folder" }));
+  await user.click(await screen.findByRole("button", { name: /^configs/ }));
+  await user.click(screen.getByRole("button", { name: /^plugins/ }));
+  expect(screen.getByText("custom")).not.toBeNull();
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toEqual({
+    name: "configs/plugins/custom",
+    parentId: null,
+  });
+});
+
+it("updates visible files automatically and stops polling after unmount", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(Response.json([file]));
+  const page = render(<FileLibrary identity={identity} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "All files" })).toBeNull();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000);
+  });
+  expect(screen.getByText("config.txt")).not.toBeNull();
+  page.unmount();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30000);
+  });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+});
+it("ignores an older automatic update when a folder has just been created", async () => {
+  let resolveUpdate!: (response: Response) => void;
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([]))
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveUpdate = resolve;
+        }),
+    )
+    .mockResolvedValueOnce(
+      Response.json([
+        {
+          id: "new",
+          name: "New folder",
+          size: 0,
+          createdAt: 1,
+          parentId: null,
+          isFolder: true,
+        },
+      ]),
+    );
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("Your files, together");
+  fireEvent.focus(window);
+  await user.click(screen.getByRole("button", { name: "New folder" }));
+  await user.type(screen.getByLabelText("Name"), "New folder");
+  await user.click(screen.getByRole("button", { name: "Create folder" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await act(async () => {
+    resolveUpdate(Response.json([]));
+  });
+  expect(
+    screen.getByRole("button", { name: "Actions for New folder" }),
+  ).not.toBeNull();
+  expect(fetcher).toHaveBeenCalledTimes(3);
 });

@@ -349,8 +349,14 @@ filename extension and sort by name, upload date, or size. Grid cards show priva
 PNG, JPEG, GIF, and WebP previews, with file icons for other formats. Selecting a
 file opens its action toolbar. Right-click a file or folder for Copy, Cut, Rename,
 Share, File details, and Delete. These actions also appear in the overflow menu.
-Right-click empty space to create a folder, upload, paste, or refresh. Use the
-folder path to navigate and paste into the current folder or a folder context menu.
+New folder sits beside Upload file. Enter a path such as `configs/plugins/custom`
+to create nested folders in the current location, reusing existing folders.
+Invalid paths and file conflicts leave the library unchanged.
+Right-click empty space to create a folder, upload, or paste. Inside folders, use
+the path in the page heading to navigate back. Paste into the current folder or
+use a folder context menu. Changes made here update immediately. Visible pages
+check for other changes every 15 seconds and when the tab regains focus; failed
+updates retain the last loaded list and retry automatically.
 Copy duplicates the entire folder tree; cut/paste moves it. Deleting a folder
 requires confirmation and deletes its contents. Shift+F10 opens the context menu;
 Ctrl/Cmd+C, X, and V operate on the selected entry while the file browser has focus. The upload dialog accepts a single file through browsing or drag and

@@ -354,16 +354,41 @@ async fn create_folder(
     session: Session,
     headers: HeaderMap,
     Json(input): Json<NamedFolder>,
-) -> ApiResult<Json<File>> {
+) -> ApiResult<Json<Vec<File>>> {
     let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
-    let name = input.name.trim();
-    valid_name(name)?;
+    let path = input.name.trim();
+    if path.len() > 4096 {
+        return Err(invalid("Use a folder path no longer than 4096 bytes."));
+    }
+    let segments: Vec<&str> = path.split('/').map(str::trim).collect();
+    for segment in &segments {
+        valid_name(segment)?;
+    }
     destination(&mut tx, &org, input.parent_id.as_deref()).await?;
-    let file = sqlx::query_as("INSERT INTO organization_files(organization_id,id,name,size,parent_id,is_folder,ready) VALUES($1,$2,$3,0,$4,true,true) RETURNING id,name,size,created_at,parent_id,is_folder")
-        .bind(&org).bind(uuid::Uuid::new_v4().to_string()).bind(name).bind(input.parent_id).fetch_one(&mut *tx).await?;
+    let mut parent = input.parent_id;
+    let mut folders = Vec::new();
+    for name in segments {
+        let mut matches: Vec<File> = sqlx::query_as("SELECT id,name,size,created_at,parent_id,is_folder FROM organization_files WHERE organization_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND name=$3 AND ready LIMIT 2")
+            .bind(&org).bind(&parent).bind(name).fetch_all(&mut *tx).await?;
+        let file = if matches.is_empty() {
+            sqlx::query_as("INSERT INTO organization_files(organization_id,id,name,size,parent_id,is_folder,ready) VALUES($1,$2,$3,0,$4,true,true) RETURNING id,name,size,created_at,parent_id,is_folder")
+                .bind(&org).bind(uuid::Uuid::new_v4().to_string()).bind(name).bind(&parent).fetch_one(&mut *tx).await?
+        } else {
+            if matches.len() != 1 || !matches[0].is_folder {
+                return Err(ApiError(
+                    StatusCode::CONFLICT,
+                    "A path name matches a file or multiple folders. Rename it or choose another path.",
+                ));
+            }
+            matches.remove(0)
+        };
+        parent = Some(file.id.clone());
+        folders.push(file);
+    }
     tx.commit().await?;
-    Ok(Json(file))
+    Ok(Json(folders))
 }
+
 async fn rename(
     State(pool): State<PgPool>,
     auth: AuthSession,

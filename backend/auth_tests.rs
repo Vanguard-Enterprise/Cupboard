@@ -1683,7 +1683,7 @@ async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloa
         .file_action("files/folders", org, json!({"name":"Configs"}))
         .await;
     assert_eq!(status, StatusCode::OK);
-    let folder_id = folder["id"].as_str().unwrap();
+    let folder_id = folder[0]["id"].as_str().unwrap();
     let (status, nested) = owner
         .file_action(
             "files/folders",
@@ -1692,7 +1692,65 @@ async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloa
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    let nested_id = nested["id"].as_str().unwrap();
+    let nested_id = nested[0]["id"].as_str().unwrap();
+    let (status, reused) = owner
+        .file_action("files/folders", org, json!({"name":"Configs/Nested"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reused[0]["id"], folder_id);
+    assert_eq!(reused[1]["id"], nested_id);
+    let (status, tree) = owner
+        .file_action(
+            "files/folders",
+            org,
+            json!({"name":"plugins/custom","parentId":nested_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tree[0]["parentId"], nested_id);
+    assert_eq!(tree[1]["parentId"], tree[0]["id"]);
+    for path in [
+        "uncreated/../bad",
+        "uncreated//bad",
+        "/absolute",
+        "uncreated/",
+        "uncreated/.",
+    ] {
+        assert_eq!(
+            owner
+                .file_action("files/folders", org, json!({"name":path}))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let uncreated: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND name='uncreated'",
+    )
+    .bind(org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(uncreated, 0);
+    assert_eq!(
+        owner
+            .file_action("files/folders", org, json!({"name":"café.html/child"}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{}/delete", tree[0]["id"].as_str().unwrap()),
+                org,
+                json!({})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+
     assert_eq!(
         owner
             .file_action(
