@@ -282,3 +282,15 @@ Before finishing a user-facing change, check that:
 - Desktop and mobile layouts have been inspected.
 - Tests cover the main interaction and risky state transitions.
 - Any intentional change to the product's design direction is recorded here.
+
+## File library
+
+The file library follows Google Drive's compact list/grid switching and selected
+file toolbar, adapted to Cupboard's charcoal and sage tokens. Search and filtering
+sit above the content. List view aligns filenames, upload dates, and sizes; grid
+view uses file-type icons. Icons reflect filename extensions, not verified content
+types or previews. A file's overflow menu contains Download, File details, and
+Delete. Upload uses a dialog with browsing and drag/drop. Keep mobile actions at
+least 44 pixels and allow filenames to be read in the details dialog.
+
+Reference: [Google Drive file list on Mobbin](https://mobbin.com/screens/4e58234e-a5d7-4119-8ab6-f4d7dbc4f20d).

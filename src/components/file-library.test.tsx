@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+  fireEvent,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { FileLibrary } from "./file-library";
@@ -30,19 +37,22 @@ it("uploads into the current organization and confirms deletion", async () => {
     .mockResolvedValueOnce(Response.json({ deleted: true }));
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("No files yet");
+  await screen.findByText("Your files, together");
+  await user.click(screen.getByRole("button", { name: "Upload file" }));
   const upload = new File(["configuration"], "config.txt");
   await user.upload(screen.getByLabelText("Upload a file"), upload);
-  await user.click(screen.getByRole("button", { name: "Upload file" }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Upload file",
+    }),
+  );
   await screen.findByText("config.txt");
   expect(fetcher.mock.calls[1][1]?.body).toBe(upload);
   expect(fetcher.mock.calls[1][1]?.headers).toMatchObject({
     "X-Cupboard-Organization": "org",
     "X-Cupboard-Filename": "config.txt",
   });
-  expect(
-    (screen.getByLabelText("Upload a file") as HTMLInputElement).value,
-  ).toBe("");
+  expect(screen.queryByRole("dialog")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Delete config.txt" }));
   expect(screen.getByRole("dialog")).not.toBeNull();
   expect(fetcher).toHaveBeenCalledTimes(2);
@@ -50,7 +60,7 @@ it("uploads into the current organization and confirms deletion", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Delete config.txt" }));
   await user.click(screen.getByRole("button", { name: "Delete file" }));
-  await screen.findByText("No files yet");
+  await screen.findByText("Your files, together");
   expect(fetcher.mock.calls[2][0]).toBe("/app-api/files/file/delete");
 });
 it("keeps a failed upload selected and rejects oversized files before sending", async () => {
@@ -62,10 +72,15 @@ it("keeps a failed upload selected and rejects oversized files before sending", 
     );
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("No files yet");
+  await screen.findByText("Your files, together");
+  await user.click(screen.getByRole("button", { name: "Upload file" }));
   const input = screen.getByLabelText("Upload a file") as HTMLInputElement;
   await user.upload(input, new File(["bytes"], "config.txt"));
-  await user.click(screen.getByRole("button", { name: "Upload file" }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Upload file",
+    }),
+  );
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "Storage unavailable.",
@@ -75,12 +90,18 @@ it("keeps a failed upload selected and rejects oversized files before sending", 
     input,
     new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.bin"),
   );
-  await user.click(screen.getByRole("button", { name: "Upload file" }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Upload file",
+    }),
+  );
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "Choose a file no larger than 10 MiB.",
   );
-  expect(document.activeElement).toBe(input);
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: "Choose file" }),
+  );
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
 it("retains the list after refresh failure and filters filenames", async () => {
@@ -116,13 +137,97 @@ it("shows download failures without navigating away", async () => {
     );
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await user.click(
-    await screen.findByRole("button", { name: "Download config.txt" }),
-  );
+  await user.click(await screen.findByRole("button", { name: /^config.txt/ }));
+  await user.click(screen.getByRole("button", { name: "Download" }));
   await waitFor(() =>
     expect(screen.getByRole("alert").textContent).toContain(
       "Download unavailable.",
     ),
   );
   expect(screen.getByText("config.txt")).not.toBeNull();
+});
+
+it("preserves selected-file actions between list and grid and filters by extension", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json([
+      file,
+      { id: "zip", name: "backup.zip", size: 1024, createdAt: 1700000001 },
+    ]),
+  );
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await user.click(await screen.findByRole("button", { name: /^config.txt/ }));
+  expect(screen.getByText("1 selected")).not.toBeNull();
+  await user.click(screen.getByRole("radio", { name: "Grid view" }));
+  expect(
+    screen
+      .getByRole("button", { name: "Select config.txt" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  await user.click(screen.getByRole("button", { name: "File type" }));
+  await user.click(screen.getByRole("menuitemradio", { name: ".zip" }));
+  expect(screen.queryByText("config.txt")).toBeNull();
+  expect(screen.queryByText("1 selected")).toBeNull();
+  expect(screen.getByText("backup.zip")).not.toBeNull();
+  await user.click(
+    screen.getByRole("button", { name: "Actions for backup.zip" }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "File details" }));
+  expect(screen.getByRole("dialog").textContent).toContain("1.0 KiB");
+});
+it("sorts rows and supports keyboard selection and action menus", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json([
+      file,
+      { id: "zip", name: "backup.zip", size: 1024, createdAt: 1600000000 },
+    ]),
+  );
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("config.txt");
+  await user.click(
+    screen.getByRole("button", { name: "Sort files: Newest first" }),
+  );
+  await user.click(screen.getByRole("menuitemradio", { name: "Name A–Z" }));
+  expect(screen.getAllByRole("row")[1].textContent).toContain("backup.zip");
+  screen.getByRole("button", { name: /^backup.zip/ }).focus();
+  await user.keyboard("{Enter}");
+  expect(screen.getByText("1 selected")).not.toBeNull();
+  screen.getByRole("button", { name: "Actions for backup.zip" }).focus();
+  await user.keyboard("{Enter}");
+  expect(
+    await screen.findByRole("menuitem", { name: "Download" }),
+  ).not.toBeNull();
+  await user.keyboard("{Escape}");
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", { name: "Actions for backup.zip" }),
+  );
+});
+it("accepts a dropped file and preserves the dialog when upload fails", async () => {
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(
+      Response.json({ error: "Upload failed." }, { status: 503 }),
+    );
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("Your files, together");
+  await user.click(screen.getByRole("button", { name: "Upload file" }));
+  const dropped = new File(["config"], "dropped.cfg");
+  fireEvent.drop(screen.getByText("Drop a file here"), {
+    dataTransfer: { files: [dropped] },
+  });
+  expect(screen.getByText("dropped.cfg")).not.toBeNull();
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "Upload file",
+    }),
+  );
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Upload failed.",
+  );
+  expect(fetcher.mock.calls[1][1]?.body).toBe(dropped);
+  expect(screen.getByText("dropped.cfg")).not.toBeNull();
 });
