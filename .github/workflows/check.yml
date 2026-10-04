@@ -42,6 +42,16 @@ jobs:
         run: docker build --file Dockerfile --tag cupboard-web:check-${{ github.run_id }} .
       - name: Verify release images and restart persistence
         run: node scripts/smoke-images.mjs cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }}
+      - name: Save tested release images
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker save cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }} | gzip > "$RUNNER_TEMP/cupboard-images.tar.gz"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: tested-release-images
+          path: ${{ runner.temp }}/cupboard-images.tar.gz
+          compression-level: 0
+          retention-days: 1
       - name: Remove check image
         if: always()
         run: docker image rm cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }} || true
@@ -55,23 +65,20 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
         with:
-          persist-credentials: false
+          name: tested-release-images
+          path: ${{ runner.temp }}
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: backend/Dockerfile
-          push: true
-          tags: ghcr.io/vanguard-enterprise/cupboard-api:sha-${{ github.sha }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          push: true
-          tags: ghcr.io/vanguard-enterprise/cupboard-web:sha-${{ github.sha }}
+      - name: Publish the tested images
+        run: |
+          docker load --input "$RUNNER_TEMP/cupboard-images.tar.gz"
+          for runtime in api web; do
+            image="ghcr.io/vanguard-enterprise/cupboard-${runtime}:sha-${{ github.sha }}"
+            docker tag "cupboard-${runtime}:check-${{ github.run_id }}" "$image"
+            docker push "$image"
+          done

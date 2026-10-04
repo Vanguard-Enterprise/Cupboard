@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
@@ -204,8 +204,17 @@ try {
     ["unreachable", "timeout"].includes(rechecked.rconStatus),
     "Stored credential could not be decrypted after restart",
   );
+  stage = "container log scan";
   for (const name of [api, web]) {
-    const logs = docker(["logs", name]);
+    const result = spawnSync("docker", ["logs", name], {
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    assert.ok(
+      !result.error && result.status === 0,
+      "Could not read container logs",
+    );
+    const logs = result.stdout + result.stderr;
     for (const secret of [password, rconPassword, secretKey])
       assert.ok(!logs.includes(secret), "Container log exposed a secret");
   }
