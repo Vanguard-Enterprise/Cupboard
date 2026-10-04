@@ -292,8 +292,12 @@ The browser remembers the view per account and organization. List view aligns
 filenames, upload dates, and sizes. Grid view lazily loads authenticated PNG, JPEG,
 GIF, and WebP previews after checking their byte signatures. Images use a white
 backdrop so transparent dark artwork remains legible. Other files and failed
-previews use extension-based icons. A file's overflow menu contains Download, File details, and
-Delete. Upload uses a dialog with browsing and drag/drop. Keep mobile actions at
+previews use extension-based icons. File and folder context menus match the overflow menus, including copy, cut,
+rename, share, details, and confirmed deletion. Empty-space menus offer new folder,
+upload, paste, and refresh. Keep folder navigation visible as a path and distinguish
+cut entries with reduced opacity until pasted or canceled. Public link creation
+explains who can download, the expiry, and how to revoke access; folder sharing
+uses organization links. Upload uses a dialog with browsing and drag/drop. Keep mobile actions at
 least 44 pixels and allow filenames to be read in the details dialog.
 
 Reference: [Google Drive file list on Mobbin](https://mobbin.com/screens/4e58234e-a5d7-4119-8ab6-f4d7dbc4f20d).

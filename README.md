@@ -347,15 +347,29 @@ search, download, and confirmed deletion. The browser remembers list or grid vie
 per account and organization. Use the Filters menu beside search to filter by
 filename extension and sort by name, upload date, or size. Grid cards show private
 PNG, JPEG, GIF, and WebP previews, with file icons for other formats. Selecting a
-file opens its action toolbar; row menus also provide downloads, details, and
-deletion. The upload dialog accepts a single file through browsing or drag and
-drop. It requires `organization.manage` for
-all operations. Each file belongs to the active organization, and requests from
+file opens its action toolbar. Right-click a file or folder for Copy, Cut, Rename,
+Share, File details, and Delete. These actions also appear in the overflow menu.
+Right-click empty space to create a folder, upload, paste, or refresh. Use the
+folder path to navigate and paste into the current folder or a folder context menu.
+Copy duplicates the entire folder tree; cut/paste moves it. Deleting a folder
+requires confirmation and deletes its contents. Shift+F10 opens the context menu;
+Ctrl/Cmd+C, X, and V operate on the selected entry while the file browser has focus. The upload dialog accepts a single file through browsing or drag and
+drop. Organization file management requires `organization.manage`. Each file belongs to the active organization, and requests from
 an outdated organization tab must refresh before accessing files. The first slice
 accepts files up to 10 MiB, including empty files. Reusing a filename creates a
 separate file; it never overwrites an existing object. Files download as private
 attachments, with browser caching disabled. They are not scanned for malware or
-served as public assets.
+served inline as active content.
+
+Share offers an organization link that requires existing file access. For an
+individual file, managers can explicitly create a public download link lasting
+1, 7, or 30 days. Anyone holding it can download the file without signing in.
+Replacing or revoking the link disables its previous token. Public links are
+shown once per creation; reopen Share to replace or revoke an existing link.
+Tokens are hashed in PostgreSQL and carried in the link's fragment, then sent to
+`/app-api/public-files/download` in a POST body. Keep request-body logging disabled
+for that endpoint. Deleted files cannot be downloaded through old links. Folders
+support organization links, not public archive downloads.
 
 `npm run dev` starts SeaweedFS 4.48 alongside PostgreSQL. SeaweedFS uses one
 container in `mini` mode with a worktree-owned persistent `storage` volume. Only

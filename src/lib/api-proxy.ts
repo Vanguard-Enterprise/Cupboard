@@ -7,6 +7,8 @@ const paths = new Set([
   "team",
   "servers",
   "files",
+  "files/folders",
+  "public-files/download",
   "servers/health",
   "organizations",
   "invitations/accept",
@@ -21,11 +23,14 @@ export async function proxyApi(
 ): Promise<Response> {
   const fileUpload = path === "files" && request.method === "POST";
   const fileDownload =
-    /^files\/[0-9a-f-]{36}$/.test(path) && request.method === "GET";
+    (/^files\/[0-9a-f-]{36}$/.test(path) && request.method === "GET") ||
+    (path === "public-files/download" && request.method === "POST");
   if (
     !paths.has(path) &&
     !/^servers\/[0-9a-f-]{36}\/check$/.test(path) &&
-    !/^files\/[0-9a-f-]{36}(?:\/delete)?$/.test(path)
+    !/^files\/[0-9a-f-]{36}(?:\/(?:delete|rename|move|copy|share|share\/revoke))?$/.test(
+      path,
+    )
   )
     return Response.json({ error: "Not found." }, { status: 404 });
   const headers = new Headers();
@@ -70,6 +75,8 @@ export async function proxyApi(
     if (fileUpload) {
       const name = request.headers.get("x-cupboard-filename");
       if (name) headers.set("x-cupboard-filename", name);
+      const folder = request.headers.get("x-cupboard-folder");
+      if (folder) headers.set("x-cupboard-folder", folder);
     }
     const reader = request.body?.getReader();
     const chunks: Uint8Array[] = [];

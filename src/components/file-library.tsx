@@ -21,6 +21,14 @@ import {
   ImageIcon,
   MusicIcon,
   FilmIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  CopyIcon,
+  ScissorsIcon,
+  ClipboardPasteIcon,
+  PencilIcon,
+  Share2Icon,
+  ChevronRightIcon,
 } from "lucide-react";
 import { type Identity } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
@@ -49,6 +57,15 @@ import {
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
 
+import { fileRequest } from "@/lib/file-client";
+import { FileShareDialog } from "@/components/file-share-dialog";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
 import { FileThumbnail } from "@/components/file-thumbnail";
 
 function subscribeView(callback: () => void) {
@@ -60,7 +77,14 @@ function subscribeView(callback: () => void) {
   };
 }
 
-type StoredFile = { id: string; name: string; size: number; createdAt: number };
+export type StoredFile = {
+  id: string;
+  name: string;
+  size: number;
+  createdAt: number;
+  parentId?: string | null;
+  isFolder?: boolean;
+};
 const maxSize = 10 * 1024 * 1024;
 function sizeLabel(size: number) {
   return size < 1024
@@ -68,27 +92,6 @@ function sizeLabel(size: number) {
     : size < 1024 * 1024
       ? `${(size / 1024).toFixed(1)} KiB`
       : `${(size / 1024 / 1024).toFixed(1)} MiB`;
-}
-async function fileRequest<T>(
-  path: string,
-  organization: string,
-  body?: unknown,
-): Promise<T> {
-  const response = await fetch(`/app-api/${path}`, {
-    method: body === undefined ? "GET" : "POST",
-    cache: "no-store",
-    headers: {
-      "X-Cupboard-Organization": organization,
-      ...(body === undefined
-        ? {}
-        : { "Content-Type": "application/json", "X-Cupboard-Request": "1" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const result = await response.json();
-  if (!response.ok)
-    throw new Error(result.error || "The file request failed. Try again.");
-  return result;
 }
 function extension(name: string) {
   const dot = name.lastIndexOf(".");
@@ -132,6 +135,16 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [folder, setFolder] = useState<string | null>(null);
+  const [clipboard, setClipboard] = useState<{
+    file: StoredFile;
+    mode: "copy" | "cut";
+  } | null>(null);
+  const [contextFile, setContextFile] = useState<StoredFile | null>(null);
+  const [naming, setNaming] = useState<{ file?: StoredFile } | null>(null);
+  const [name, setName] = useState("");
+  const [nameError, setNameError] = useState("");
+  const [sharing, setSharing] = useState<StoredFile | null>(null);
   const [query, setQuery] = useState("");
   const viewKey = `cupboard:files:view:${identity.user.id}:${organization}`;
   const [memoryView, setMemoryView] = useState("list");
@@ -172,6 +185,23 @@ export function FileLibrary({ identity }: { identity: Identity }) {
       .then((result) => {
         if (active) {
           setFiles(result);
+          const params = new URLSearchParams(window.location.search);
+          if (params.has("file")) {
+            const linked = result.find(
+              (file) => file.id === params.get("file"),
+            );
+            if (params.get("organization") !== organization || !linked) {
+              setError(
+                "This link is not available in the active organization. Switch organizations and open the link again.",
+              );
+            } else {
+              setFolder(
+                linked.isFolder ? linked.id : (linked.parentId ?? null),
+              );
+              setActiveId(linked.isFolder ? null : linked.id);
+              setDetails(linked);
+            }
+          }
           setLoadedAt(new Date());
         }
       })
@@ -185,7 +215,10 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   async function refresh() {
     setRefreshing(true);
     try {
-      setFiles(await fileRequest<StoredFile[]>("files", organization));
+      const result = await fileRequest<StoredFile[]>("files", organization);
+      setFiles(result);
+      if (folder && !result.some((file) => file.id === folder))
+        openFolder(null);
       setLoadedAt(new Date());
       setError("");
     } catch (cause) {
@@ -214,6 +247,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
           "Content-Type": "application/octet-stream",
           "X-Cupboard-Request": "1",
           "X-Cupboard-Filename": encodeURIComponent(selected.name),
+          ...(folder ? { "X-Cupboard-Folder": folder } : {}),
           "X-Cupboard-Organization": organization,
         },
         body: selected,
@@ -242,9 +276,18 @@ export function FileLibrary({ identity }: { identity: Identity }) {
     setDeleteError("");
     try {
       await fileRequest(`files/${removing.id}/delete`, organization, {});
+      const removed = new Set([removing.id]);
+      let count = 0;
+      while (count !== removed.size) {
+        count = removed.size;
+        files?.forEach((file) => {
+          if (file.parentId && removed.has(file.parentId)) removed.add(file.id);
+        });
+      }
       setFiles(
-        (previous) => previous?.filter((file) => file.id !== removing.id) ?? [],
+        (previous) => previous?.filter((file) => !removed.has(file.id)) ?? [],
       );
+      if (clipboard && removed.has(clipboard.file.id)) setClipboard(null);
       toast.success(`${removing.name} deleted.`);
       setRemoving(null);
       setActiveId(null);
@@ -287,17 +330,21 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   const visible = files
     ?.filter(
       (file) =>
+        (file.parentId ?? null) === folder &&
         file.name.toLowerCase().includes(query.toLowerCase()) &&
-        (type === "all" || (extension(file.name) || "none") === type),
+        (type === "all" ||
+          (!file.isFolder && (extension(file.name) || "none") === type)),
     )
-    .sort((a, b) =>
-      sort === "name"
-        ? a.name.localeCompare(b.name)
-        : sort === "size"
-          ? b.size - a.size
-          : sort === "oldest"
-            ? a.createdAt - b.createdAt
-            : b.createdAt - a.createdAt,
+    .sort(
+      (a, b) =>
+        Number(Boolean(b.isFolder)) - Number(Boolean(a.isFolder)) ||
+        (sort === "name"
+          ? a.name.localeCompare(b.name)
+          : sort === "size"
+            ? b.size - a.size
+            : sort === "oldest"
+              ? a.createdAt - b.createdAt
+              : b.createdAt - a.createdAt),
     );
   const active = visible?.find((file) => file.id === activeId);
   const extensions = [
@@ -321,6 +368,161 @@ export function FileLibrary({ identity }: { identity: Identity }) {
     setUploadError("");
     setUploadOpen(true);
   }
+  function openFolder(id: string | null) {
+    setFolder(id);
+    setActiveId(null);
+    setQuery("");
+    setType("all");
+  }
+  function startName(file?: StoredFile) {
+    setName(file?.name ?? "");
+    setNameError("");
+    setNaming({ file });
+  }
+  async function saveName(event: React.FormEvent) {
+    event.preventDefault();
+    if (!naming || busy) return;
+    setBusy(true);
+    setNameError("");
+    try {
+      const result = await fileRequest<StoredFile>(
+        naming.file ? `files/${naming.file.id}/rename` : "files/folders",
+        organization,
+        naming.file ? { name } : { name, parentId: folder },
+      );
+      setFiles((previous) => [
+        result,
+        ...(previous ?? []).filter((file) => file.id !== result.id),
+      ]);
+      setNaming(null);
+      setActiveId(result.id);
+      toast.success(naming.file ? "Renamed." : "Folder created.");
+    } catch (cause) {
+      setNameError(
+        cause instanceof Error ? cause.message : "Could not save. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  function copy(file: StoredFile, mode: "copy" | "cut") {
+    setClipboard({ file, mode });
+    toast.success(
+      `${file.name} ready to ${mode === "cut" ? "move" : "copy"}. Open a folder and paste.`,
+    );
+  }
+  async function paste(destination = folder) {
+    if (!clipboard || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await fileRequest<StoredFile | StoredFile[]>(
+        `files/${clipboard.file.id}/${clipboard.mode === "cut" ? "move" : "copy"}`,
+        organization,
+        { parentId: destination },
+      );
+      const updated = Array.isArray(result) ? result : [result];
+      setFiles((previous) => [
+        ...updated,
+        ...(previous ?? []).filter(
+          (file) => !updated.some((item) => item.id === file.id),
+        ),
+      ]);
+      if (clipboard.mode === "cut") setClipboard(null);
+      toast.success(clipboard.mode === "cut" ? "Moved." : "Copied.");
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Paste failed. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  function menuItems(file: StoredFile | null, context = false) {
+    const Item = context ? ContextMenuItem : DropdownMenuItem;
+    const Separator = context ? ContextMenuSeparator : DropdownMenuSeparator;
+    const itemProps = { className: "min-h-11 md:min-h-8", disabled };
+    return file ? (
+      <>
+        {file.isFolder ? (
+          <Item {...itemProps} onSelect={() => openFolder(file.id)}>
+            <FolderIcon />
+            Open folder
+          </Item>
+        ) : (
+          <Item {...itemProps} onSelect={() => download(file)}>
+            <DownloadIcon />
+            Download
+          </Item>
+        )}
+        <Separator />
+        <Item {...itemProps} onSelect={() => copy(file, "copy")}>
+          <CopyIcon />
+          Copy
+        </Item>
+        <Item {...itemProps} onSelect={() => copy(file, "cut")}>
+          <ScissorsIcon />
+          Cut
+        </Item>
+        {file.isFolder && (
+          <Item
+            {...itemProps}
+            disabled={disabled || !clipboard}
+            onSelect={() => paste(file.id)}
+          >
+            <ClipboardPasteIcon />
+            Paste into folder
+          </Item>
+        )}
+        <Item {...itemProps} onSelect={() => startName(file)}>
+          <PencilIcon />
+          Rename
+        </Item>
+        <Separator />
+        <Item {...itemProps} onSelect={() => setSharing(file)}>
+          <Share2Icon />
+          Share
+        </Item>
+        <Item {...itemProps} onSelect={() => setDetails(file)}>
+          <InfoIcon />
+          File details
+        </Item>
+        <Separator />
+        <Item
+          {...itemProps}
+          variant="destructive"
+          onSelect={() => askDelete(file)}
+        >
+          <Trash2Icon />
+          Delete
+        </Item>
+      </>
+    ) : (
+      <>
+        <Item {...itemProps} onSelect={() => startName()}>
+          <FolderPlusIcon />
+          New folder
+        </Item>
+        <Item {...itemProps} onSelect={openUpload}>
+          <UploadIcon />
+          Upload file
+        </Item>
+        <Separator />
+        <Item
+          {...itemProps}
+          disabled={disabled || !clipboard}
+          onSelect={() => paste()}
+        >
+          <ClipboardPasteIcon />
+          Paste
+        </Item>
+        <Item {...itemProps} onSelect={refresh}>
+          <RefreshCwIcon />
+          Refresh
+        </Item>
+      </>
+    );
+  }
   function actions(file: StoredFile) {
     return (
       <DropdownMenu>
@@ -335,33 +537,17 @@ export function FileLibrary({ identity }: { identity: Identity }) {
             <MoreVerticalIcon />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-44">
-          <DropdownMenuItem
-            className="min-h-11 md:min-h-8"
-            onSelect={() => download(file)}
-          >
-            <DownloadIcon />
-            Download
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            className="min-h-11 md:min-h-8"
-            onSelect={() => setDetails(file)}
-          >
-            <InfoIcon />
-            File details
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="min-h-11 md:min-h-8"
-            variant="destructive"
-            onSelect={() => askDelete(file)}
-          >
-            <Trash2Icon />
-            Delete
-          </DropdownMenuItem>
+        <DropdownMenuContent align="end" className="w-52">
+          {menuItems(file)}
         </DropdownMenuContent>
       </DropdownMenu>
     );
+  }
+  const ancestors: StoredFile[] = [];
+  let ancestor = files?.find((file) => file.id === folder);
+  while (ancestor && !ancestors.some((file) => file.id === ancestor?.id)) {
+    ancestors.unshift(ancestor);
+    ancestor = files?.find((file) => file.id === ancestor?.parentId);
   }
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 md:p-6">
@@ -389,6 +575,65 @@ export function FileLibrary({ identity }: { identity: Identity }) {
         </Alert>
       ) : (
         <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <nav
+              aria-label="Folder path"
+              className="flex min-w-0 flex-wrap items-center gap-1 text-sm"
+            >
+              <Button
+                variant="ghost"
+                className="h-11"
+                onClick={() => openFolder(null)}
+              >
+                All files
+              </Button>
+              {ancestors.map((item) => (
+                <span key={item.id} className="flex min-w-0 items-center">
+                  <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <Button
+                    variant="ghost"
+                    className="h-11 max-w-48"
+                    onClick={() => openFolder(item.id)}
+                  >
+                    <span className="truncate">{item.name}</span>
+                  </Button>
+                </span>
+              ))}
+            </nav>
+            <div className="flex flex-wrap items-center gap-2">
+              {clipboard && (
+                <>
+                  <Button
+                    variant="outline"
+                    className="h-11"
+                    disabled={disabled}
+                    onClick={() => paste()}
+                  >
+                    <ClipboardPasteIcon />
+                    Paste
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-11"
+                    aria-label="Cancel copy or cut"
+                    onClick={() => setClipboard(null)}
+                  >
+                    <XIcon />
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="outline"
+                className="h-11"
+                disabled={disabled || files === null}
+                onClick={() => startName()}
+              >
+                <FolderPlusIcon />
+                New folder
+              </Button>
+            </div>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-0 flex-1 basis-40">
               <SearchIcon className="pointer-events-none absolute top-3.5 left-3 size-4 text-muted-foreground" />
@@ -549,10 +794,12 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   variant="ghost"
                   className="h-11 md:h-8"
                   disabled={disabled}
-                  onClick={() => download(active)}
+                  onClick={() =>
+                    active.isFolder ? openFolder(active.id) : download(active)
+                  }
                 >
                   <DownloadIcon />
-                  Download
+                  {active.isFolder ? "Open folder" : "Download"}
                 </Button>
                 <Button
                   variant="ghost"
@@ -591,175 +838,332 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               </AlertDescription>
             </Alert>
           )}
-          {files === null ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              {error
-                ? "Files could not be loaded. Use Refresh to try again."
-                : "Loading files..."}
-            </p>
-          ) : visible?.length === 0 ? (
-            <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed p-8 text-center">
-              <div className="mb-4 rounded-xl bg-muted/40 p-4">
-                <FileIcon className="size-8 text-muted-foreground" />
-              </div>
-              <h2 className="font-medium">
-                {files.length ? "No matching files" : "Your files, together"}
-              </h2>
-              <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-                {files.length
-                  ? "Try another filename or clear your filters."
-                  : "Upload configs, plugins, and other files to share with your organization managers."}
-              </p>
-              {files.length ? (
-                <Button
-                  variant="outline"
-                  className="mt-5 h-11"
-                  onClick={() => {
-                    setQuery("");
-                    setType("all");
-                  }}
-                >
-                  Clear filters
-                </Button>
-              ) : (
-                <p className="mt-4 text-xs text-muted-foreground">
-                  Use Upload file to get started. Up to 10 MiB per file.
-                </p>
-              )}
-            </div>
-          ) : view === "list" ? (
-            <table className="w-full table-fixed text-sm">
-              <caption className="sr-only">Files</caption>
-              <thead>
-                <tr className="border-b text-left text-xs text-muted-foreground">
-                  <th scope="col" className="pb-3 pl-3 font-medium">
-                    Name
-                  </th>
-                  <th
-                    scope="col"
-                    className="hidden w-36 pb-3 font-medium md:table-cell"
-                  >
-                    Uploaded
-                  </th>
-                  <th
-                    scope="col"
-                    className="hidden w-24 pb-3 font-medium sm:table-cell"
-                  >
-                    Size
-                  </th>
-                  <th scope="col" className="w-14 pb-3">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible?.map((file) => {
-                  const Icon = fileIcon(file.name);
-                  return (
-                    <tr
-                      key={file.id}
-                      className={cn(
-                        "border-b border-border/60 transition-colors hover:bg-muted/40",
-                        active?.id === file.id &&
-                          "bg-primary/10 hover:bg-primary/15",
-                      )}
-                    >
-                      <td className="p-0">
-                        <button
-                          type="button"
-                          aria-pressed={active?.id === file.id}
-                          onClick={() => select(file)}
-                          className="flex min-h-14 w-full items-center gap-3 rounded-md px-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                          title={file.name}
+          <ContextMenu
+            onOpenChange={(open) => {
+              if (!open) search.current?.focus();
+            }}
+          >
+            <ContextMenuTrigger asChild disabled={!allowed || files === null}>
+              <div
+                className="min-h-72 flex-1"
+                tabIndex={0}
+                aria-label="File browser"
+                onContextMenu={(event) => {
+                  const id = (event.target as HTMLElement)
+                    .closest("[data-file-id]")
+                    ?.getAttribute("data-file-id");
+                  const target = files?.find((file) => file.id === id) ?? null;
+                  setContextFile(target);
+                  setActiveId(target?.id ?? null);
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    (event.target as HTMLElement).closest(
+                      "input,textarea,[contenteditable=true]",
+                    )
+                  )
+                    return;
+                  if (event.shiftKey && event.key === "F10") {
+                    event.preventDefault();
+                    const target = event.target as HTMLElement;
+                    const rect = target.getBoundingClientRect();
+                    target.dispatchEvent(
+                      new MouseEvent("contextmenu", {
+                        bubbles: true,
+                        clientX: rect.left + 20,
+                        clientY: rect.top + 20,
+                      }),
+                    );
+                  } else if (
+                    (event.ctrlKey || event.metaKey) &&
+                    ["c", "x", "v"].includes(event.key.toLowerCase())
+                  ) {
+                    if (disabled) return;
+                    if (event.key.toLowerCase() === "v" && clipboard) {
+                      event.preventDefault();
+                      void paste();
+                    } else if (active && event.key.toLowerCase() !== "v") {
+                      event.preventDefault();
+                      copy(
+                        active,
+                        event.key.toLowerCase() === "x" ? "cut" : "copy",
+                      );
+                    }
+                  }
+                }}
+              >
+                {files === null ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {error
+                      ? "Files could not be loaded. Use Refresh to try again."
+                      : "Loading files..."}
+                  </p>
+                ) : visible?.length === 0 ? (
+                  <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed p-8 text-center">
+                    <div className="mb-4 rounded-xl bg-muted/40 p-4">
+                      <FileIcon className="size-8 text-muted-foreground" />
+                    </div>
+                    <h2 className="font-medium">
+                      {query || type !== "all"
+                        ? "No matching files"
+                        : folder
+                          ? "This folder is empty"
+                          : "Your files, together"}
+                    </h2>
+                    <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+                      {query || type !== "all"
+                        ? "Try another filename or clear your filters."
+                        : "Upload configs, plugins, and other files to share with your organization managers."}
+                    </p>
+                    {query || type !== "all" ? (
+                      <Button
+                        variant="outline"
+                        className="mt-5 h-11"
+                        onClick={() => {
+                          setQuery("");
+                          setType("all");
+                        }}
+                      >
+                        Clear filters
+                      </Button>
+                    ) : (
+                      <p className="mt-4 text-xs text-muted-foreground">
+                        Use Upload file to get started. Up to 10 MiB per file.
+                      </p>
+                    )}
+                  </div>
+                ) : view === "list" ? (
+                  <table className="w-full table-fixed text-sm">
+                    <caption className="sr-only">Files</caption>
+                    <thead>
+                      <tr className="border-b text-left text-xs text-muted-foreground">
+                        <th scope="col" className="pb-3 pl-3 font-medium">
+                          Name
+                        </th>
+                        <th
+                          scope="col"
+                          className="hidden w-36 pb-3 font-medium md:table-cell"
                         >
-                          <Icon className="size-5 shrink-0 text-muted-foreground" />
-                          <span className="min-w-0">
-                            <span className="block truncate font-medium">
-                              {file.name}
-                            </span>
-                            <span className="mt-1 block text-xs text-muted-foreground sm:hidden">
-                              {sizeLabel(file.size)} ·{" "}
+                          Uploaded
+                        </th>
+                        <th
+                          scope="col"
+                          className="hidden w-24 pb-3 font-medium sm:table-cell"
+                        >
+                          Size
+                        </th>
+                        <th scope="col" className="w-14 pb-3">
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visible?.map((file) => {
+                        const Icon = file.isFolder
+                          ? FolderIcon
+                          : fileIcon(file.name);
+                        return (
+                          <tr
+                            key={file.id}
+                            data-file-id={file.id}
+                            className={cn(
+                              "border-b border-border/60 transition-colors hover:bg-muted/40",
+                              clipboard?.mode === "cut" &&
+                                clipboard.file.id === file.id &&
+                                "opacity-50",
+                              active?.id === file.id &&
+                                "bg-primary/10 hover:bg-primary/15",
+                            )}
+                          >
+                            <td className="p-0">
+                              <button
+                                type="button"
+                                aria-pressed={active?.id === file.id}
+                                onClick={() =>
+                                  file.isFolder
+                                    ? openFolder(file.id)
+                                    : select(file)
+                                }
+                                className="flex min-h-14 w-full items-center gap-3 rounded-md px-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                title={file.name}
+                              >
+                                <Icon className="size-5 shrink-0 text-muted-foreground" />
+                                <span className="min-w-0">
+                                  <span className="block truncate font-medium">
+                                    {file.name}
+                                  </span>
+                                  <span className="mt-1 block text-xs text-muted-foreground sm:hidden">
+                                    {file.isFolder
+                                      ? "Folder"
+                                      : sizeLabel(file.size)}{" "}
+                                    ·{" "}
+                                    {new Date(
+                                      file.createdAt * 1000,
+                                    ).toLocaleDateString()}
+                                  </span>
+                                </span>
+                              </button>
+                            </td>
+                            <td className="hidden text-muted-foreground md:table-cell">
                               {new Date(
                                 file.createdAt * 1000,
                               ).toLocaleDateString()}
-                            </span>
-                          </span>
-                        </button>
-                      </td>
-                      <td className="hidden text-muted-foreground md:table-cell">
-                        {new Date(file.createdAt * 1000).toLocaleDateString()}
-                      </td>
-                      <td className="hidden text-muted-foreground tabular-nums sm:table-cell">
-                        {sizeLabel(file.size)}
-                      </td>
-                      <td className="text-right">{actions(file)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <ul
-              className="grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-              aria-label="Files"
-            >
-              {visible?.map((file) => {
-                const Icon = fileIcon(file.name);
-                return (
-                  <li
-                    key={file.id}
-                    className={cn(
-                      "overflow-hidden rounded-xl border bg-card transition-colors hover:border-border-strong",
-                      active?.id === file.id && "border-primary bg-primary/10",
-                    )}
+                            </td>
+                            <td className="hidden text-muted-foreground tabular-nums sm:table-cell">
+                              {file.isFolder ? "Folder" : sizeLabel(file.size)}
+                            </td>
+                            <td className="text-right">{actions(file)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <ul
+                    className="grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                    aria-label="Files"
                   >
-                    <div className="flex items-center gap-2 px-3 pt-2">
-                      <Icon className="size-4 shrink-0 text-muted-foreground" />
-                      <span
-                        className="min-w-0 flex-1 truncate text-sm font-medium"
-                        title={file.name}
-                      >
-                        {file.name}
-                      </span>
-                      {actions(file)}
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={`Select ${file.name}`}
-                      aria-pressed={active?.id === file.id}
-                      onClick={() => select(file)}
-                      className="group w-full px-3 pb-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                    >
-                      <div className="relative my-2 flex h-36 items-center justify-center rounded-lg bg-background/60">
-                        {["png", "jpg", "jpeg", "gif", "webp"].includes(
-                          extension(file.name),
-                        ) ? (
-                          <FileThumbnail
-                            key={`${organization}:${file.id}`}
-                            id={file.id}
-                            organization={organization}
-                            fallback={
-                              <Icon className="size-14 text-muted-foreground/60" />
+                    {visible?.map((file) => {
+                      const Icon = file.isFolder
+                        ? FolderIcon
+                        : fileIcon(file.name);
+                      return (
+                        <li
+                          key={file.id}
+                          data-file-id={file.id}
+                          className={cn(
+                            "overflow-hidden rounded-xl border bg-card transition-colors hover:border-border-strong",
+                            clipboard?.mode === "cut" &&
+                              clipboard.file.id === file.id &&
+                              "opacity-50",
+                            active?.id === file.id &&
+                              "border-primary bg-primary/10",
+                          )}
+                        >
+                          <div className="flex items-center gap-2 px-3 pt-2">
+                            <Icon className="size-4 shrink-0 text-muted-foreground" />
+                            <span
+                              className="min-w-0 flex-1 truncate text-sm font-medium"
+                              title={file.name}
+                            >
+                              {file.name}
+                            </span>
+                            {actions(file)}
+                          </div>
+                          <button
+                            type="button"
+                            aria-label={`Select ${file.name}`}
+                            aria-pressed={active?.id === file.id}
+                            onClick={() =>
+                              file.isFolder ? openFolder(file.id) : select(file)
                             }
-                          />
-                        ) : (
-                          <Icon className="size-14 text-muted-foreground/60" />
-                        )}
-                        {active?.id === file.id && (
-                          <CheckIcon className="absolute top-3 right-3 size-5 text-primary" />
-                        )}
-                      </div>
-                      <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span>{sizeLabel(file.size)}</span>
-                        <span>
-                          {new Date(file.createdAt * 1000).toLocaleDateString()}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                            className="group w-full px-3 pb-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                          >
+                            <div className="relative my-2 flex h-36 items-center justify-center rounded-lg bg-background/60">
+                              {!file.isFolder &&
+                              ["png", "jpg", "jpeg", "gif", "webp"].includes(
+                                extension(file.name),
+                              ) ? (
+                                <FileThumbnail
+                                  key={`${organization}:${file.id}`}
+                                  id={file.id}
+                                  organization={organization}
+                                  fallback={
+                                    <Icon className="size-14 text-muted-foreground/60" />
+                                  }
+                                />
+                              ) : (
+                                <Icon className="size-14 text-muted-foreground/60" />
+                              )}
+                              {active?.id === file.id && (
+                                <CheckIcon className="absolute top-3 right-3 size-5 text-primary" />
+                              )}
+                            </div>
+                            <span className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                              <span>
+                                {file.isFolder
+                                  ? "Folder"
+                                  : sizeLabel(file.size)}
+                              </span>
+                              <span>
+                                {new Date(
+                                  file.createdAt * 1000,
+                                ).toLocaleDateString()}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="w-52">
+              {menuItems(contextFile, true)}
+            </ContextMenuContent>
+          </ContextMenu>
+          <Dialog
+            open={naming !== null}
+            onOpenChange={(open) => {
+              if (!open && !busy) setNaming(null);
+            }}
+          >
+            <DialogContent showCloseButton={!busy}>
+              <DialogHeader>
+                <DialogTitle>
+                  {naming?.file ? "Rename" : "New folder"}
+                </DialogTitle>
+                <DialogDescription>
+                  {naming?.file
+                    ? "Choose a new name."
+                    : "Create a folder in the current location."}
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={saveName} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="file-name">Name</Label>
+                  <Input
+                    id="file-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    autoFocus
+                    required
+                    disabled={busy}
+                  />
+                </div>
+                {nameError && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {nameError}
+                  </p>
+                )}
+                <DialogFooter>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => setNaming(null)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button disabled={busy || !name.trim()}>
+                    {busy
+                      ? "Saving..."
+                      : naming?.file
+                        ? "Save name"
+                        : "Create folder"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+          {sharing && (
+            <FileShareDialog
+              key={sharing.id}
+              file={sharing}
+              organization={organization}
+              onClose={() => setSharing(null)}
+            />
           )}
           <Dialog
             open={uploadOpen}
@@ -904,10 +1308,12 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               {details && (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-4 text-sm">
                   <dt className="text-muted-foreground">Size</dt>
-                  <dd>{sizeLabel(details.size)}</dd>
+                  <dd>
+                    {details.isFolder ? "Folder" : sizeLabel(details.size)}
+                  </dd>
                   <dt className="text-muted-foreground">Uploaded</dt>
                   <dd>{new Date(details.createdAt * 1000).toLocaleString()}</dd>
-                  <dt className="text-muted-foreground">Access</dt>
+                  <dt className="text-muted-foreground">Organization access</dt>
                   <dd>Organization managers</dd>
                 </dl>
               )}
@@ -932,10 +1338,17 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               }}
             >
               <DialogHeader>
-                <DialogTitle>Delete file?</DialogTitle>
+                <DialogTitle>
+                  {removing?.isFolder
+                    ? "Delete folder and contents?"
+                    : "Delete file?"}
+                </DialogTitle>
                 <DialogDescription className="break-all">
-                  Delete {removing?.name} from this organization. This cannot be
-                  undone.
+                  Delete {removing?.name}
+                  {removing?.isFolder
+                    ? " and every file and subfolder inside it"
+                    : ""}{" "}
+                  from this organization. This cannot be undone.
                 </DialogDescription>
               </DialogHeader>
               {deleteError && (
@@ -952,7 +1365,11 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   Cancel
                 </Button>
                 <Button variant="destructive" disabled={busy} onClick={remove}>
-                  {busy ? "Deleting..." : "Delete file"}
+                  {busy
+                    ? "Deleting..."
+                    : removing?.isFolder
+                      ? "Delete folder"
+                      : "Delete file"}
                 </Button>
               </DialogFooter>
             </DialogContent>

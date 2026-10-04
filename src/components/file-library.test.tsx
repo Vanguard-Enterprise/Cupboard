@@ -262,3 +262,106 @@ it("remembers the view after remount and scopes it to the organization", async (
   ).toBe("true");
   await screen.findByText("config.txt");
 });
+
+it("offers right-click copy and cut, navigates folders, and pastes into the destination", async () => {
+  const folder = {
+    id: "folder",
+    name: "Configs",
+    size: 0,
+    createdAt: 1700000001,
+    isFolder: true,
+    parentId: null,
+  };
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([file, folder]))
+    .mockResolvedValueOnce(Response.json({ ...file, parentId: "folder" }));
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  fireEvent.contextMenu(
+    await screen.findByRole("button", { name: /^config.txt/ }),
+  );
+  expect(screen.getByRole("menuitem", { name: "Copy" })).not.toBeNull();
+  expect(screen.getByRole("menuitem", { name: "Share" })).not.toBeNull();
+  await user.click(screen.getByRole("menuitem", { name: "Cut" }));
+  await user.click(screen.getByRole("button", { name: /^Configs/ }));
+  await screen.findByText("This folder is empty");
+  await user.click(screen.getByRole("button", { name: "Paste" }));
+  await screen.findByText("config.txt");
+  expect(fetcher.mock.calls[1][0]).toBe("/app-api/files/file/move");
+  expect(JSON.parse(fetcher.mock.calls[1][1]?.body as string)).toEqual({
+    parentId: "folder",
+  });
+  expect(fetcher.mock.calls[1][1]?.headers).toMatchObject({
+    "X-Cupboard-Organization": "org",
+  });
+  expect(
+    screen.queryByRole("button", { name: "Cancel copy or cut" }),
+  ).toBeNull();
+  await user.click(screen.getByRole("button", { name: "All files" }));
+  expect(screen.queryByText("config.txt")).toBeNull();
+});
+it("creates folders from the empty-area context menu and retains invalid names for correction", async () => {
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([]))
+    .mockResolvedValueOnce(
+      Response.json({ error: "Use a valid name." }, { status: 400 }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({
+        id: "folder",
+        name: "Configs",
+        size: 0,
+        createdAt: 1,
+        isFolder: true,
+        parentId: null,
+      }),
+    );
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("Your files, together");
+  fireEvent.contextMenu(screen.getByLabelText("File browser"));
+  await user.click(screen.getByRole("menuitem", { name: "New folder" }));
+  await user.type(screen.getByLabelText("Name"), "../bad");
+  await user.click(screen.getByRole("button", { name: "Create folder" }));
+  await screen.findByText("Use a valid name.");
+  expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+    "../bad",
+  );
+  await user.clear(screen.getByLabelText("Name"));
+  await user.type(screen.getByLabelText("Name"), "Configs");
+  await user.click(screen.getByRole("button", { name: "Create folder" }));
+  await screen.findByText("Configs");
+  expect(fetcher.mock.calls[2][0]).toBe("/app-api/files/folders");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+it("opens file actions with Shift+F10 in grid view", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json([file]));
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("config.txt");
+  await user.click(screen.getByRole("radio", { name: "Grid view" }));
+  const target = screen.getByRole("button", { name: "Select config.txt" });
+  target.focus();
+  fireEvent.keyDown(target, { key: "F10", shiftKey: true });
+  await user.click(screen.getByRole("menuitem", { name: "File details" }));
+  expect(screen.getByRole("dialog").textContent).toContain("config.txt");
+});
+it("closes the overflow menu after Copy and preserves the clipboard after a failed paste", async () => {
+  vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([file]))
+    .mockResolvedValueOnce(
+      Response.json({ error: "Copy failed." }, { status: 503 }),
+    );
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await user.click(
+    await screen.findByRole("button", { name: "Actions for config.txt" }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Copy" }));
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  await user.click(screen.getByRole("button", { name: "Paste" }));
+  await screen.findByRole("alert");
+  expect(screen.getByRole("button", { name: "Paste" })).not.toBeNull();
+});

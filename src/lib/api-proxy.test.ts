@@ -229,3 +229,40 @@ describe("private file transport", () => {
     );
   });
 });
+
+it("proxies anonymous public downloads with attachment headers and validates their origin", async () => {
+  const fetcher = vi.fn(
+    async () =>
+      new Response("download bytes", {
+        headers: { "content-disposition": "attachment; filename=download" },
+      }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const request = (origin: string) =>
+    new Request("http://localhost:5173/app-api/public-files/download", {
+      method: "POST",
+      headers: {
+        origin,
+        "Content-Type": "application/json",
+        "X-Cupboard-Request": "1",
+      },
+      body: JSON.stringify({ token: "test-only-token" }),
+    });
+  const result = await proxyApi(
+    request("http://localhost:5173"),
+    "public-files/download",
+  );
+  expect(result.status).toBe(200);
+  expect(result.headers.get("content-disposition")).toContain("attachment");
+  expect(result.headers.get("cache-control")).toBe("no-store");
+  expect(await result.text()).toBe("download bytes");
+  expect(
+    (
+      await proxyApi(
+        request("https://foreign.example"),
+        "public-files/download",
+      )
+    ).status,
+  ).toBe(403);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});

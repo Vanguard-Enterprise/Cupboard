@@ -1460,6 +1460,31 @@ async fn health_monitor_persists_observations_and_respects_freshness_and_tenant_
 }
 
 impl Client {
+    async fn file_json(&self, path: &str, org: &str, body: Value) -> axum::response::Response {
+        self.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/app-api/{path}"))
+                    .header("origin", "http://localhost:5173")
+                    .header("x-cupboard-request", "1")
+                    .header("x-cupboard-organization", org)
+                    .header("content-type", "application/json")
+                    .header("cookie", &self.cookie)
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+    async fn file_action(&self, path: &str, org: &str, body: Value) -> (StatusCode, Value) {
+        let response = self.file_json(path, org, body).await;
+        let status = response.status();
+        let value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap())
+            .unwrap();
+        (status, value)
+    }
     async fn file_request(
         &self,
         method: &str,
@@ -1654,6 +1679,217 @@ async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloa
         .file_request("GET", "files", other_org, "", vec![])
         .await;
     assert_eq!(&to_bytes(list.into_body(), 4096).await.unwrap()[..], b"[]");
+    let (status, folder) = owner
+        .file_action("files/folders", org, json!({"name":"Configs"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let folder_id = folder["id"].as_str().unwrap();
+    let (status, nested) = owner
+        .file_action(
+            "files/folders",
+            org,
+            json!({"name":"Nested","parentId":folder_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let nested_id = nested["id"].as_str().unwrap();
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{id}/move"),
+                org,
+                json!({"parentId":nested_id})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{folder_id}/move"),
+                org,
+                json!({"parentId":nested_id})
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        owner
+            .file_action("files/folders", org, json!({"name":"../bad"}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        other
+            .file_action(
+                "files/folders",
+                other_org,
+                json!({"name":"Intruder","parentId":folder_id})
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    for (action, body) in [
+        ("rename", json!({"name":"stolen"})),
+        ("move", json!({"parentId":null})),
+        ("copy", json!({"parentId":null})),
+        ("share", json!({"days":7})),
+        ("share/revoke", json!({})),
+    ] {
+        assert_eq!(
+            other
+                .file_action(&format!("files/{id}/{action}"), other_org, body)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{id}/rename"),
+                org,
+                json!({"name":"renamed.html"})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, copied) = owner
+        .file_action(
+            &format!("files/{folder_id}/copy"),
+            org,
+            json!({"parentId":null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let copies = copied.as_array().unwrap();
+    assert_eq!(copies.len(), 3);
+    let copied_file = copies.iter().find(|f| f["isFolder"] == false).unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let response = owner
+        .file_request("GET", &format!("files/{copied_file}"), org, "", vec![])
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    let copied_root = copies[0]["id"].as_str().unwrap();
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{copied_root}/delete"), org, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .file_request("GET", &format!("files/{copied_file}"), org, "", vec![])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let (status, share) = owner
+        .file_action(&format!("files/{id}/share"), org, json!({"days":7}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = share["token"].as_str().unwrap();
+    let stored: String = sqlx::query_scalar(
+        "SELECT token_hash FROM organization_file_shares WHERE organization_id=$1 AND file_id=$2",
+    )
+    .bind(org)
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored != token && stored == crate::auth::digest(token));
+    let response = anonymous
+        .file_json("public-files/download", "", json!({"token":token}))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    let (_, replacement) = owner
+        .file_action(&format!("files/{id}/share"), org, json!({"days":1}))
+        .await;
+    assert_eq!(
+        anonymous
+            .file_json("public-files/download", "", json!({"token":token}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let token = replacement["token"].as_str().unwrap();
+    sqlx::query(
+        "UPDATE organization_file_shares SET expires_at=0 WHERE organization_id=$1 AND file_id=$2",
+    )
+    .bind(org)
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        anonymous
+            .file_json("public-files/download", "", json!({"token":token}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let (_, replacement) = owner
+        .file_action(&format!("files/{id}/share"), org, json!({"days":30}))
+        .await;
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{id}/share/revoke"), org, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        anonymous
+            .file_json(
+                "public-files/download",
+                "",
+                json!({"token":replacement["token"]})
+            )
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{folder_id}/share"), org, json!({"days":7}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{id}/share"), org, json!({"days":365}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
     // An active member without organization management cannot read or mutate files.
     let account = other_identity["user"]["id"].as_str().unwrap();
     let member = uuid::Uuid::new_v4().to_string();
@@ -1677,6 +1913,19 @@ async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloa
                 .file_request(method, &route, org, "no.txt", vec![1])
                 .await
                 .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    for (route, body) in [
+        ("files/folders".to_owned(), json!({"name":"Forbidden"})),
+        (format!("files/{id}/rename"), json!({"name":"Forbidden"})),
+        (format!("files/{id}/copy"), json!({"parentId":null})),
+        (format!("files/{id}/move"), json!({"parentId":null})),
+        (format!("files/{id}/share"), json!({"days":7})),
+        (format!("files/{id}/share/revoke"), json!({})),
+    ] {
+        assert_eq!(
+            other.file_action(&route, org, body).await.0,
             StatusCode::FORBIDDEN
         );
     }

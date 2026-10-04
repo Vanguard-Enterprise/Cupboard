@@ -190,9 +190,13 @@ CUP-42 adds the organization file library at `/dashboard/files`. PostgreSQL hold
 file metadata and S3 holds private file contents. This is a new external storage
 dependency because file payloads need durable object storage, including the later
 logo-upload slice. The Rust application owns all storage requests and cleanup;
-there is no new application service or worker. The first slice allows organization
-managers to upload, download, and delete files up to 10 MiB. All access checks active
-membership and management permission beside tenant-scoped data access. File
+there is no new application service or worker. The file library allows organization
+managers to upload, download, and delete files up to 10 MiB, create nested folders,
+rename entries, copy folders and files, and move them through cut/paste. Folder
+relationships live in PostgreSQL; moves do not rename S3 keys. Copies receive
+independent S3 objects. File mutations serialize per organization to prevent
+concurrent folder cycles and inconsistent recursive operations. All organization file management checks active membership and management
+permission beside tenant-scoped data access. File
 requests carry the page's organization ID so a stale browser tab cannot upload
 into a newly selected organization.
 
@@ -204,7 +208,13 @@ actions return an unavailable response. Local and disposable check storage use t
 same S3 client as production. Interrupted uploads and deletions retain metadata
 for retrying cleanup in the existing Rust runtime.
 
-Folders, versions, sharing links, per-file permissions, large multipart uploads,
-and content scanning are outside this slice. Files download as attachments. Grid cards render authenticated raster image
+Organization links retain membership and management checks. Managers can also
+create public download links for individual files with 1, 7, or 30-day expiry.
+Only token hashes are stored. Replacing or revoking a link invalidates its token.
+Public link tokens stay in URL fragments and reach the API in POST bodies rather
+than request URLs. Public downloads are authorized by the token and served as
+attachments; they do not require membership. Folder sharing uses organization
+links. Versions, per-file member permissions, public folder downloads, large
+multipart uploads, and content scanning remain outside this slice. Files download as attachments. Grid cards render authenticated raster image
 previews after checking PNG, JPEG, GIF, or WebP signatures; active content is not
 rendered inline. Organization logo integration remains CUP-31.
