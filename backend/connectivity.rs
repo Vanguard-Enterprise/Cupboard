@@ -81,10 +81,6 @@ async fn rcon_inner(host: &str, port: i32, password: &str) -> Outcome {
         Ok(a) => a,
         Err(e) => return e,
     };
-    let stream = match TcpStream::connect(addresses.as_slice()).await {
-        Ok(s) => s,
-        Err(_) => return Outcome::Unreachable,
-    };
     let authority = if host.contains(':') {
         format!("[{host}]")
     } else {
@@ -94,6 +90,31 @@ async fn rcon_inner(host: &str, port: i32, password: &str) -> Outcome {
         "ws://{authority}:{port}/{}",
         utf8_percent_encode(password, NON_ALPHANUMERIC)
     );
+    rcon_addresses(addresses, &url).await
+}
+async fn rcon_addresses(addresses: Vec<SocketAddr>, url: &str) -> Outcome {
+    // Complete the protocol exchange on every address concurrently: a stale
+    // address may accept TCP but never serve WebRCON. The caller bounds all work.
+    let mut attempts = futures_util::stream::FuturesUnordered::new();
+    for address in addresses {
+        attempts.push(rcon_address(address, url));
+    }
+    let mut result = Outcome::Unreachable;
+    while let Some(outcome) = attempts.next().await {
+        if outcome == Outcome::Connected {
+            return outcome;
+        }
+        if outcome != Outcome::Unreachable {
+            result = outcome;
+        }
+    }
+    result
+}
+async fn rcon_address(address: SocketAddr, url: &str) -> Outcome {
+    let stream = match TcpStream::connect(address).await {
+        Ok(s) => s,
+        Err(_) => return Outcome::Unreachable,
+    };
     let config = WebSocketConfig::default()
         .max_message_size(Some(64 * 1024))
         .max_frame_size(Some(64 * 1024));
@@ -295,6 +316,57 @@ pub(crate) mod tests {
         assert_eq!(r, Outcome::Connected);
         assert_eq!(a, Outcome::Connected);
         task.await.unwrap();
+    }
+    #[tokio::test]
+    async fn rcon_uses_healthy_address_after_silent_or_invalid_peer() {
+        for silent in [true, false] {
+            let stale = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let healthy = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addresses = vec![stale.local_addr().unwrap(), healthy.local_addr().unwrap()];
+            let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+            let stale_task = tokio::spawn(async move {
+                let (stream, _) = stale.accept().await.unwrap();
+                if silent {
+                    seen_tx.send(()).unwrap();
+                    // Keep TCP open without responding to the WebSocket handshake.
+                    std::future::pending::<()>().await;
+                    drop(stream);
+                } else {
+                    let mut ws = accept_async(stream).await.unwrap();
+                    ws.next().await.unwrap().unwrap();
+                    ws.send(Message::Text("invalid WebRCON response".into()))
+                        .await
+                        .unwrap();
+                    seen_tx.send(()).unwrap();
+                }
+            });
+            let healthy_task = tokio::spawn(async move {
+                let (stream, _) = healthy.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+                let command = ws.next().await.unwrap().unwrap().into_text().unwrap();
+                let value: serde_json::Value = serde_json::from_str(&command).unwrap();
+                assert_eq!(value["Message"], "serverinfo");
+                // Force the stale endpoint to be exercised before success.
+                seen_rx.await.unwrap();
+                ws.send(Message::Text(serde_json::json!({"Identifier":value["Identifier"],"Message":"{\"Hostname\":\"Healthy\",\"Players\":0}"}).to_string().into())).await.unwrap();
+            });
+            assert_eq!(
+                tokio::time::timeout(
+                    Duration::from_secs(2),
+                    rcon_addresses(addresses, "ws://example.test:28016/test")
+                )
+                .await
+                .unwrap(),
+                Outcome::Connected
+            );
+            healthy_task.await.unwrap();
+            if silent {
+                stale_task.abort();
+                assert!(stale_task.await.unwrap_err().is_cancelled());
+            } else {
+                stale_task.await.unwrap();
+            }
+        }
     }
     #[tokio::test]
     #[allow(clippy::result_large_err)] // Tungstenite callback requires its unboxed HTTP response.
