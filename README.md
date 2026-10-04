@@ -219,8 +219,30 @@ seven days, including across refreshes and visits to the login page.
 
 `/dashboard/servers` lists the active organization's saved Rust servers. Members
 with `servers.view` can read connection addresses; `servers.manage` permits
-adding a server. RCON passwords never appear in API responses. Saving records
-does not verify RCON or A2S connectivity.
+adding a server and running **Test connection**. RCON passwords never appear in
+API responses. Saving records does not connect to the server.
+
+Test connection sends the read-only `serverinfo` command over Rust WebRCON and
+an A2S_INFO UDP query, including the challenge exchange when required. Each
+protocol has a five-second deadline. The latest result and check time are saved
+in PostgreSQL and survive restarts. The inventory shows each protocol separately;
+a successful result describes that check, not continuous monitoring.
+
+Checks distinguish explicit authentication rejection, unreachable endpoints,
+timeouts, invalid configuration, and unexpected protocol responses. A UDP timeout
+cannot distinguish a stopped server from dropped firewall traffic. Raw protocol
+responses and errors are never returned or stored. WebRCON must be enabled with
+`rcon.web 1`; legacy Source RCON and split/compressed A2S responses are not
+supported. WebRCON uses plain TCP, so use a trusted private network or encrypted
+network tunnel between Cupboard and the server. Private and loopback destinations
+are supported; unspecified, multicast, broadcast, and link-local addresses are
+rejected.
+
+At most four checks run at once per API process, and an advisory transaction lock
+prevents concurrent checks of the same server across processes. A check requires
+`servers.manage` in the record's organization. The organization authorization
+lock is held through the bounded probes and result write, so membership changes
+cannot race an authorized check.
 
 Production requires `CUPBOARD_SECRET_KEY`, a cryptographically random 32-byte key
 encoded as 64 hexadecimal characters. RCON passwords use AES-256-GCM with a

@@ -23,6 +23,19 @@ type Server = {
   rconPort: number;
   a2sHost: string;
   a2sPort: number;
+  checkedAt: number | null;
+  rconStatus: string | null;
+  a2sStatus: string | null;
+};
+const outcomes: Record<string, string> = {
+  connected: "Connected",
+  authentication_failed:
+    "Authentication failed. Check the RCON password and server access rules.",
+  unreachable: "Unreachable. Check the address, port, and network access.",
+  timeout:
+    "Timed out. Check that the server is running and the firewall allows this port.",
+  invalid_configuration:
+    "Invalid configuration. Check the saved connection details and credential encryption key.",
 };
 const empty = {
   name: "",
@@ -53,6 +66,9 @@ export function ServerInventory({ identity }: { identity: Identity }) {
   const [fields, setFields] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState<Record<string, boolean>>({});
+  const [checkErrors, setCheckErrors] = useState<Record<string, string>>({});
+  const inFlight = useRef(new Set<string>());
   const form = useRef<HTMLFormElement>(null);
   const view = identity.permissions.includes("servers.view");
   const manage = identity.permissions.includes("servers.manage");
@@ -93,6 +109,31 @@ export function ServerInventory({ identity }: { identity: Identity }) {
     if (first)
       form.current?.querySelector<HTMLInputElement>(`#${first}`)?.focus();
   }, [fields, saving]);
+  async function testConnection(id: string) {
+    if (inFlight.current.has(id)) return;
+    inFlight.current.add(id);
+    setChecking((previous) => ({ ...previous, [id]: true }));
+    setCheckErrors((previous) => ({ ...previous, [id]: "" }));
+    try {
+      const result = await apiRequest<Server>(`servers/${id}/check`, {});
+      setServers(
+        (previous) =>
+          previous?.map((server) => (server.id === id ? result : server)) ??
+          null,
+      );
+    } catch (cause) {
+      setCheckErrors((previous) => ({
+        ...previous,
+        [id]:
+          cause instanceof Error
+            ? cause.message
+            : "Connection check could not be saved. Try again.",
+      }));
+    } finally {
+      inFlight.current.delete(id);
+      setChecking((previous) => ({ ...previous, [id]: false }));
+    }
+  }
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (saving) return;
@@ -315,7 +356,22 @@ export function ServerInventory({ identity }: { identity: Identity }) {
             <ul className="divide-y rounded-lg border">
               {servers.map((server) => (
                 <li key={server.id} className="space-y-3 p-5">
-                  <h2 className="font-semibold">{server.name}</h2>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="font-semibold">{server.name}</h2>
+                    {manage && (
+                      <Button
+                        variant="outline"
+                        className="min-h-11"
+                        disabled={checking[server.id]}
+                        onClick={() => testConnection(server.id)}
+                        aria-label={`Test connection for ${server.name}`}
+                      >
+                        {checking[server.id]
+                          ? "Testing connection..."
+                          : "Test connection"}
+                      </Button>
+                    )}
+                  </div>
                   <dl className="grid gap-3 text-sm sm:grid-cols-2">
                     <div>
                       <dt className="text-muted-foreground">RCON</dt>
@@ -330,6 +386,66 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                       </dd>
                     </div>
                   </dl>
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className="space-y-2 text-sm"
+                  >
+                    {checking[server.id] && (
+                      <p>Testing RCON and A2S connections...</p>
+                    )}
+                    {server.checkedAt ? (
+                      <>
+                        <p className="text-xs text-muted-foreground">
+                          Last checked{" "}
+                          <time
+                            dateTime={new Date(server.checkedAt).toISOString()}
+                          >
+                            {new Date(server.checkedAt).toLocaleString()}
+                          </time>
+                          . Results reflect that check.
+                        </p>
+                        <dl className="grid gap-3 sm:grid-cols-2">
+                          {(
+                            [
+                              ["RCON", server.rconStatus],
+                              ["A2S", server.a2sStatus],
+                            ] as const
+                          ).map(([protocol, status]) => (
+                            <div key={protocol}>
+                              <dt className="font-medium">{protocol} result</dt>
+                              <dd
+                                className={
+                                  status === "connected"
+                                    ? "text-primary"
+                                    : "text-warning"
+                                }
+                              >
+                                {status === "protocol_error"
+                                  ? protocol === "RCON"
+                                    ? "Unexpected WebRCON response or closed connection. Check the RCON password, port, and rcon.web setting."
+                                    : "Unexpected A2S response. Check the query port. Split or compressed replies are not supported."
+                                  : (outcomes[status ?? ""] ??
+                                    "Unknown. Test the connection again.")}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </>
+                    ) : (
+                      <p className="text-muted-foreground">Not checked yet.</p>
+                    )}
+                  </div>
+                  {checkErrors[server.id] && (
+                    <Alert variant="destructive">
+                      <AlertDescription>
+                        {checkErrors[server.id]}{" "}
+                        {server.checkedAt
+                          ? "The previous result is shown. Test the connection again to refresh it."
+                          : "No connection result was saved."}
+                      </AlertDescription>
+                    </Alert>
+                  )}
                 </li>
               ))}
             </ul>
