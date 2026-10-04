@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   DownloadIcon,
   FileIcon,
@@ -12,7 +12,7 @@ import {
   MoreVerticalIcon,
   XIcon,
   RefreshCwIcon,
-  ChevronDownIcon,
+  SlidersHorizontalIcon,
   CheckIcon,
   InfoIcon,
   FileTextIcon,
@@ -42,11 +42,23 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
+
+import { FileThumbnail } from "@/components/file-thumbnail";
+
+function subscribeView(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener("cupboard-file-view", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("cupboard-file-view", callback);
+  };
+}
 
 type StoredFile = { id: string; name: string; size: number; createdAt: number };
 const maxSize = 10 * 1024 * 1024;
@@ -121,7 +133,28 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
-  const [view, setView] = useState("list");
+  const viewKey = `cupboard:files:view:${identity.user.id}:${organization}`;
+  const [memoryView, setMemoryView] = useState("list");
+  const view = useSyncExternalStore(
+    subscribeView,
+    () => {
+      try {
+        return localStorage.getItem(viewKey) === "grid" ? "grid" : "list";
+      } catch {
+        return memoryView;
+      }
+    },
+    () => "list",
+  );
+  function setView(value: string) {
+    setMemoryView(value);
+    try {
+      localStorage.setItem(viewKey, value);
+      window.dispatchEvent(new Event("cupboard-file-view"));
+    } catch {
+      // The view still switches when browser storage is unavailable.
+    }
+  }
   const [type, setType] = useState("all");
   const [sort, setSort] = useState<keyof typeof sorts>("newest");
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -335,9 +368,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Files</h1>
-          <p className="mt-1 text-sm break-words text-muted-foreground">
-            Shared library for {identity.organization?.name}
-          </p>
         </div>
         {allowed && (
           <Button
@@ -359,109 +389,97 @@ export function FileLibrary({ identity }: { identity: Identity }) {
         </Alert>
       ) : (
         <>
-          <div className="relative max-w-2xl">
-            <SearchIcon className="pointer-events-none absolute top-3.5 left-3 size-4 text-muted-foreground" />
-            <Label htmlFor="file-search" className="sr-only">
-              Search files
-            </Label>
-            <Input
-              ref={search}
-              id="file-search"
-              className="h-11 bg-input-background pr-10 pl-10"
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActiveId(null);
-              }}
-              placeholder="Search files"
-            />
-            {query && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="absolute top-0 right-0 size-11"
-                aria-label="Clear search"
-                onClick={() => {
-                  setQuery("");
-                  search.current?.focus();
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-0 flex-1 basis-40">
+              <SearchIcon className="pointer-events-none absolute top-3.5 left-3 size-4 text-muted-foreground" />
+              <Label htmlFor="file-search" className="sr-only">
+                Search files
+              </Label>
+              <Input
+                ref={search}
+                id="file-search"
+                className="h-11 bg-input-background pr-10 pl-10"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setActiveId(null);
                 }}
+                placeholder="Search files"
+              />
+              {query && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute top-0 right-0 size-11"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setQuery("");
+                    search.current?.focus();
+                  }}
+                >
+                  <XIcon />
+                </Button>
+              )}
+            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="h-11"
+                  aria-label="Filter and sort files"
+                >
+                  <SlidersHorizontalIcon />
+                  Filters{type !== "all" || sort !== "newest" ? " •" : ""}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className="max-h-[70vh] w-52 overflow-y-auto"
               >
-                <XIcon />
-              </Button>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="h-11 max-w-40 md:h-9">
-                    <span className="truncate">
-                      {type === "all"
-                        ? "File type"
-                        : type === "none"
-                          ? "No extension"
-                          : `.${type}`}
-                    </span>
-                    <ChevronDownIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="max-h-72 w-44">
-                  <DropdownMenuRadioGroup
-                    value={type}
-                    onValueChange={(value) => {
-                      setType(value);
-                      setActiveId(null);
-                    }}
+                <DropdownMenuLabel>File type</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={type}
+                  onValueChange={(value) => {
+                    setType(value);
+                    setActiveId(null);
+                  }}
+                >
+                  <DropdownMenuRadioItem
+                    className="min-h-11 md:min-h-8"
+                    value="all"
                   >
+                    All file types
+                  </DropdownMenuRadioItem>
+                  {extensions.map((ext) => (
+                    <DropdownMenuRadioItem
+                      className="min-h-11 break-all md:min-h-8"
+                      key={ext}
+                      value={ext}
+                    >
+                      {ext === "none" ? "No extension" : `.${ext}`}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={sort}
+                  onValueChange={(value) =>
+                    setSort(value as keyof typeof sorts)
+                  }
+                >
+                  {Object.entries(sorts).map(([value, label]) => (
                     <DropdownMenuRadioItem
                       className="min-h-11 md:min-h-8"
-                      value="all"
+                      key={value}
+                      value={value}
                     >
-                      All file types
+                      {label}
                     </DropdownMenuRadioItem>
-                    {extensions.map((ext) => (
-                      <DropdownMenuRadioItem
-                        className="min-h-11 break-all md:min-h-8"
-                        key={ext}
-                        value={ext}
-                      >
-                        {ext === "none" ? "No extension" : `.${ext}`}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="h-11 md:h-9"
-                    aria-label={`Sort files: ${sorts[sort]}`}
-                  >
-                    {sorts[sort]}
-                    <ChevronDownIcon />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-44">
-                  <DropdownMenuRadioGroup
-                    value={sort}
-                    onValueChange={(value) =>
-                      setSort(value as keyof typeof sorts)
-                    }
-                  >
-                    {Object.entries(sorts).map(([value, label]) => (
-                      <DropdownMenuRadioItem
-                        className="min-h-11 md:min-h-8"
-                        key={value}
-                        value={value}
-                      >
-                        {label}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -713,7 +731,20 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                       className="group w-full px-3 pb-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                     >
                       <div className="relative my-2 flex h-36 items-center justify-center rounded-lg bg-background/60">
-                        <Icon className="size-14 text-muted-foreground/60" />
+                        {["png", "jpg", "jpeg", "gif", "webp"].includes(
+                          extension(file.name),
+                        ) ? (
+                          <FileThumbnail
+                            key={`${organization}:${file.id}`}
+                            id={file.id}
+                            organization={organization}
+                            fallback={
+                              <Icon className="size-14 text-muted-foreground/60" />
+                            }
+                          />
+                        ) : (
+                          <Icon className="size-14 text-muted-foreground/60" />
+                        )}
                         {active?.id === file.id && (
                           <CheckIcon className="absolute top-3 right-3 size-5 text-primary" />
                         )}

@@ -26,6 +26,7 @@ const file = {
 };
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -164,7 +165,9 @@ it("preserves selected-file actions between list and grid and filters by extensi
       .getByRole("button", { name: "Select config.txt" })
       .getAttribute("aria-pressed"),
   ).toBe("true");
-  await user.click(screen.getByRole("button", { name: "File type" }));
+  await user.click(
+    screen.getByRole("button", { name: "Filter and sort files" }),
+  );
   await user.click(screen.getByRole("menuitemradio", { name: ".zip" }));
   expect(screen.queryByText("config.txt")).toBeNull();
   expect(screen.queryByText("1 selected")).toBeNull();
@@ -186,7 +189,7 @@ it("sorts rows and supports keyboard selection and action menus", async () => {
   render(<FileLibrary identity={identity} />);
   await screen.findByText("config.txt");
   await user.click(
-    screen.getByRole("button", { name: "Sort files: Newest first" }),
+    screen.getByRole("button", { name: "Filter and sort files" }),
   );
   await user.click(screen.getByRole("menuitemradio", { name: "Name A–Z" }));
   expect(screen.getAllByRole("row")[1].textContent).toContain("backup.zip");
@@ -230,4 +233,32 @@ it("accepts a dropped file and preserves the dialog when upload fails", async ()
   );
   expect(fetcher.mock.calls[1][1]?.body).toBe(dropped);
   expect(screen.getByText("dropped.cfg")).not.toBeNull();
+});
+
+it("remembers the view after remount and scopes it to the organization", async () => {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+    Response.json([file]),
+  );
+  const user = userEvent.setup();
+  const first = render(<FileLibrary identity={identity} />);
+  await user.click(screen.getByRole("radio", { name: "Grid view" }));
+  first.unmount();
+  const second = render(<FileLibrary identity={identity} />);
+  expect(
+    screen
+      .getByRole("radio", { name: "Grid view" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  second.unmount();
+  render(
+    <FileLibrary
+      identity={{ ...identity, organization: { id: "other", name: "Other" } }}
+    />,
+  );
+  expect(
+    screen
+      .getByRole("radio", { name: "List view" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  await screen.findByText("config.txt");
 });

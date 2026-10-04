@@ -287,9 +287,12 @@ Before finishing a user-facing change, check that:
 
 The file library follows Google Drive's compact list/grid switching and selected
 file toolbar, adapted to Cupboard's charcoal and sage tokens. Search and filtering
-sit above the content. List view aligns filenames, upload dates, and sizes; grid
-view uses file-type icons. Icons reflect filename extensions, not verified content
-types or previews. A file's overflow menu contains Download, File details, and
+sit above the content, with file type and sort options in one menu beside search.
+The browser remembers the view per account and organization. List view aligns
+filenames, upload dates, and sizes. Grid view lazily loads authenticated PNG, JPEG,
+GIF, and WebP previews after checking their byte signatures. Images use a white
+backdrop so transparent dark artwork remains legible. Other files and failed
+previews use extension-based icons. A file's overflow menu contains Download, File details, and
 Delete. Upload uses a dialog with browsing and drag/drop. Keep mobile actions at
 least 44 pixels and allow filenames to be read in the details dialog.
 

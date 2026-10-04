@@ -343,8 +343,10 @@ manual requests. There is no health-history store or separate worker.
 ## File storage
 
 The File store > Shared library page at `/dashboard/files` supports upload,
-search, download, and confirmed deletion. Switch between list and grid views,
-filter by filename extension, and sort by name, upload date, or size. Selecting a
+search, download, and confirmed deletion. The browser remembers list or grid view
+per account and organization. Use the Filters menu beside search to filter by
+filename extension and sort by name, upload date, or size. Grid cards show private
+PNG, JPEG, GIF, and WebP previews, with file icons for other formats. Selecting a
 file opens its action toolbar; row menus also provide downloads, details, and
 deletion. The upload dialog accepts a single file through browsing or drag and
 drop. It requires `organization.manage` for

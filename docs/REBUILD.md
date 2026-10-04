@@ -205,5 +205,6 @@ same S3 client as production. Interrupted uploads and deletions retain metadata
 for retrying cleanup in the existing Rust runtime.
 
 Folders, versions, sharing links, per-file permissions, large multipart uploads,
-and content scanning are outside this slice. Files download as attachments and are
-never rendered inline. Organization logo integration remains CUP-31.
+and content scanning are outside this slice. Files download as attachments. Grid cards render authenticated raster image
+previews after checking PNG, JPEG, GIF, or WebP signatures; active content is not
+rendered inline. Organization logo integration remains CUP-31.
