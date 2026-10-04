@@ -46,6 +46,10 @@ export function createDevServerConfig(interfaces, port = "5173", statusJson) {
   };
 }
 
+export function developmentSessionCookieName(project) {
+  return `cupboard_session_${project.replaceAll("-", "_")}`;
+}
+
 export function createNextDevArgs({ hostname, port }) {
   return [
     "./node_modules/next/dist/bin/next",
@@ -194,6 +198,9 @@ async function start() {
       ...process.env,
       ...storageEnv,
       CUPBOARD_SECRET_KEY: secretKey,
+      CUPBOARD_SESSION_COOKIE_NAME: developmentSessionCookieName(
+        workspace.project,
+      ),
       DATABASE_URL:
         process.env.DATABASE_URL ||
         `postgres://cupboard:cupboard-local-only@127.0.0.1:${localDatabasePort}/cupboard`,

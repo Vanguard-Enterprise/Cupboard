@@ -266,3 +266,59 @@ it("proxies anonymous public downloads with attachment headers and validates the
   ).toBe(403);
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
+
+describe("worktree session isolation", () => {
+  it.each([
+    [
+      "auth/login",
+      "cupboard_session=local-token; HttpOnly; SameSite=Lax; Path=/",
+    ],
+    [
+      "auth/logout",
+      "cupboard_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+    ],
+  ])(
+    "scopes %s cookies without forwarding other worktrees' sessions",
+    async (path, setCookie) => {
+      vi.stubEnv(
+        "CUPBOARD_SESSION_COOKIE_NAME",
+        "cupboard_session_workspace_a",
+      );
+      const fetcher = vi.fn(async () =>
+        Response.json({ ok: true }, { headers: { "Set-Cookie": setCookie } }),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      const response = await proxyApi(
+        request("http://localhost:5173", {
+          cookie:
+            "cupboard_session=legacy-token; cupboard_session_workspace_b=other-token; cupboard_session_workspace_a=own-token",
+        }),
+        path,
+      );
+      const headers = new Headers(vi.mocked(fetch).mock.calls[0][1]?.headers);
+      expect(headers.get("cookie")).toBe("cupboard_session=own-token");
+      expect(response.headers.get("set-cookie")).toBe(
+        setCookie.replace("cupboard_session=", "cupboard_session_workspace_a="),
+      );
+    },
+  );
+  it("never falls back to a shared or foreign session", async () => {
+    vi.stubEnv("CUPBOARD_SESSION_COOKIE_NAME", "cupboard_session_workspace_a");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ error: "Sign in" }, { status: 401 })),
+    );
+    await proxyApi(
+      new Request("http://localhost:5173/app-api/auth/me", {
+        headers: {
+          cookie:
+            "cupboard_session=legacy-token; cupboard_session_workspace_b=other-token",
+        },
+      }),
+      "auth/me",
+    );
+    expect(
+      new Headers(vi.mocked(fetch).mock.calls[0][1]?.headers).has("cookie"),
+    ).toBe(false);
+  });
+});

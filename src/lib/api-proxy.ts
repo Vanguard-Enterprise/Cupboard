@@ -1,3 +1,8 @@
+import {
+  backendSessionCookieName,
+  browserSessionCookieName,
+  browserSetCookie,
+} from "./session-cookie";
 const paths = new Set([
   "auth/signup",
   "auth/login",
@@ -34,12 +39,17 @@ export async function proxyApi(
   )
     return Response.json({ error: "Not found." }, { status: 404 });
   const headers = new Headers();
+  const browserCookiePrefix = `${browserSessionCookieName()}=`;
   const cookie = request.headers
     .get("cookie")
     ?.split(";")
     .map((part) => part.trim())
-    .find((part) => part.startsWith("cupboard_session="));
-  if (cookie) headers.set("cookie", cookie);
+    .find((part) => part.startsWith(browserCookiePrefix));
+  if (cookie)
+    headers.set(
+      "cookie",
+      `${backendSessionCookieName}=${cookie.slice(browserCookiePrefix.length)}`,
+    );
   if (path === "files" || path.startsWith("files/")) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);
@@ -118,8 +128,10 @@ export async function proxyApi(
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
     });
-    for (const cookie of upstream.headers.getSetCookie())
-      resultHeaders.append("Set-Cookie", cookie);
+    for (const cookie of upstream.headers.getSetCookie()) {
+      const scoped = browserSetCookie(cookie);
+      if (scoped) resultHeaders.append("Set-Cookie", scoped);
+    }
     if (upstream.status >= 500)
       return Response.json(
         {

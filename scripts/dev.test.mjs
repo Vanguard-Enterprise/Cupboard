@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDevServerConfig,
+  developmentSessionCookieName,
   createNextDevArgs,
   findNetBirdAddress,
 } from "./dev.mjs";
@@ -246,4 +247,11 @@ it.each(
     }
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it("uses stable, distinct session cookie names for development worktrees", () => {
+  const first = developmentSessionCookieName("cupboard-dev-1234abcd");
+  expect(first).toBe("cupboard_session_cupboard_dev_1234abcd");
+  expect(developmentSessionCookieName("cupboard-dev-1234abcd")).toBe(first);
+  expect(developmentSessionCookieName("cupboard-dev-abcd1234")).not.toBe(first);
 });

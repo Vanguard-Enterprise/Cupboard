@@ -218,3 +218,9 @@ links. Versions, per-file member permissions, public folder downloads, large
 multipart uploads, and content scanning remain outside this slice. Files download as attachments. Grid cards render authenticated raster image
 previews after checking PNG, JPEG, GIF, or WebP signatures; active content is not
 rendered inline. Organization logo integration remains CUP-31.
+
+CUP-44 isolates development browser sessions by assigning a stable cookie name per
+worktree at the Next.js boundary. Root dev supplies the same name to proxy and
+server-rendered identity reads. Rust retains its canonical session cookie name,
+and production retains its existing default. This prevents parallel local apps
+on one host from overwriting each other's login cookies across ports.

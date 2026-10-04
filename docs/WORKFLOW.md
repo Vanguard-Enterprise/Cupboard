@@ -66,8 +66,12 @@ explicit database port. `DATABASE_URL` skips Compose and makes database isolatio
 your responsibility. The launcher supplies its own local `CUPBOARD_API_URL` so the
 web application always talks to this worktree's Rust process.
 
-Use separate browser profiles or isolated contexts for concurrent sign-in tests.
-Cookies share a host across ports, even though local storage uses separate origins.
+The root dev command assigns a stable browser session cookie name per worktree
+through `CUPBOARD_SESSION_COOKIE_NAME`. The Next.js proxy translates it to Rust's
+canonical cookie name. Cookies share a host across ports, so this prevents signing
+in or out in one worktree from replacing another worktree's session. Existing
+shared cookies are not imported; sign in once after adopting this change. Separate
+browser contexts remain useful when testing different users in the same worktree.
 The development origins include localhost, loopback, and the detected NetBird IP.
 
 Ctrl+C stops the dev launcher and application processes. PostgreSQL stays running
