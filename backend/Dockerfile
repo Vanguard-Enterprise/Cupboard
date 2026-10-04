@@ -5,6 +5,7 @@ COPY backend ./backend
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
+LABEL org.opencontainers.image.source="https://github.com/Vanguard-Enterprise/Cupboard"
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /build/target/release/cupboard /usr/local/bin/cupboard
 USER 65532:65532

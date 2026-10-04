@@ -38,6 +38,40 @@ jobs:
       - run: npm run check
       - name: Build backend image
         run: docker build --file backend/Dockerfile --tag cupboard-api:check-${{ github.run_id }} .
+      - name: Build web image
+        run: docker build --file Dockerfile --tag cupboard-web:check-${{ github.run_id }} .
+      - name: Verify release images and restart persistence
+        run: node scripts/smoke-images.mjs cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }}
       - name: Remove check image
         if: always()
-        run: docker image rm cupboard-api:check-${{ github.run_id }} || true
+        run: docker image rm cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }} || true
+
+  publish:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ghcr.io/vanguard-enterprise/cupboard-api:sha-${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ghcr.io/vanguard-enterprise/cupboard-web:sha-${{ github.sha }}
