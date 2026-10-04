@@ -20,6 +20,7 @@ async fn run() -> Result<(), &'static str> {
     let key = cupboard::servers::SecretKey::parse(
         &env::var("CUPBOARD_SECRET_KEY").map_err(|_| "CUPBOARD_SECRET_KEY is required")?,
     )?;
+    let storage = cupboard::storage::FileStore::from_env()?;
     let pool = cupboard::connect(&url).await?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -34,13 +35,19 @@ async fn run() -> Result<(), &'static str> {
         secure_cookies: env::var("CUPBOARD_INSECURE_COOKIES").as_deref() != Ok("1"),
     };
     let monitor = tokio::spawn(cupboard::servers::monitor(pool.clone(), key.clone()));
-    let result = axum::serve(
-        listener,
-        cupboard::router_with_auth(pool.clone(), config).layer(axum::Extension(key)),
-    )
-    .with_graceful_shutdown(shutdown())
-    .await
-    .map_err(|_| "API listener failed");
+    let mut app = cupboard::router_with_auth(pool.clone(), config).layer(axum::Extension(key));
+    let cleanup = storage.map(|storage| {
+        app = app.clone().layer(axum::Extension(storage.clone()));
+        tokio::spawn(cupboard::cleanup_files(pool.clone(), storage))
+    });
+    let result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown())
+        .await
+        .map_err(|_| "API listener failed");
+    if let Some(cleanup) = cleanup {
+        cleanup.abort();
+        let _ = cleanup.await;
+    }
     monitor.abort();
     let _ = monitor.await;
     pool.close().await;

@@ -129,3 +129,17 @@ state, and any blocker. If the dev server was started, include its clickable
 NetBird URL and whether it is still running. Keep the worktree and database for
 follow-up work. Removal of worktrees, branches, and database volumes is a separate,
 explicitly requested action.
+
+## File storage isolation
+
+The dev launcher starts the `storage` Compose service unless `CUPBOARD_S3_BUCKET`
+selects an external bucket. Its SeaweedFS data volume belongs to the same worktree
+project as PostgreSQL. The S3 port is loopback-only and dynamically assigned;
+`CUPBOARD_S3_PORT` overrides it. Use `npm run dev:stop-storage` to stop storage and
+preserve data. Keep both database and storage volumes after handoff. Never point
+concurrent tasks at the same external bucket and database.
+
+Full checks always start disposable `storage-test` alongside the test database
+and remove both on exit. Containerized runners attach to the test network for S3
+as well as PostgreSQL. See the README for production bucket configuration and the
+file cleanup behavior.

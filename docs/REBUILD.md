@@ -185,3 +185,25 @@ Deployment manifests live in `v-deployments`; old Cupboard overlays are not used
 Both images are pinned to one commit's release tags. The smoke check verifies the
 containerized proxy and persisted account, tenant, server, and health data across
 runtime restarts, including tenant isolation and secret redaction.
+
+CUP-42 adds the organization file library at `/dashboard/files`. PostgreSQL holds
+file metadata and S3 holds private file contents. This is a new external storage
+dependency because file payloads need durable object storage, including the later
+logo-upload slice. The Rust application owns all storage requests and cleanup;
+there is no new application service or worker. The first slice allows organization
+managers to upload, download, and delete files up to 10 MiB. All access checks active
+membership and management permission beside tenant-scoped data access. File
+requests carry the page's organization ID so a stale browser tab cannot upload
+into a newly selected organization.
+
+Local development uses pinned SeaweedFS in its single-process `mini` mode, started
+by the root dev command with a separate persistent volume per worktree. Production
+uses an existing private S3 bucket and environment-provided credentials or workload
+identity. S3 configuration is optional for existing deployments; unconfigured file
+actions return an unavailable response. Local and disposable check storage use the
+same S3 client as production. Interrupted uploads and deletions retain metadata
+for retrying cleanup in the existing Rust runtime.
+
+Folders, versions, sharing links, per-file permissions, large multipart uploads,
+and content scanning are outside this slice. Files download as attachments and are
+never rendered inline. Organization logo integration remains CUP-31.

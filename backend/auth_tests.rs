@@ -1458,3 +1458,320 @@ async fn health_monitor_persists_observations_and_respects_freshness_and_tenant_
         StatusCode::FORBIDDEN
     );
 }
+
+impl Client {
+    async fn file_request(
+        &self,
+        method: &str,
+        path: &str,
+        org: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> axum::response::Response {
+        self.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/app-api/{path}"))
+                    .header("origin", "http://localhost:5173")
+                    .header("x-cupboard-request", "1")
+                    .header("x-cupboard-organization", org)
+                    .header("x-cupboard-filename", name)
+                    .header("content-type", "application/octet-stream")
+                    .header("cookie", &self.cookie)
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloads() {
+    use crate::storage::FileStore;
+    use object_store::{ObjectStoreExt, aws::AmazonS3Builder};
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let endpoint =
+        std::env::var("CUPBOARD_TEST_S3_ENDPOINT").expect("Use npm run check to start isolated S3");
+    let storage = FileStore(std::sync::Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(&endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("cupboard-test")
+            .with_secret_access_key("cupboard-storage-test-only")
+            .build()
+            .unwrap(),
+    ));
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner.signup(&format!("files-{suffix}@example.com")).await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("files-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap();
+    let other_identity = other.request("GET", "auth/me", json!(null)).await.1;
+    let other_org = other_identity["organization"]["id"].as_str().unwrap();
+    let anonymous = Client::new(&app);
+    assert_eq!(
+        anonymous
+            .file_request("GET", "files", org, "", vec![])
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        owner
+            .file_request("POST", "files", other_org, "wrong.txt", vec![1])
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    for name in [
+        "..",
+        "%2Fetc%2Fpasswd",
+        "bad%0D%0Aheader",
+        "%FF",
+        "path%5Cname",
+    ] {
+        assert_eq!(
+            owner
+                .file_request("POST", "files", org, name, vec![1])
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        owner
+            .file_request(
+                "POST",
+                "files",
+                org,
+                "large.bin",
+                vec![0; crate::files::MAX_FILE_SIZE + 1]
+            )
+            .await
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    // Larger than the ordinary JSON request limit; includes binary and active HTML content.
+    let content = [
+        b"<script>alert('download only')</script>".to_vec(),
+        vec![0xff; 70_000],
+    ]
+    .concat();
+    let response = owner
+        .file_request("POST", "files", org, "caf%C3%A9.html", content.clone())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let file: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let id = file["id"].as_str().unwrap();
+    assert_eq!(file["name"], "café.html");
+    assert!(!file.to_string().contains("cupboard-storage-test-only"));
+    assert!(file.get("key").is_none());
+    let path = object_store::path::Path::from(format!("organizations/{org}/files/{id}"));
+    assert_eq!(
+        storage
+            .0
+            .get(&path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    // Cleanup must not remove a published file.
+    crate::files::remove(&pool, &storage, org, id)
+        .await
+        .unwrap();
+    assert!(storage.0.get(&path).await.is_ok());
+    // Rebuild the router to check the persisted session, metadata, and S3 bytes.
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let downloaded = owner
+        .file_request("GET", &format!("files/{id}"), org, "", vec![])
+        .await;
+    assert_eq!(downloaded.status(), StatusCode::OK);
+    assert_eq!(
+        downloaded.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert_eq!(downloaded.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(downloaded.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(
+        downloaded.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("filename*=UTF-8''caf%C3%A9%2Ehtml")
+    );
+    assert_eq!(
+        to_bytes(downloaded.into_body(), 100_000)
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    for (method, route) in [
+        ("GET", format!("files/{id}")),
+        ("POST", format!("files/{id}/delete")),
+    ] {
+        assert_eq!(
+            other
+                .file_request(method, &route, other_org, "", vec![])
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let list = other
+        .file_request("GET", "files", other_org, "", vec![])
+        .await;
+    assert_eq!(&to_bytes(list.into_body(), 4096).await.unwrap()[..], b"[]");
+    // An active member without organization management cannot read or mutate files.
+    let account = other_identity["user"]["id"].as_str().unwrap();
+    let member = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_members(organization_id,id,account_id,name,email,status) VALUES($1,$2,$3,'Member',$4,'active')")
+        .bind(org).bind(&member).bind(account).bind(format!("files-other-{suffix}@example.com")).execute(&pool).await.unwrap();
+    assert_eq!(
+        other
+            .request("POST", "auth/organization", json!({"id":org}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    for (method, route) in [
+        ("GET", "files".into()),
+        ("POST", "files".into()),
+        ("GET", format!("files/{id}")),
+        ("POST", format!("files/{id}/delete")),
+    ] {
+        assert_eq!(
+            other
+                .file_request(method, &route, org, "no.txt", vec![1])
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    sqlx::query("INSERT INTO organization_member_roles(organization_id,member_id,role_id) SELECT $1,$2,id FROM organization_roles WHERE organization_id=$1 AND name='Administrator'")
+        .bind(org).bind(&member).execute(&pool).await.unwrap();
+    assert_eq!(
+        other
+            .file_request("GET", "files", org, "", vec![])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    sqlx::query(
+        "UPDATE organization_members SET status='suspended' WHERE organization_id=$1 AND id=$2",
+    )
+    .bind(org)
+    .bind(&member)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        other
+            .file_request("GET", "files", org, "", vec![])
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let response = owner
+        .file_request("POST", &format!("files/{id}/delete"), org, "", vec![])
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(matches!(
+        storage.0.get(&path).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
+    assert_eq!(
+        owner
+            .file_request("GET", &format!("files/{id}"), org, "", vec![])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Wrong provider credentials are redacted and leave a durable cleanup record.
+    let bad = FileStore(std::sync::Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("private-access-key")
+            .with_secret_access_key("private-secret-key")
+            .build()
+            .unwrap(),
+    ));
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(bad.clone()));
+    let failed = owner
+        .file_request("POST", "files", org, "failed.bin", vec![1])
+        .await;
+    assert_eq!(failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let message = to_bytes(failed.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&message).unwrap()["error"],
+        "File storage is unavailable. Try again shortly."
+    );
+    let pending: String = sqlx::query_scalar(
+        "SELECT id FROM organization_files WHERE organization_id=$1 AND NOT ready",
+    )
+    .bind(org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Simulate a crash after S3 accepted bytes but before publication, then reclaim the record.
+    let pending_path =
+        object_store::path::Path::from(format!("organizations/{org}/files/{pending}"));
+    storage.0.put(&pending_path, vec![1].into()).await.unwrap();
+    assert!(
+        crate::files::remove(&pool, &bad, org, &pending)
+            .await
+            .is_err()
+    );
+    let retained: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organization_files WHERE organization_id=$1 AND id=$2 AND NOT ready)").bind(org).bind(&pending).fetch_one(&pool).await.unwrap();
+    assert!(retained);
+    crate::files::remove(&pool, &storage, org, &pending)
+        .await
+        .unwrap();
+    assert!(matches!(
+        storage.0.get(&pending_path).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
+    pool.close().await;
+}

@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "worktree": "node scripts/workflow.mjs worktree",
     "doctor": "node scripts/workflow.mjs doctor",
+    "dev:stop-storage": "node scripts/workflow.mjs stop-storage",
     "dev:stop-db": "node scripts/workflow.mjs stop-db",
     "check:quick": "node scripts/check.mjs --quick",
     "review": "node scripts/workflow.mjs review"

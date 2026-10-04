@@ -6,6 +6,7 @@ const paths = new Set([
   "auth/organization",
   "team",
   "servers",
+  "files",
   "servers/health",
   "organizations",
   "invitations/accept",
@@ -18,7 +19,14 @@ export async function proxyApi(
   request: Request,
   path: string,
 ): Promise<Response> {
-  if (!paths.has(path) && !/^servers\/[0-9a-f-]{36}\/check$/.test(path))
+  const fileUpload = path === "files" && request.method === "POST";
+  const fileDownload =
+    /^files\/[0-9a-f-]{36}$/.test(path) && request.method === "GET";
+  if (
+    !paths.has(path) &&
+    !/^servers\/[0-9a-f-]{36}\/check$/.test(path) &&
+    !/^files\/[0-9a-f-]{36}(?:\/delete)?$/.test(path)
+  )
     return Response.json({ error: "Not found." }, { status: 404 });
   const headers = new Headers();
   const cookie = request.headers
@@ -27,6 +35,10 @@ export async function proxyApi(
     .map((part) => part.trim())
     .find((part) => part.startsWith("cupboard_session="));
   if (cookie) headers.set("cookie", cookie);
+  if (path === "files" || path.startsWith("files/")) {
+    const organization = request.headers.get("x-cupboard-organization");
+    if (organization) headers.set("x-cupboard-organization", organization);
+  }
   let body: Uint8Array | undefined;
   if (request.method !== "GET") {
     const origin = request.headers.get("origin");
@@ -40,7 +52,9 @@ export async function proxyApi(
     if (
       !sameHost ||
       request.headers.get("x-cupboard-request") !== "1" ||
-      !request.headers.get("content-type")?.startsWith("application/json")
+      !(fileUpload
+        ? request.headers.get("content-type") === "application/octet-stream"
+        : request.headers.get("content-type")?.startsWith("application/json"))
     ) {
       return Response.json(
         { error: "This request is not allowed." },
@@ -49,7 +63,14 @@ export async function proxyApi(
     }
     headers.set("origin", origin!);
     headers.set("x-cupboard-request", "1");
-    headers.set("content-type", "application/json");
+    headers.set(
+      "content-type",
+      fileUpload ? "application/octet-stream" : "application/json",
+    );
+    if (fileUpload) {
+      const name = request.headers.get("x-cupboard-filename");
+      if (name) headers.set("x-cupboard-filename", name);
+    }
     const reader = request.body?.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -58,7 +79,7 @@ export async function proxyApi(
         const chunk = await reader.read();
         if (chunk.done) break;
         size += chunk.value.length;
-        if (size > 65536) {
+        if (size > (fileUpload ? 10 * 1024 * 1024 : 65536)) {
           await reader.cancel();
           return Response.json(
             { error: "Request is too large." },
@@ -82,7 +103,9 @@ export async function proxyApi(
       body: body as BodyInit | undefined,
       redirect: "error",
       cache: "no-store",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(
+        fileUpload || fileDownload || path.startsWith("files/") ? 60000 : 15000,
+      ),
     });
     const resultHeaders = new Headers({
       "Content-Type": "application/json",
@@ -92,9 +115,31 @@ export async function proxyApi(
       resultHeaders.append("Set-Cookie", cookie);
     if (upstream.status >= 500)
       return Response.json(
-        { error: "Cupboard is unavailable. Try again shortly." },
+        {
+          error:
+            path.startsWith("files/") && path.endsWith("/delete")
+              ? "File deletion could not be confirmed. Refresh the list; cleanup will retry if deletion was queued."
+              : path === "files" || fileDownload
+                ? "File storage is unavailable. Try again shortly."
+                : "Cupboard is unavailable. Try again shortly.",
+        },
         { status: 503, headers: { "Cache-Control": "no-store" } },
       );
+    if (fileDownload && upstream.ok) {
+      resultHeaders.set("Content-Type", "application/octet-stream");
+      resultHeaders.set("X-Content-Type-Options", "nosniff");
+      resultHeaders.set(
+        "Content-Disposition",
+        upstream.headers.get("content-disposition") ??
+          'attachment; filename="download"',
+      );
+      const length = upstream.headers.get("content-length");
+      if (length) resultHeaders.set("Content-Length", length);
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: resultHeaders,
+      });
+    }
     let result: unknown;
     try {
       result = await upstream.json();

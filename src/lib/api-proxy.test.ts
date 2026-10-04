@@ -155,3 +155,77 @@ it("forwards dashboard health reads without caching or leaking unrelated cookies
     "cupboard_session=opaque",
   );
 });
+
+describe("private file transport", () => {
+  function upload(
+    bytes = new Uint8Array([0, 255, 1]),
+    origin = "http://localhost:5173",
+  ) {
+    return new Request("http://localhost:5173/app-api/files", {
+      method: "POST",
+      headers: {
+        origin,
+        "content-type": "application/octet-stream",
+        "x-cupboard-request": "1",
+        "x-cupboard-filename": "caf%C3%A9.txt",
+        "x-cupboard-organization": "org",
+        authorization: "must-not-forward",
+      },
+      body: bytes,
+    });
+  }
+  it("forwards binary files and tenant context without extra credentials", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      Response.json({ id: "file" }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    expect((await proxyApi(upload(), "files")).status).toBe(200);
+    const options = fetcher.mock.calls[0][1] as RequestInit;
+    expect(new Uint8Array(options.body as ArrayBuffer)).toEqual(
+      new Uint8Array([0, 255, 1]),
+    );
+    const headers = new Headers(options.headers);
+    expect(headers.get("x-cupboard-filename")).toBe("caf%C3%A9.txt");
+    expect(headers.get("x-cupboard-organization")).toBe("org");
+    expect(headers.get("authorization")).toBeNull();
+  });
+  it("rejects cross-origin uploads and files over the byte limit", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    expect(
+      (await proxyApi(upload(undefined, "https://evil.example"), "files"))
+        .status,
+    ).toBe(403);
+    expect(
+      (await proxyApi(upload(new Uint8Array(10 * 1024 * 1024 + 1)), "files"))
+        .status,
+    ).toBe(413);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("streams downloads as private attachments", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new Uint8Array([0, 255, 1]), {
+            headers: {
+              "content-disposition": "attachment; filename=download",
+              "content-length": "3",
+            },
+          }),
+      ),
+    );
+    const path = "files/12345678-1234-1234-1234-123456789012";
+    const result = await proxyApi(
+      new Request(`http://localhost:5173/app-api/${path}`),
+      path,
+    );
+    expect(result.headers.get("content-type")).toBe("application/octet-stream");
+    expect(result.headers.get("cache-control")).toBe("no-store");
+    expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(result.headers.get("content-disposition")).toContain("attachment");
+    expect(new Uint8Array(await result.arrayBuffer())).toEqual(
+      new Uint8Array([0, 255, 1]),
+    );
+  });
+});

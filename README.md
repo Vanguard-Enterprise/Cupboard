@@ -27,7 +27,7 @@ Rust 1.96.0 with rustfmt and Clippy. Then install the web dependencies:
 npm ci
 ```
 
-Start PostgreSQL, the Rust API, and Next.js from the repository root:
+Start PostgreSQL, local S3 storage, the Rust API, and Next.js from the repository root:
 
 ```bash
 npm run dev
@@ -39,7 +39,7 @@ restarts Rust when backend sources, migrations, Cargo files, `build.rs`,
 is needed. The API stops during rebuilding; compile errors stay visible in the
 terminal and saving a fix retries automatically. Both servers listen on all
 network interfaces. The command prints the local web URL and active NetBird URL.
-Ctrl+C stops the watcher, builds, and both application processes. PostgreSQL remains running with its saved development data. Each worktree saves automatically selected web and API ports in
+Ctrl+C stops the watcher, builds, and both application processes. PostgreSQL and S3 storage remain running with their saved development data. Each worktree saves automatically selected web and API ports in
 `.dev-stack/workspace.json`. Set `CUPBOARD_PORT` or
 `CUPBOARD_API_BIND=0.0.0.0:<port>` to choose specific ports. Occupied saved ports
 fail with an actionable error rather than silently changing the browser URL.
@@ -52,7 +52,7 @@ Run all Rust and web checks from the repository root:
 npm run check
 ```
 
-Checks create a separate disposable PostgreSQL container and remove it afterward.
+Checks create separate disposable PostgreSQL and S3 containers and remove them afterward.
 They require Docker, or `CUPBOARD_TEST_DATABASE_URL` pointing to a dedicated test
 database. They never fall back to the development `DATABASE_URL`. Containerized CI runners
 set `CUPBOARD_CHECK_CONTAINER` to their Docker container ID or name so checks can
@@ -339,3 +339,66 @@ and credentials never appear in health responses.
 The poller runs in the existing Rust process and stops with it. PostgreSQL
 advisory locks prevent simultaneous checks of a record across API instances and
 manual requests. There is no health-history store or separate worker.
+
+## File storage
+
+The File store > Shared library page at `/dashboard/files` supports upload,
+search, download, and confirmed deletion. It requires `organization.manage` for
+all operations. Each file belongs to the active organization, and requests from
+an outdated organization tab must refresh before accessing files. The first slice
+accepts files up to 10 MiB, including empty files. Reusing a filename creates a
+separate file; it never overwrites an existing object. Files download as private
+attachments, with browser caching disabled. They are not scanned for malware or
+served as public assets.
+
+`npm run dev` starts SeaweedFS 4.48 alongside PostgreSQL. SeaweedFS uses one
+container in `mini` mode with a worktree-owned persistent `storage` volume. Only
+its S3 port is published, on loopback with an automatically selected port. The
+launcher discovers it and supplies the Rust process with local credentials and
+the pre-created `cupboard` bucket. S3 credentials never reach browser responses.
+Set `CUPBOARD_S3_PORT` to choose a specific local S3 port. Ctrl+C leaves storage
+running and preserves data; `npm run dev:stop-storage` stops this worktree's
+storage container without removing its volume.
+
+To use an existing S3 bucket, set `CUPBOARD_S3_BUCKET`. This skips local storage
+startup. Configure the Rust runtime with these environment variables:
+
+| Variable                                     | Purpose                                                                                  |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `CUPBOARD_S3_BUCKET`                         | Existing private bucket name. Cupboard does not create production buckets.               |
+| `AWS_REGION`                                 | Bucket region, default `us-east-1`.                                                      |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Server-side credentials, or omit to use the client's workload identity credential chain. |
+| `AWS_SESSION_TOKEN`                          | Optional temporary credential token.                                                     |
+| `CUPBOARD_S3_ENDPOINT`                       | Optional S3-compatible service URL. Omit for AWS S3.                                     |
+| `CUPBOARD_S3_ALLOW_HTTP`                     | Set to `1` only for a trusted local HTTP endpoint. HTTPS is the default.                 |
+
+Grant the application `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject` for
+`organizations/*/files/*` inside the bucket. Keep public access blocked. Object
+keys contain generated organization and file IDs; filenames stay in PostgreSQL.
+Credentials and endpoints are configured on Rust, not as `NEXT_PUBLIC_*` values.
+Use a dedicated bucket for each environment and preserve its association with the
+database. Back up both the database and bucket. Configure bucket encryption and
+retention policies for the deployed environment. Bucket versioning can retain
+previous object versions after a delete; storage lifecycle policy owns their
+expiration.
+
+Uploads record their generated key before writing bytes and publish the file
+only after S3 succeeds. Deletions first hide the file, then remove its object and
+metadata. A provider failure leaves a retryable cleanup record. The Rust runtime
+checks every ten minutes for unpublished records older than one hour, locks each
+record, retries object deletion, and removes metadata only after deletion
+succeeds. Failed cleanup records remain for the next pass. Do not delete metadata
+manually before its objects are reclaimed. A failed deletion can disappear from
+the library before physical cleanup finishes.
+
+When storage is unconfigured, the rest of the application remains available;
+file actions report unavailability. Invalid partial S3 configuration fails startup
+without printing provider errors or credentials. Enabling storage in staging
+requires configuring its bucket and credentials separately from this application
+change.
+
+`npm run check` starts disposable PostgreSQL and SeaweedFS containers, tests file
+persistence and tenant isolation against S3, and removes only its test resources.
+Docker is required even with `CUPBOARD_TEST_DATABASE_URL`. Direct Rust test runs
+also need `CUPBOARD_TEST_S3_ENDPOINT` for an isolated SeaweedFS service using the
+`storage-test` configuration. Quick checks do not start either service.

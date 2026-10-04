@@ -32,6 +32,7 @@ email_address = "0.2"
 tokio-tungstenite = "0.30.0"
 futures-util = "0.3.34"
 percent-encoding = "2.3.2"
+object_store = { version = "0.14.2", default-features = false, features = ["aws"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
