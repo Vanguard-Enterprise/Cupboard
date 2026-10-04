@@ -32,6 +32,7 @@ import {
   connectionsPath,
   notificationsDataPath,
   rolesPath,
+  serversPath,
   usersPath,
 } from "@/lib/dashboard-navigation";
 
@@ -115,6 +116,12 @@ export function OrganizationSearch({
                   onSelect={() => navigate("/dashboard")}
                 >
                   Dashboard
+                </CommandItem>
+                <CommandItem
+                  value="Server inventory Rust RCON A2S servers"
+                  onSelect={() => navigate(serversPath)}
+                >
+                  Server inventory
                 </CommandItem>
                 <CommandItem
                   value="Organization settings profile contacts"

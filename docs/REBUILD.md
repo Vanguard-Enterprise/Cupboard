@@ -157,3 +157,9 @@ future scale is not enough reason for another process.
 Code generators may create a starting point, but generated code receives the same
 review and test requirements as handwritten code. If nobody can explain why a
 module exists, remove it.
+
+CUP-5 adds PostgreSQL-backed Rust server inventory and creation through the
+existing authenticated API. Each record belongs to one organization and uses
+server permissions. RCON passwords use AES-256-GCM with an environment-supplied
+key and record-bound authenticated data. Local development saves its own key
+next to the worktree configuration. Connection verification remains CUP-6.

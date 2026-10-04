@@ -214,3 +214,19 @@ not enforce approvals.
 
 The sidebar remembers its expanded state in the `sidebar_state` cookie for
 seven days, including across refreshes and visits to the login page.
+
+## Rust server inventory
+
+`/dashboard/servers` lists the active organization's saved Rust servers. Members
+with `servers.view` can read connection addresses; `servers.manage` permits
+adding a server. RCON passwords never appear in API responses. Saving records
+does not verify RCON or A2S connectivity.
+
+Production requires `CUPBOARD_SECRET_KEY`, a cryptographically random 32-byte key
+encoded as 64 hexadecimal characters. RCON passwords use AES-256-GCM with a
+random nonce and authenticated organization/server identifiers. Keep the key
+in your deployment secret store and preserve it across restarts and database
+restores. Back up the key separately from the database. Key rotation requires
+re-encrypting stored secrets before replacing the key. `npm run dev` creates a
+worktree-specific key in ignored `.dev-stack/secret-key` with owner-only access.
+Do not delete this file while retaining that worktree's database.

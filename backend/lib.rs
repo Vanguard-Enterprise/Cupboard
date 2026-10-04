@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod servers;
 mod team;
 use axum::{Router, extract::State, http::StatusCode, routing::get};
 use sqlx::{ConnectOptions, PgPool, postgres::PgConnectOptions, postgres::PgPoolOptions};

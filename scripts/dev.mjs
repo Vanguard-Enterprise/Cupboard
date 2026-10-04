@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import {
   acquireDevLock,
   prepareWorkspace,
@@ -138,8 +140,20 @@ async function start() {
         );
     }
     if (stopping) return;
+    let secretKey = process.env.CUPBOARD_SECRET_KEY;
+    if (!secretKey) {
+      const keyPath = ".dev-stack/secret-key";
+      try {
+        secretKey = readFileSync(keyPath, "utf8").trim();
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        secretKey = randomBytes(32).toString("hex");
+        writeFileSync(keyPath, secretKey, { mode: 0o600, flag: "wx" });
+      }
+    }
     const env = {
       ...process.env,
+      CUPBOARD_SECRET_KEY: secretKey,
       DATABASE_URL:
         process.env.DATABASE_URL ||
         `postgres://cupboard:cupboard-local-only@127.0.0.1:${localDatabasePort}/cupboard`,

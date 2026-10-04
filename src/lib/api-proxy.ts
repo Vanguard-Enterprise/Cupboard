@@ -5,6 +5,7 @@ const paths = new Set([
   "auth/me",
   "auth/organization",
   "team",
+  "servers",
   "organizations",
   "invitations/accept",
 ]);
