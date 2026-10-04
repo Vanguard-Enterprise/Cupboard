@@ -11,7 +11,7 @@ use tokio_tungstenite::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    Connected,
+    Connected(u32),
     AuthenticationFailed,
     Unreachable,
     Timeout,
@@ -21,7 +21,7 @@ pub(crate) enum Outcome {
 impl Outcome {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Connected => "connected",
+            Self::Connected(_) => "connected",
             Self::AuthenticationFailed => "authentication_failed",
             Self::Unreachable => "unreachable",
             Self::Timeout => "timeout",
@@ -101,7 +101,7 @@ async fn rcon_addresses(addresses: Vec<SocketAddr>, url: &str) -> Outcome {
     }
     let mut result = Outcome::Unreachable;
     while let Some(outcome) = attempts.next().await {
-        if outcome == Outcome::Connected {
+        if matches!(outcome, Outcome::Connected(_)) {
             return outcome;
         }
         if outcome != Outcome::Unreachable {
@@ -150,13 +150,12 @@ async fn rcon_address(address: SocketAddr, url: &str) -> Outcome {
                     .get("Message")
                     .and_then(|v| v.as_str())
                     .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-                return if info.is_some_and(|v| {
-                    v.get("Hostname").is_some_and(|h| h.is_string())
-                        && v.get("Players").and_then(|p| p.as_u64()).is_some()
+                return match info.and_then(|v| {
+                    v.get("Hostname").filter(|h| h.is_string())?;
+                    u32::try_from(v.get("Players")?.as_u64()?).ok()
                 }) {
-                    Outcome::Connected
-                } else {
-                    Outcome::ProtocolError
+                    Some(players) => Outcome::Connected(players),
+                    None => Outcome::ProtocolError,
                 };
             }
             Some(Ok(Message::Ping(_))) => {
@@ -190,7 +189,7 @@ async fn a2s_inner(host: &str, port: i32) -> Outcome {
     }
     let mut result = Outcome::Unreachable;
     while let Some(outcome) = attempts.next().await {
-        if outcome == Outcome::Connected {
+        if matches!(outcome, Outcome::Connected(_)) {
             return outcome;
         }
         if outcome != Outcome::Unreachable {
@@ -228,10 +227,9 @@ async fn a2s_address(address: SocketAddr) -> Outcome {
             request.extend_from_slice(&packet[5..]);
             continue;
         }
-        return if valid_info(packet) {
-            Outcome::Connected
-        } else {
-            Outcome::ProtocolError
+        return match info_players(packet) {
+            Some(players) => Outcome::Connected(players),
+            None => Outcome::ProtocolError,
         };
     }
     Outcome::ProtocolError
@@ -240,22 +238,20 @@ async fn a2s_address(address: SocketAddr) -> Outcome {
 // Validate all required Source INFO fields before reporting success. Optional
 // EDF fields are bounded by the datagram. Split/compressed responses are not
 // accepted as proof of connectivity in this first Rust INFO probe.
-fn valid_info(packet: &[u8]) -> bool {
+fn info_players(packet: &[u8]) -> Option<u32> {
     if !packet.starts_with(b"\xff\xff\xff\xffI") || packet.len() < 6 {
-        return false;
+        return None;
     }
     let mut rest = &packet[6..];
     for _ in 0..4 {
-        let Some(end) = rest.iter().position(|b| *b == 0) else {
-            return false;
-        };
+        let end = rest.iter().position(|b| *b == 0)?;
         rest = &rest[end + 1..];
     }
     // App ID, players, max players, bots, server type, environment, visibility, VAC.
     if rest.len() < 9 {
-        return false;
+        return None;
     }
-    rest[9..].contains(&0)
+    rest[9..].contains(&0).then_some(u32::from(rest[2]))
 }
 
 #[cfg(test)]
@@ -268,6 +264,11 @@ pub(crate) mod tests {
         b"\xff\xff\xff\xffI\x11Test Rust\0Procedural Map\0rust\0Rust\0\x60\x09\x00\x64\x00dl\x00\x01\x32\0".to_vec()
     }
     pub(crate) async fn success_servers() -> (u16, u16, tokio::task::JoinHandle<()>) {
+        success_servers_with_players(0).await
+    }
+    pub(crate) async fn success_servers_with_players(
+        players: u32,
+    ) -> (u16, u16, tokio::task::JoinHandle<()>) {
         let tcp = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let ports = (
@@ -289,7 +290,7 @@ pub(crate) mod tests {
                     ))
                     .await
                     .unwrap();
-                    ws.send(Message::Text(serde_json::json!({"Identifier":value["Identifier"],"Message":"{\"Hostname\":\"Test Rust\",\"Players\":0}"}).to_string().into())).await.unwrap();
+                    ws.send(Message::Text(serde_json::json!({"Identifier":value["Identifier"],"Message":serde_json::json!({"Hostname":"Test Rust","Players":players}).to_string()}).to_string().into())).await.unwrap();
                 },
                 async {
                     let mut buffer = [0; 1024];
@@ -313,8 +314,8 @@ pub(crate) mod tests {
             rcon("127.0.0.1", rcon_port.into(), "a password"),
             a2s("127.0.0.1", a2s_port.into())
         );
-        assert_eq!(r, Outcome::Connected);
-        assert_eq!(a, Outcome::Connected);
+        assert_eq!(r, Outcome::Connected(0));
+        assert_eq!(a, Outcome::Connected(0));
         task.await.unwrap();
     }
     #[tokio::test]
@@ -357,7 +358,7 @@ pub(crate) mod tests {
                 )
                 .await
                 .unwrap(),
-                Outcome::Connected
+                Outcome::Connected(0)
             );
             healthy_task.await.unwrap();
             if silent {
@@ -396,9 +397,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn rejects_wrong_protocol_and_truncated_a2s_responses() {
         let packet = info_packet();
-        assert!(valid_info(&packet));
+        assert_eq!(info_players(&packet), Some(0));
         for len in 0..packet.len() {
-            assert!(!valid_info(&packet[..len]));
+            assert_eq!(info_players(&packet[..len]), None);
         }
         let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let port = udp.local_addr().unwrap().port();

@@ -167,3 +167,11 @@ WebRCON and A2S probes run concurrently with five-second deadlines, and PostgreS
 stores separate protocol outcomes and their check time. The inventory exposes
 the action to server managers and saved results to server viewers. This does not
 add polling, health history, a worker, or a console command interface.
+
+CUP-8 adds the server health dashboard and retains player counts from the existing
+RCON/A2S probes. The Rust API process polls due records in bounded batches,
+sharing PostgreSQL advisory locks with manual checks. No new runtime is needed.
+The browser reads saved, tenant-authorized observations and marks old or failed
+refreshes stale. PostgreSQL retains the latest protocol outcomes and last useful
+player count with its source and observation time; historical telemetry remains
+outside this slice.

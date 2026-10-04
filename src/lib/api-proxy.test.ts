@@ -135,3 +135,23 @@ it("forwards only bounded server-check paths through the authenticated boundary"
   ).toBe(403);
   expect(fetcher.mock.calls).toHaveLength(1);
 });
+
+it("forwards dashboard health reads without caching or leaking unrelated cookies", async () => {
+  const fetcher = vi.fn(async () =>
+    Response.json({ organizationId: "org", servers: [] }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const response = await proxyApi(
+    new Request("http://localhost:5173/app-api/servers/health", {
+      headers: { cookie: "cupboard_session=opaque; unrelated=private" },
+    }),
+    "servers/health",
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const call = vi.mocked(fetch).mock.calls[0];
+  expect(call[0]).toBe("http://127.0.0.1:8080/app-api/servers/health");
+  expect((call[1]?.headers as Headers).get("cookie")).toBe(
+    "cupboard_session=opaque",
+  );
+});

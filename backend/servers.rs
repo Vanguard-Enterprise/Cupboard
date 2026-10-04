@@ -86,6 +86,9 @@ struct Server {
     checked_at: Option<i64>,
     rcon_status: Option<String>,
     a2s_status: Option<String>,
+    players: Option<i64>,
+    players_at: Option<i64>,
+    players_source: Option<String>,
 }
 #[derive(Debug)]
 struct Validation(BTreeMap<&'static str, &'static str>);
@@ -157,14 +160,32 @@ pub fn routes() -> Router<PgPool> {
     Router::new()
         .route("/app-api/servers", get(list).post(create))
         .route("/app-api/servers/{id}/check", post(check))
+        .route("/app-api/servers/health", get(health))
 }
 async fn list(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
 ) -> ApiResult<Json<Vec<Server>>> {
-    let user = account(&auth)?;
-    let org = team::organization_id(&session).await?;
+    Ok(Json(read_servers(&pool, &auth, &session).await?.1))
+}
+async fn health(
+    State(pool): State<PgPool>,
+    auth: AuthSession,
+    session: Session,
+) -> ApiResult<Json<serde_json::Value>> {
+    let (org, servers) = read_servers(&pool, &auth, &session).await?;
+    Ok(Json(
+        serde_json::json!({"organizationId": org, "servers": servers}),
+    ))
+}
+async fn read_servers(
+    pool: &PgPool,
+    auth: &AuthSession,
+    session: &Session,
+) -> ApiResult<(String, Vec<Server>)> {
+    let user = account(auth)?;
+    let org = team::organization_id(session).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR SHARE")
         .bind(&org)
@@ -174,9 +195,9 @@ async fn list(
     if !ctx.permissions.iter().any(|p| p == "servers.view") {
         return Err(forbidden());
     }
-    let servers = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status FROM servers WHERE organization_id=$1 ORDER BY created_at,id").bind(&ctx.organization_id).fetch_all(&mut *tx).await?;
+    let servers = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source FROM servers WHERE organization_id=$1 ORDER BY created_at,id").bind(&ctx.organization_id).fetch_all(&mut *tx).await?;
     tx.commit().await?;
-    Ok(Json(servers))
+    Ok((ctx.organization_id, servers))
 }
 async fn create(
     State(pool): State<PgPool>,
@@ -213,7 +234,7 @@ async fn create(
     let encrypted = key
         .encrypt(&input.rcon_password, &ctx.organization_id, &id)
         .map_err(IntoResponse::into_response)?;
-    let result=sqlx::query_as("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status")
+    let result=sqlx::query_as("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source")
         .bind(id).bind(&ctx.organization_id).bind(input.name).bind(input.rcon_host).bind(input.rcon_port).bind(encrypted).bind(input.a2s_host).bind(input.a2s_port).fetch_one(&mut *tx).await.map_err(|_|internal().into_response())?;
     tx.commit().await.map_err(|_| internal().into_response())?;
     Ok(Json(result))
@@ -244,7 +265,7 @@ async fn check(
     if !ctx.permissions.iter().any(|p| p == "servers.manage") {
         return Err(forbidden());
     }
-    let server: Server = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status FROM servers WHERE organization_id=$1 AND id=$2")
+    let server: Server = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source FROM servers WHERE organization_id=$1 AND id=$2")
         .bind(&ctx.organization_id).bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::NOT_FOUND, "Server not found."))?;
     let locked: bool =
         sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 6))")
@@ -257,15 +278,26 @@ async fn check(
             "A connection check is already running for this server.",
         ));
     }
+    let result = probe(&mut tx, &key, &ctx.organization_id, &server).await?;
+    tx.commit().await?;
+    Ok(Json(result))
+}
+
+async fn probe(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    key: &SecretKey,
+    org: &str,
+    server: &Server,
+) -> ApiResult<Server> {
     let encrypted: Vec<u8> = sqlx::query_scalar(
         "SELECT rcon_password_encrypted FROM servers WHERE organization_id=$1 AND id=$2",
     )
-    .bind(&ctx.organization_id)
-    .bind(&id)
-    .fetch_one(&mut *tx)
+    .bind(org)
+    .bind(&server.id)
+    .fetch_one(&mut **tx)
     .await?;
     let password = key
-        .decrypt(&encrypted, &ctx.organization_id, &id)
+        .decrypt(&encrypted, org, &server.id)
         .ok()
         .and_then(|p| String::from_utf8(p).ok());
     let (rcon, a2s) = tokio::join!(
@@ -279,11 +311,67 @@ async fn check(
         },
         crate::connectivity::a2s(&server.a2s_host, server.a2s_port)
     );
-    let result = sqlx::query_as("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint,rcon_status=$3,a2s_status=$4 WHERE organization_id=$1 AND id=$2 RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status")
-        .bind(&ctx.organization_id).bind(&id).bind(rcon.as_str()).bind(a2s.as_str()).fetch_one(&mut *tx).await?;
-    tx.commit().await?;
-    Ok(Json(result))
+    let observation = match (rcon, a2s) {
+        (crate::connectivity::Outcome::Connected(n), _) => Some((i64::from(n), "rcon")),
+        (_, crate::connectivity::Outcome::Connected(n)) => Some((i64::from(n), "a2s")),
+        _ => None,
+    };
+    let result = sqlx::query_as("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint,rcon_status=$3,a2s_status=$4,players=COALESCE($5,players),players_at=CASE WHEN $5::bigint IS NOT NULL THEN (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint ELSE players_at END,players_source=COALESCE($6,players_source) WHERE organization_id=$1 AND id=$2 RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source")
+        .bind(org).bind(&server.id).bind(rcon.as_str()).bind(a2s.as_str()).bind(observation.map(|v| v.0)).bind(observation.map(|v| v.1)).fetch_one(&mut **tx).await?;
+    Ok(result)
 }
+/// Poll within the API runtime. The database lock and freshness check prevent
+/// duplicate probes across replicas and operator-triggered checks.
+pub async fn monitor(pool: PgPool, key: SecretKey) {
+    loop {
+        if let Err(_error) = poll_due(&pool, &key).await {
+            eprintln!("Server health refresh failed; retrying shortly.");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+}
+async fn poll_due(pool: &PgPool, key: &SecretKey) -> ApiResult<()> {
+    let due: Vec<(String, String)> = sqlx::query_as("SELECT organization_id,id FROM servers WHERE checked_at IS NULL OR checked_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-30000 ORDER BY checked_at NULLS FIRST,id LIMIT 16")
+        .fetch_all(pool).await?;
+    futures_util::stream::StreamExt::for_each_concurrent(
+        futures_util::stream::iter(due),
+        2,
+        |(org, id)| async move {
+            if poll_server(pool, key, &org, &id).await.is_err() {
+                eprintln!("Server health observation could not be saved.");
+            }
+        },
+    )
+    .await;
+    Ok(())
+}
+pub(crate) async fn poll_server(
+    pool: &PgPool,
+    key: &SecretKey,
+    org: &str,
+    id: &str,
+) -> ApiResult<()> {
+    let Ok(_permit) = CHECKS.try_acquire() else {
+        return Ok(());
+    };
+    let mut tx = pool.begin().await?;
+    let locked: bool =
+        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 6))")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if !locked {
+        return Ok(());
+    }
+    let server: Option<Server> = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source FROM servers WHERE organization_id=$1 AND id=$2 AND (checked_at IS NULL OR checked_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-30000)")
+        .bind(org).bind(id).fetch_optional(&mut *tx).await?;
+    if let Some(server) = server {
+        probe(&mut tx, key, org, &server).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

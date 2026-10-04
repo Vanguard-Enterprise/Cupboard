@@ -60,7 +60,7 @@ describe("Workspace", () => {
       } as unknown as Awaited<ReturnType<typeof cookies>>);
       const html = renderToStaticMarkup(
         <TooltipProvider>
-          {await Layout({ children: <Page /> })}
+          {await Layout({ children: await Page() })}
         </TooltipProvider>,
       );
       expect(html).toContain("Game servers");
@@ -74,7 +74,7 @@ describe("Workspace", () => {
       expect(html).not.toContain("?section=");
       expect(html).not.toContain("Planned features");
       expect(html).not.toContain("proposed workspace");
-      expect(Page()).toBeNull();
+      expect(html).toContain("Server health");
     },
   );
 });
