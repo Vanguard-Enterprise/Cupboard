@@ -85,6 +85,118 @@ impl Client {
     }
 }
 #[tokio::test]
+async fn switching_organizations_reloads_permissions_and_rejects_revoked_membership() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(pool.clone(), AuthConfig::default());
+    let mut owner = Client::new(&app);
+    let mut member = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    let member_email = format!("switch-member-{suffix}@example.com");
+    owner
+        .signup(&format!("switch-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    let shared = owner.request("GET", "auth/me", json!(null)).await.1["organization"]["id"].clone();
+    let viewer = owner.create_role("Viewer", &["servers.view"]).await;
+    member.signup(&member_email).await;
+    member.create_organization().await;
+    let identity = member.request("GET", "auth/me", json!(null)).await.1;
+    let personal = identity["organization"]["id"].clone();
+    let account_id = identity["user"]["id"].as_str().unwrap();
+    let personal_team = member.team().await;
+
+    // The data-access boundary rejects a nonmember without relying on a route check.
+    let mut conn = pool.acquire().await.unwrap();
+    let denied = crate::team::context_on(&mut conn, account_id, shared.as_str().unwrap()).await;
+    assert_eq!(denied.err().unwrap().0, StatusCode::FORBIDDEN);
+    drop(conn);
+
+    let (status, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Member","email":member_email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let identity = member.request("GET", "auth/me", json!(null)).await.1;
+    assert_eq!(identity["organization"]["id"], shared);
+    assert_eq!(identity["organizations"].as_array().unwrap().len(), 2);
+    assert_eq!(identity["permissions"], json!(["servers.view"]));
+    let membership_id = identity["membershipId"].clone();
+    assert_eq!(
+        member.request("GET", "team", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    for _ in 0..2 {
+        assert_eq!(
+            member
+                .request("POST", "auth/organization", json!({"id":personal}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(member.team().await, personal_team);
+        assert_eq!(
+            member
+                .request("POST", "auth/organization", json!({"id":shared}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            member.request("GET", "auth/me", json!(null)).await.1["permissions"],
+            json!(["servers.view"])
+        );
+        assert_eq!(
+            member.request("GET", "team", json!(null)).await.0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(member.request("POST", "team", json!({"revision":personal_team["revision"],"change":{"kind":"deleteRole","id":viewer["id"]}})).await.0, StatusCode::FORBIDDEN);
+    }
+
+    assert_eq!(
+        owner
+            .change(json!({"kind":"removeUser","id":membership_id}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    let denied = crate::team::context_on(&mut conn, account_id, shared.as_str().unwrap()).await;
+    assert_eq!(denied.err().unwrap().0, StatusCode::FORBIDDEN);
+    drop(conn);
+    assert_eq!(
+        member.request("GET", "servers", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        member
+            .request("POST", "auth/organization", json!({"id":shared}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        member
+            .request("POST", "auth/organization", json!({"id":personal}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(member.team().await, personal_team);
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn accounts_sessions_membership_roles_and_tenant_isolation() {
     let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
         .await
