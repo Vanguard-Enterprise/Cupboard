@@ -1217,3 +1217,111 @@ async fn server_inventory_permissions_isolation_and_secret_storage() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn connection_checks_are_authorized_scoped_persisted_and_redacted() {
+    let url = std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap();
+    let pool = connect(&url).await.unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::servers::SecretKey::parse(&"cd".repeat(32)).unwrap(),
+    ));
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner
+        .signup(&format!("check-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("check-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let (rcon_port, a2s_port, task) = crate::connectivity::tests::success_servers().await;
+    let (status, created) = owner.request("POST", "servers", json!({"name":"Connectivity test","rconHost":"127.0.0.1","rconPort":rcon_port,"rconPassword":"check-secret","a2sHost":"127.0.0.1","a2sPort":a2s_port})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(created["checkedAt"].is_null());
+    let id = created["id"].as_str().unwrap();
+    let path = format!("servers/{id}/check");
+    assert_eq!(
+        anonymous.request("POST", &path, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        other.request("POST", &path, json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // An in-progress check must not be duplicated by a second caller/process.
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 6))")
+        .bind(id)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert_eq!(
+        owner.request("POST", &path, json!({})).await.0,
+        StatusCode::CONFLICT
+    );
+    lock.rollback().await.unwrap();
+    let (status, checked) = owner.request("POST", &path, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    assert_eq!(checked["rconStatus"], "connected");
+    assert_eq!(checked["a2sStatus"], "connected");
+    assert!(checked["checkedAt"].as_i64().unwrap() > 0);
+    assert!(!checked.to_string().contains("check-secret"));
+    task.await.unwrap();
+    let reconnected = connect(&url).await.unwrap();
+    let mut restarted = Client::new(&router_with_auth(
+        reconnected.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    ));
+    restarted.cookie = owner.cookie.clone();
+    assert_eq!(
+        restarted.request("GET", "servers", json!(null)).await.1,
+        json!([checked])
+    );
+    reconnected.close().await;
+    // Corrupt ciphertext must become a safe saved failure, never a panic.
+    sqlx::query(
+        "UPDATE servers SET rcon_password_encrypted=$2,a2s_host='169.254.169.254' WHERE id=$1",
+    )
+    .bind(id)
+    .bind(vec![0u8; 32])
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, failed) = owner.request("POST", &path, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(failed["rconStatus"], "invalid_configuration");
+    assert_eq!(failed["a2sStatus"], "invalid_configuration");
+    assert!(!failed.to_string().contains("check-secret"));
+    assert_eq!(
+        owner.request("GET", "servers", json!(null)).await.1,
+        json!([failed])
+    );
+    let org: String = sqlx::query_scalar("SELECT organization_id FROM servers WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE organizations SET owner_account_id=(SELECT account_id FROM organization_members WHERE organization_id<>$1 LIMIT 1) WHERE id=$1").bind(&org).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['servers.view']::text[] WHERE organization_id=$1").bind(&org).execute(&pool).await.unwrap();
+    assert_eq!(
+        owner.request("POST", &path, json!({})).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        owner.request("GET", "servers", json!(null)).await.0,
+        StatusCode::OK
+    );
+}

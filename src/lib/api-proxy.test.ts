@@ -115,3 +115,23 @@ describe("same-origin API boundary", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+it("forwards only bounded server-check paths through the authenticated boundary", async () => {
+  const fetcher = vi.fn(async () => Response.json({ rconStatus: "connected" }));
+  vi.stubGlobal("fetch", fetcher);
+  const path = "servers/12345678-1234-1234-1234-123456789abc/check";
+  expect((await proxyApi(request(), path)).status).toBe(200);
+  expect(fetcher.mock.calls).toHaveLength(1);
+  for (const invalid of [
+    "servers/../auth/me/check",
+    `${path}?secret=value`,
+    "servers/arbitrary/check",
+    "servers/12345678-1234-1234-1234-123456789abc/delete",
+  ]) {
+    expect((await proxyApi(request(), invalid)).status).toBe(404);
+  }
+  expect(
+    (await proxyApi(request("https://foreign.example"), path)).status,
+  ).toBe(403);
+  expect(fetcher.mock.calls).toHaveLength(1);
+});

@@ -162,4 +162,8 @@ CUP-5 adds PostgreSQL-backed Rust server inventory and creation through the
 existing authenticated API. Each record belongs to one organization and uses
 server permissions. RCON passwords use AES-256-GCM with an environment-supplied
 key and record-bound authenticated data. Local development saves its own key
-next to the worktree configuration. Connection verification remains CUP-6.
+next to the worktree configuration. CUP-6 adds an operator-triggered connection check in the existing Rust runtime.
+WebRCON and A2S probes run concurrently with five-second deadlines, and PostgreSQL
+stores separate protocol outcomes and their check time. The inventory exposes
+the action to server managers and saved results to server viewers. This does not
+add polling, health history, a worker, or a console command interface.

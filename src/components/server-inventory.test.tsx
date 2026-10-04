@@ -85,6 +85,7 @@ it("hides mutation controls from viewers", async () => {
   );
   await screen.findByText("Main Rust");
   expect(screen.queryByRole("button", { name: "Add server" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Test connection/ })).toBeNull();
 });
 it("does not load inventory without viewing permission", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
@@ -183,4 +184,80 @@ it("clears rejected edits and validation errors when Cancel closes the form", as
   expect(
     (screen.getByLabelText("RCON password") as HTMLInputElement).value,
   ).toBe("");
+});
+
+it("tests connections by keyboard, disables duplicate checks, and displays saved partial results", async () => {
+  let complete!: (response: Response) => void;
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([server]))
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+  const user = userEvent.setup();
+  render(<ServerInventory identity={identity} />);
+  const button = await screen.findByRole("button", {
+    name: "Test connection for Main Rust",
+  });
+  expect(screen.getByText("Not checked yet.")).not.toBeNull();
+  button.focus();
+  await user.keyboard("{Enter}");
+  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(
+    screen.getByText("Testing RCON and A2S connections..."),
+  ).not.toBeNull();
+  await user.click(button);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls[1][0]).toBe("/app-api/servers/server/check");
+  expect(fetch.mock.calls[1][1]?.method).toBe("POST");
+  expect(fetch.mock.calls[1][1]?.body).toBe("{}");
+  complete(
+    Response.json({
+      ...server,
+      checkedAt: Date.parse("2026-10-04T12:00:00Z"),
+      rconStatus: "connected",
+      a2sStatus: "timeout",
+    }),
+  );
+  expect(await screen.findByText("Connected")).not.toBeNull();
+  expect(
+    screen.getByText(/Timed out. Check that the server is running/),
+  ).not.toBeNull();
+  expect((button as HTMLButtonElement).disabled).toBe(false);
+});
+
+it("keeps the last saved result after an unsuccessful check request and allows retry", async () => {
+  const saved = {
+    ...server,
+    checkedAt: Date.parse("2026-10-04T12:00:00Z"),
+    rconStatus: "connected",
+    a2sStatus: "connected",
+  };
+  vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([saved]))
+    .mockResolvedValueOnce(
+      Response.json({ error: "Connection checks are busy." }, { status: 429 }),
+    )
+    .mockResolvedValueOnce(
+      Response.json({ ...saved, rconStatus: "authentication_failed" }),
+    );
+  const user = userEvent.setup();
+  render(<ServerInventory identity={identity} />);
+  await user.click(
+    await screen.findByRole("button", {
+      name: "Test connection for Main Rust",
+    }),
+  );
+  expect(
+    await screen.findByText(/The previous result is shown/),
+  ).not.toBeNull();
+  expect(screen.getAllByText("Connected")).toHaveLength(2);
+  await user.click(
+    screen.getByRole("button", { name: "Test connection for Main Rust" }),
+  );
+  expect(await screen.findByText(/Authentication failed/)).not.toBeNull();
+  expect(screen.queryByText(/The previous result is shown/)).toBeNull();
 });

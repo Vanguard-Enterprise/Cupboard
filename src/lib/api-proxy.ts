@@ -17,7 +17,7 @@ export async function proxyApi(
   request: Request,
   path: string,
 ): Promise<Response> {
-  if (!paths.has(path))
+  if (!paths.has(path) && !/^servers\/[0-9a-f-]{36}\/check$/.test(path))
     return Response.json({ error: "Not found." }, { status: 404 });
   const headers = new Headers();
   const cookie = request.headers

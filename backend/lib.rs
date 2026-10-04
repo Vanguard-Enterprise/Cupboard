@@ -1,4 +1,5 @@
 pub mod auth;
+mod connectivity;
 pub mod servers;
 mod team;
 use axum::{Router, extract::State, http::StatusCode, routing::get};
