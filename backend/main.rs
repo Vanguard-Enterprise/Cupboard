@@ -33,6 +33,7 @@ async fn run() -> Result<(), &'static str> {
             .collect(),
         secure_cookies: env::var("CUPBOARD_INSECURE_COOKIES").as_deref() != Ok("1"),
     };
+    let monitor = tokio::spawn(cupboard::servers::monitor(pool.clone(), key.clone()));
     let result = axum::serve(
         listener,
         cupboard::router_with_auth(pool.clone(), config).layer(axum::Extension(key)),
@@ -40,6 +41,8 @@ async fn run() -> Result<(), &'static str> {
     .with_graceful_shutdown(shutdown())
     .await
     .map_err(|_| "API listener failed");
+    monitor.abort();
+    let _ = monitor.await;
     pool.close().await;
     result
 }

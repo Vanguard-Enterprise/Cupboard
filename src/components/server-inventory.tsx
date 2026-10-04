@@ -217,8 +217,8 @@ export function ServerInventory({ identity }: { identity: Identity }) {
               <DialogHeader>
                 <DialogTitle>Add server</DialogTitle>
                 <DialogDescription>
-                  Save RCON and A2S details for this organization. Saving does
-                  not connect to or change the server.
+                  Save RCON and A2S details for this organization. Read-only
+                  health checks begin automatically after saving.
                 </DialogDescription>
               </DialogHeader>
               <form

@@ -1276,6 +1276,24 @@ async fn connection_checks_are_authorized_scoped_persisted_and_redacted() {
     assert_eq!(checked["a2sStatus"], "connected");
     assert!(checked["checkedAt"].as_i64().unwrap() > 0);
     assert!(!checked.to_string().contains("check-secret"));
+    assert_eq!(checked["players"], 0);
+    assert_eq!(checked["playersSource"], "rcon");
+    assert!(checked["playersAt"].as_i64().unwrap() > 0);
+    let (status, health) = owner.request("GET", "servers/health", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(health["servers"], json!([checked]));
+    assert!(!health.to_string().contains("check-secret"));
+    assert_eq!(
+        other.request("GET", "servers/health", json!(null)).await.1["servers"],
+        json!([])
+    );
+    assert_eq!(
+        anonymous
+            .request("GET", "servers/health", json!(null))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
     task.await.unwrap();
     let reconnected = connect(&url).await.unwrap();
     let mut restarted = Client::new(&router_with_auth(
@@ -1305,6 +1323,8 @@ async fn connection_checks_are_authorized_scoped_persisted_and_redacted() {
     assert_eq!(failed["rconStatus"], "invalid_configuration");
     assert_eq!(failed["a2sStatus"], "invalid_configuration");
     assert!(!failed.to_string().contains("check-secret"));
+    assert_eq!(failed["players"], checked["players"]);
+    assert_eq!(failed["playersAt"], checked["playersAt"]);
     assert_eq!(
         owner.request("GET", "servers", json!(null)).await.1,
         json!([failed])
@@ -1323,5 +1343,118 @@ async fn connection_checks_are_authorized_scoped_persisted_and_redacted() {
     assert_eq!(
         owner.request("GET", "servers", json!(null)).await.0,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn health_monitor_persists_observations_and_respects_freshness_and_tenant_scope() {
+    let url = std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap();
+    let pool = connect(&url).await.unwrap();
+    let key = crate::servers::SecretKey::parse(&"ef".repeat(32)).unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!("health-{}@example.com", uuid::Uuid::new_v4()))
+        .await;
+    owner.create_organization().await;
+    let (rp, ap, task) = crate::connectivity::tests::success_servers_with_players(321).await;
+    let (_, server) = owner.request("POST", "servers", json!({"name":"Monitored Rust","rconHost":"127.0.0.1","rconPort":rp,"rconPassword":"monitor-secret","a2sHost":"127.0.0.1","a2sPort":ap})).await;
+    let id = server["id"].as_str().unwrap();
+    let org: String = sqlx::query_scalar("SELECT organization_id FROM servers WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    crate::servers::poll_server(&pool, &key, "wrong-tenant", id)
+        .await
+        .unwrap();
+    assert!(
+        owner.request("GET", "servers/health", json!(null)).await.1["servers"][0]["checkedAt"]
+            .is_null()
+    );
+    crate::servers::poll_server(&pool, &key, &org, id)
+        .await
+        .unwrap();
+    task.await.unwrap();
+    let first = owner.request("GET", "servers/health", json!(null)).await.1;
+    assert_eq!(first["servers"][0]["players"], 321);
+    assert_eq!(first["servers"][0]["rconStatus"], "connected");
+    crate::servers::poll_server(&pool, &key, &org, id)
+        .await
+        .unwrap();
+    assert_eq!(
+        first,
+        owner.request("GET", "servers/health", json!(null)).await.1
+    );
+    // A failed RCON connection falls back to the responding A2S count.
+    let udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let responder = tokio::spawn(async move {
+        let (_, peer) = udp.recv_from(&mut [0; 1024]).await.unwrap();
+        let packet =
+            b"\xff\xff\xff\xffI\x11Rust\0Map\0rust\0Rust\0\x60\x09\x4d\x64\x00dl\x00\x01version\0";
+        udp.send_to(packet, peer).await.unwrap();
+    });
+    sqlx::query(
+        "UPDATE servers SET checked_at=1,rcon_host='169.254.169.254',a2s_port=$2 WHERE id=$1",
+    )
+    .bind(id)
+    .bind(i32::from(port))
+    .execute(&pool)
+    .await
+    .unwrap();
+    // A concurrent manual check or replica owns the same advisory lock.
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 6))")
+        .bind(id)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    crate::servers::poll_server(&pool, &key, &org, id)
+        .await
+        .unwrap();
+    let locked = owner.request("GET", "servers/health", json!(null)).await.1;
+    assert_eq!(locked["servers"][0]["checkedAt"], 1);
+    lock.rollback().await.unwrap();
+    crate::servers::poll_server(&pool, &key, &org, id)
+        .await
+        .unwrap();
+    responder.await.unwrap();
+    let fallback = owner.request("GET", "servers/health", json!(null)).await.1;
+    assert_eq!(fallback["servers"][0]["players"], 77);
+    assert_eq!(fallback["servers"][0]["playersSource"], "a2s");
+    assert_eq!(
+        fallback["servers"][0]["rconStatus"],
+        "invalid_configuration"
+    );
+    assert_eq!(fallback["servers"][0]["a2sStatus"], "connected");
+    // View-only membership can read observations; removing that permission denies it.
+    sqlx::query("UPDATE organizations SET owner_account_id=(SELECT id FROM accounts WHERE id<>organizations.owner_account_id LIMIT 1) WHERE id=$1")
+        .bind(&org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['servers.view']::text[] WHERE organization_id=$1").bind(&org).execute(&pool).await.unwrap();
+    assert_eq!(
+        owner.request("GET", "servers/health", json!(null)).await.0,
+        StatusCode::OK
+    );
+    sqlx::query(
+        "UPDATE organization_roles SET permissions=ARRAY[]::text[] WHERE organization_id=$1",
+    )
+    .bind(&org)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owner.request("GET", "servers/health", json!(null)).await.0,
+        StatusCode::FORBIDDEN
     );
 }

@@ -93,8 +93,8 @@ the browser.
 Shadcn is initialized with Radix components and the charcoal surfaces and muted sage accent tokens.
 The current component catalog is installed in `src/components/ui` so product
 work does not need to rerun setup. The `/dashboard/` page uses the shadcn
-`sidebar-07` block with organization navigation. The dashboard is empty until
-server data is connected. Organization profile settings live at
+`sidebar-07` block with organization navigation. The dashboard shows saved server health and player counts, with automatic
+refresh and explicit stale readings. Organization profile settings live at
 `/dashboard/organization/settings/profile`. Billing and usage are available at
 `/dashboard/organization/settings/usage`. Resource meters show used and remaining
 capacity; the activity chart offers 7-, 14-, and 30-day ranges with totals and an
@@ -220,13 +220,13 @@ seven days, including across refreshes and visits to the login page.
 `/dashboard/servers` lists the active organization's saved Rust servers. Members
 with `servers.view` can read connection addresses; `servers.manage` permits
 adding a server and running **Test connection**. RCON passwords never appear in
-API responses. Saving records does not connect to the server.
+API responses. Read-only health checks begin automatically after saving.
 
 Test connection sends the read-only `serverinfo` command over Rust WebRCON and
 an A2S_INFO UDP query, including the challenge exchange when required. Each
 protocol has a five-second deadline. The latest result and check time are saved
 in PostgreSQL and survive restarts. The inventory shows each protocol separately;
-a successful result describes that check, not continuous monitoring.
+a successful result describes that check, not a guarantee that the server is still reachable.
 
 Checks distinguish explicit authentication rejection, unreachable endpoints,
 timeouts, invalid configuration, and unexpected protocol responses. A UDP timeout
@@ -252,3 +252,25 @@ restores. Back up the key separately from the database. Key rotation requires
 re-encrypting stored secrets before replacing the key. `npm run dev` creates a
 worktree-specific key in ignored `.dev-stack/secret-key` with owner-only access.
 Do not delete this file while retaining that worktree's database.
+
+## Server health dashboard
+
+`/dashboard` reads observations for the active organization with `servers.view`
+permission. The Rust API runtime checks saved servers when observations are at
+least 30 seconds old. Polling uses batches of 16 and two concurrent probes;
+large inventories or timeouts may delay refreshes. The browser reloads saved
+observations every 15 seconds and marks readings older than 90 seconds stale.
+Refresh health reloads saved readings. Managers can use Test connection in the
+inventory to request a new probe.
+
+Healthy means both RCON and A2S responded. Degraded means only one responded.
+Unavailable means neither responded successfully, which can include network or
+configuration failures and does not prove the game server is stopped. Player
+counts prefer RCON, with A2S as a fallback. A2S reports an eight-bit count, so use
+RCON for servers with more than 255 players. Failed checks retain the last
+successful count and its timestamp as last known players. Raw server payloads
+and credentials never appear in health responses.
+
+The poller runs in the existing Rust process and stops with it. PostgreSQL
+advisory locks prevent simultaneous checks of a record across API instances and
+manual requests. There is no health-history store or separate worker.
