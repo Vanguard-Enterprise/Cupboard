@@ -175,3 +175,13 @@ The browser reads saved, tenant-authorized observations and marks old or failed
 refreshes stale. PostgreSQL retains the latest protocol outcomes and last useful
 player count with its source and observation time; historical telemetry remains
 outside this slice.
+
+CUP-7 packages the existing Next.js runtime as a standalone container and publishes
+both runtime images after main-branch CI and release smoke checks pass. USE1
+staging uses a fresh CloudNativePG database in `cupboard-rebuild`, the existing
+internal Traefik ingress, and OpenBao through External Secrets. This adds no
+application runtime or service beyond the selected web/API/PostgreSQL shape.
+Deployment manifests live in `v-deployments`; old Cupboard overlays are not used.
+Both images are pinned to one commit's release tags. The smoke check verifies the
+containerized proxy and persisted account, tenant, server, and health data across
+runtime restarts, including tenant isolation and secret redaction.

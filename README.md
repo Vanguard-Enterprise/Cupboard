@@ -24,7 +24,7 @@ Install Node.js 24.18.0, Rustup, and Docker with Compose. The repository pins
 Rust 1.96.0 with rustfmt and Clippy. Then install the web dependencies:
 
 ```bash
-npm install
+npm ci
 ```
 
 Start PostgreSQL, the Rust API, and Next.js from the repository root:
@@ -74,16 +74,81 @@ variables in your shell; the Rust process does not load `.env` files.
 The previous shared Compose database remains untouched; the new workflow starts
 with a fresh database in each worktree.
 
-Build the production API image with:
+Build the production images with:
 
 ```bash
 docker build -f backend/Dockerfile -t cupboard-api .
+docker build -f Dockerfile -t cupboard-web .
+node scripts/smoke-images.mjs cupboard-api cupboard-web
 ```
 
 Production targets USE1 Kubernetes through Argo CD in `v-deployments`, with
 cluster PostgreSQL and environment-provided credentials. GitHub Actions runs
-checks and the container build on GitHub-hosted `ubuntu-24.04` runners. Image publishing
-and deployment manifests are not part of the runtime bootstrap.
+checks, both container builds, and a disposable release smoke test on GitHub-hosted
+`ubuntu-24.04` runners. The smoke test exercises browser assets, sign-in,
+organization setup, server creation, connectivity results, tenant isolation,
+secret handling, and persistence across web/API restarts. Its database and
+containers are removed afterward. A successful main-branch run publishes
+`ghcr.io/vanguard-enterprise/cupboard-api:sha-<commit>` and
+`ghcr.io/vanguard-enterprise/cupboard-web:sha-<commit>`. Pull requests never publish.
+
+## Staging operations
+
+The first deployment uses [Cupboard staging](https://cupboard-staging.vngenterprise.com)
+on USE1's internal ingress. Access requires the private network. Argo CD reads
+`applications/cupboard-rebuild/overlays/use1` in `Vanguard-Enterprise/v-deployments`.
+The `cupboard-rebuild` namespace contains the web and API Deployments and a fresh
+CloudNativePG PostgreSQL cluster. The old implementation's manifests and databases
+are not used. One replica per runtime and one database instance are sufficient for
+this staging verification; this is not a highly available database configuration.
+
+To release, first merge the application change and wait for the `Check` workflow,
+including publication, to pass. In a separate `v-deployments` worktree, set both
+images in `workload.yaml` to the same published `sha-<commit>` tag. Review and merge
+that deployment change. Argo CD applies it automatically. Do not use a moving
+`main` or `latest` image tag. The deployment binds port 3000 for Next.js and 8080
+for Rust; only Next.js is routed through the HTTPS ingress.
+
+CloudNativePG generates the `cupboard-app` database credential Secret. External
+Secrets reads the 64-character `secret_key` from OpenBao
+`kv/cupboard/rebuild/staging` into `cupboard-encryption`. Preserve this key across
+all releases and database restores. Registry authentication uses the cluster's
+existing `dockerconfig/aliencord-github` OpenBao entry. Neither credentials nor
+production environment files belong in the image build context.
+
+Inspect and restart only this deployment:
+
+```bash
+kubectl --context use1-oidc -n argocd get application cupboard-rebuild
+kubectl --context use1-oidc -n cupboard-rebuild get deployments,pods,clusters,externalsecrets
+kubectl --context use1-oidc -n cupboard-rebuild rollout status deployment/cupboard-api
+kubectl --context use1-oidc -n cupboard-rebuild rollout status deployment/cupboard-web
+kubectl --context use1-oidc -n cupboard-rebuild rollout restart deployment/cupboard-api deployment/cupboard-web
+```
+
+Use `/signup` to create an operator, create an organization, add a Rust server in
+Servers, and select Test connection. Return to Dashboard to view saved health and
+player count. Sign out and back in to verify login. After restarting both
+Deployments, the same account, organization, server details, and connection
+results must remain. Test connection must still decrypt the saved credential.
+An unreachable server should show the protocol failure without revealing its
+password. A second account in a different organization must not see that server.
+
+The API needs `DATABASE_URL`, `CUPBOARD_SECRET_KEY`, and
+`CUPBOARD_WEB_ORIGINS=https://cupboard-staging.vngenterprise.com`. The web runtime
+needs `CUPBOARD_API_URL=http://cupboard-api:8080`. Production cookies stay Secure;
+do not set `CUPBOARD_INSECURE_COOKIES` in Kubernetes. Readiness checks database
+connectivity at `/health/ready`; `/health/live` checks the Rust process. The web
+probes `/login`, which does not depend on a signed-in session.
+
+PostgreSQL uses a retained Longhorn volume. Namespace and database resources opt
+out of Argo pruning. Application restarts do not recreate the database. Do not
+delete the namespace, Cluster, PVCs, or OpenBao key as a restart or rollback step.
+Before production use, configure and test off-cluster database backups and a
+separate encryption-key backup. Staging persistence is not a backup policy.
+SQLx applies forward migrations at API startup. To roll back application code,
+revert the image tags in Git only after checking compatibility with the current
+schema; do not reverse migrations or overwrite a database with an older volume.
 
 The web application uses the Next.js App Router. Pages and layouts are Server
 Components unless they need browser state or event handlers. This lets the web
