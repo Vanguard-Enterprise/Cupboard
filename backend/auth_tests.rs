@@ -2323,15 +2323,16 @@ async fn copying_folders_releases_database_and_publishes_only_into_existing_dest
             .await
             .expect("copying objects must release the organization lock");
         drop(connections);
-        let pending: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND NOT ready",
+        let pending: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM organization_files WHERE organization_id=$1 AND NOT ready",
         )
         .bind(&org)
-        .fetch_one(&pool)
+        .fetch_all(&pool)
         .await
         .unwrap();
         assert_eq!(
-            pending, 6,
+            pending.len(),
+            6,
             "the entire copy stays unpublished during storage I/O"
         );
         if delete_destination {
@@ -2351,9 +2352,10 @@ async fn copying_folders_releases_database_and_publishes_only_into_existing_dest
             .unwrap()
             .unwrap();
         let pending_after: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND NOT ready",
+            "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND id=ANY($2) AND NOT ready",
         )
         .bind(&org)
+        .bind(&pending)
         .fetch_one(&pool)
         .await
         .unwrap();
