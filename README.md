@@ -345,8 +345,9 @@ manual requests. There is no health-history store or separate worker.
 The File store > Shared library page at `/dashboard/files` supports upload,
 search, download, and confirmed deletion. The browser remembers list or grid view
 per account and organization. Use the Filters menu beside search to filter by
-filename extension and sort by name, upload date, or size. Grid cards show private
-PNG, JPEG, GIF, and WebP previews, with file icons for other formats. Selecting a
+filename extension and sort by name, upload date, or size. List rows and grid cards show private PNG, JPEG, GIF, and WebP previews,
+with file icons for other formats. Upload, New folder, and Filters use labeled
+icon buttons; small screens open search from an icon into a popover. Selecting a
 file opens its action toolbar. Right-click a file or folder for Copy, Cut, Rename,
 Share, File details, and Delete. These actions also appear in the overflow menu.
 New folder sits beside Upload file. Enter a path such as `configs/plugins/custom`

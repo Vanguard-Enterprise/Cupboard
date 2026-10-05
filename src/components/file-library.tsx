@@ -31,6 +31,11 @@ import {
 } from "lucide-react";
 import { type Identity } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -97,6 +102,12 @@ function extension(name: string) {
   return dot > 0 && dot < name.length - 1
     ? name.slice(dot + 1).toLowerCase()
     : "";
+}
+function hasImagePreview(file: StoredFile) {
+  return (
+    !file.isFolder &&
+    ["png", "jpg", "jpeg", "gif", "webp"].includes(extension(file.name))
+  );
 }
 function fileIcon(name: string) {
   const ext = extension(name);
@@ -175,6 +186,22 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   const [details, setDetails] = useState<StoredFile | null>(null);
   const [dragging, setDragging] = useState(false);
   const search = useRef<HTMLInputElement>(null);
+  const mobileSearch = useRef<HTMLInputElement>(null);
+  const searchTrigger = useRef<HTMLButtonElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  function focusSearch() {
+    if (search.current?.getClientRects().length) search.current.focus();
+    else searchTrigger.current?.focus();
+  }
+  useEffect(() => {
+    if (!searchOpen || !window.matchMedia) return;
+    const desktop = window.matchMedia("(min-width: 768px)");
+    const close = () => {
+      if (desktop.matches) setSearchOpen(false);
+    };
+    desktop.addEventListener("change", close);
+    return () => desktop.removeEventListener("change", close);
+  }, [searchOpen]);
   const input = useRef<HTMLInputElement>(null);
   const choose = useRef<HTMLButtonElement>(null);
   const uploadTrigger = useRef<HTMLButtonElement>(null);
@@ -321,7 +348,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
       toast.success(`${removing.name} deleted.`);
       setRemoving(null);
       setActiveId(null);
-      search.current?.focus();
+      focusSearch();
     } catch (cause) {
       setDeleteError(
         cause instanceof Error ? cause.message : "Deletion failed. Try again.",
@@ -582,9 +609,9 @@ export function FileLibrary({ identity }: { identity: Identity }) {
     ancestor = files?.find((file) => file.id === ancestor?.parentId);
   }
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 md:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
+    <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 max-[360px]:px-3 md:p-6">
+      <div className="grid grid-cols-[auto_1fr] items-center gap-x-1 gap-y-5 md:flex md:flex-wrap md:justify-between md:gap-x-4">
+        <div className={cn("col-span-2 min-w-0", !folder && "max-md:sr-only")}>
           {folder ? (
             <nav
               aria-label="Folder path"
@@ -615,60 +642,102 @@ export function FileLibrary({ identity }: { identity: Identity }) {
           )}
         </div>
         {allowed && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 md:gap-2">
             <Button
               variant="outline"
-              className="h-11 md:h-10"
+              size="icon"
+              className="size-11 md:size-10"
+              aria-label="New folder"
+              title="New folder"
               disabled={disabled || files === null}
               onClick={() => startName()}
             >
               <FolderPlusIcon />
-              New folder
             </Button>
             <Button
-              className="h-11 shrink-0 md:h-10"
+              size="icon"
+              className="size-11 shrink-0 md:size-10"
+              aria-label="Upload file"
+              title="Upload file"
               ref={uploadTrigger}
               onClick={openUpload}
               disabled={disabled || files === null}
             >
               <UploadIcon />
-              Upload file
             </Button>
           </div>
         )}
-      </div>
-      {!allowed ? (
-        <Alert>
-          <AlertDescription>
-            You need organization management permission to access files.
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <>
-          {clipboard && (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                className="h-11"
-                disabled={disabled}
-                onClick={() => paste()}
+        {allowed && (
+          <div className="flex min-w-0 items-center justify-end gap-1 md:basis-full md:gap-2">
+            <Popover open={searchOpen} onOpenChange={setSearchOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  ref={searchTrigger}
+                  variant="outline"
+                  size="icon"
+                  className={cn(
+                    "relative size-11 md:hidden",
+                    query && "border-primary text-primary",
+                  )}
+                  aria-label="Open file search"
+                  title="Search files"
+                >
+                  <SearchIcon />
+                  {query && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-2 right-2 size-1.5 rounded-full bg-primary"
+                    />
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                className="w-80 max-w-[calc(100vw-2rem)] md:hidden"
+                aria-label="Search files"
+                onOpenAutoFocus={(event) => {
+                  event.preventDefault();
+                  mobileSearch.current?.focus();
+                }}
               >
-                <ClipboardPasteIcon />
-                Paste
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-11"
-                aria-label="Cancel copy or cut"
-                onClick={() => setClipboard(null)}
-              >
-                <XIcon />
-              </Button>
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-0 flex-1 basis-40">
+                <Label htmlFor="file-search-mobile">Search files</Label>
+                <form
+                  className="relative"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setSearchOpen(false);
+                  }}
+                >
+                  <Input
+                    ref={mobileSearch}
+                    id="file-search-mobile"
+                    className="h-11 pr-11"
+                    placeholder="Search files"
+                    value={query}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setActiveId(null);
+                    }}
+                  />
+                  {query && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute top-0 right-0 size-11"
+                      aria-label="Clear search"
+                      onClick={() => {
+                        setQuery("");
+                        mobileSearch.current?.focus();
+                      }}
+                    >
+                      <XIcon />
+                    </Button>
+                  )}
+                </form>
+              </PopoverContent>
+            </Popover>
+            <div className="relative hidden min-w-0 flex-1 basis-40 md:block">
               <SearchIcon className="pointer-events-none absolute top-3.5 left-3 size-4 text-muted-foreground" />
               <Label htmlFor="file-search" className="sr-only">
                 Search files
@@ -692,7 +761,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   aria-label="Clear search"
                   onClick={() => {
                     setQuery("");
-                    search.current?.focus();
+                    focusSearch();
                   }}
                 >
                   <XIcon />
@@ -703,11 +772,22 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="outline"
-                  className="h-11"
+                  size="icon"
+                  className={cn(
+                    "relative size-11",
+                    (type !== "all" || sort !== "newest") &&
+                      "border-primary text-primary",
+                  )}
                   aria-label="Filter and sort files"
+                  title="Filter and sort files"
                 >
                   <SlidersHorizontalIcon />
-                  Filters{type !== "all" || sort !== "newest" ? " •" : ""}
+                  {(type !== "all" || sort !== "newest") && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-2 right-2 size-1.5 rounded-full bg-primary"
+                    />
+                  )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -759,15 +839,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="flex items-center gap-2">
-              {files !== null && (
-                <span
-                  className="whitespace-nowrap text-xs text-muted-foreground"
-                  aria-live="polite"
-                >
-                  {visible?.length ?? 0}{" "}
-                  {(visible?.length ?? 0) === 1 ? "item" : "items"}
-                </span>
-              )}
               <ToggleGroup
                 type="single"
                 value={view}
@@ -797,6 +868,38 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               </ToggleGroup>
             </div>
           </div>
+        )}
+      </div>
+      {!allowed ? (
+        <Alert>
+          <AlertDescription>
+            You need organization management permission to access files.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <>
+          {clipboard && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                className="h-11"
+                disabled={disabled}
+                onClick={() => paste()}
+              >
+                <ClipboardPasteIcon />
+                Paste
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11"
+                aria-label="Cancel copy or cut"
+                onClick={() => setClipboard(null)}
+              >
+                <XIcon />
+              </Button>
+            </div>
+          )}
           {active && (
             <div className="flex min-h-11 flex-wrap items-center gap-2 rounded-lg bg-primary/10 px-3 text-sm text-foreground">
               <>
@@ -856,7 +959,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
           )}
           <ContextMenu
             onOpenChange={(open) => {
-              if (!open) search.current?.focus();
+              if (!open) focusSearch();
             }}
           >
             <ContextMenuTrigger asChild disabled={!allowed || files === null}>
@@ -1003,7 +1106,20 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                                 className="flex min-h-14 w-full items-center gap-3 rounded-md px-3 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 title={file.name}
                               >
-                                <Icon className="size-5 shrink-0 text-muted-foreground" />
+                                <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background/60">
+                                  {hasImagePreview(file) ? (
+                                    <FileThumbnail
+                                      key={`${organization}:${file.id}`}
+                                      id={file.id}
+                                      organization={organization}
+                                      fallback={
+                                        <Icon className="size-5 text-muted-foreground" />
+                                      }
+                                    />
+                                  ) : (
+                                    <Icon className="size-5 text-muted-foreground" />
+                                  )}
+                                </span>
                                 <span className="min-w-0">
                                   <span className="block truncate font-medium">
                                     {file.name}
@@ -1076,10 +1192,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                             className="group w-full px-3 pb-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                           >
                             <div className="relative my-2 flex h-36 items-center justify-center rounded-lg bg-background/60">
-                              {!file.isFolder &&
-                              ["png", "jpg", "jpeg", "gif", "webp"].includes(
-                                extension(file.name),
-                              ) ? (
+                              {hasImagePreview(file) ? (
                                 <FileThumbnail
                                   key={`${organization}:${file.id}`}
                                   id={file.id}
@@ -1312,7 +1425,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
             <DialogContent
               onCloseAutoFocus={(event) => {
                 event.preventDefault();
-                search.current?.focus();
+                focusSearch();
               }}
             >
               <DialogHeader>
@@ -1350,7 +1463,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               showCloseButton={!busy}
               onCloseAutoFocus={(event) => {
                 event.preventDefault();
-                search.current?.focus();
+                focusSearch();
               }}
             >
               <DialogHeader>

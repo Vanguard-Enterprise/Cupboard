@@ -476,3 +476,67 @@ it("ignores an older automatic update when a folder has just been created", asyn
   ).not.toBeNull();
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
+
+it("searches from the mobile popover and returns focus when dismissed", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json([file]));
+  const user = userEvent.setup();
+  render(<FileLibrary identity={identity} />);
+  await screen.findByText("config.txt");
+  const trigger = screen.getByRole("button", { name: "Open file search" });
+  await user.click(trigger);
+  const popover = screen.getByRole("dialog", { name: "Search files" });
+  const input = within(popover).getByLabelText("Search files");
+  expect(document.activeElement).toBe(input);
+  await user.type(input, "missing{Enter}");
+  expect(screen.getByText("No matching files")).not.toBeNull();
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+  await user.click(trigger);
+  await user.click(
+    within(screen.getByRole("dialog", { name: "Search files" })).getByRole(
+      "button",
+      { name: "Clear search" },
+    ),
+  );
+  expect(screen.getByText("config.txt")).not.toBeNull();
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(document.activeElement).toBe(trigger));
+});
+it("renders an authenticated image thumbnail in list view", async () => {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      callback: (entries: { isIntersecting: boolean }[]) => void;
+      constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+        this.callback = callback;
+      }
+      observe() {
+        this.callback([{ isIntersecting: true }]);
+      }
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("URL", {
+    createObjectURL: vi.fn(() => "blob:list-preview"),
+    revokeObjectURL: vi.fn(),
+  });
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(Response.json([{ ...file, name: "logo.png" }]))
+    .mockResolvedValueOnce(
+      new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])),
+    );
+  const page = render(<FileLibrary identity={identity} />);
+  await waitFor(() =>
+    expect(page.container.querySelector("tbody img")?.getAttribute("src")).toBe(
+      "blob:list-preview",
+    ),
+  );
+  expect(fetcher.mock.calls[1][1]?.headers).toEqual({
+    "X-Cupboard-Organization": "org",
+  });
+  expect(
+    screen
+      .getByRole("radio", { name: "List view" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+});
