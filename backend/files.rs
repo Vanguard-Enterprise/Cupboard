@@ -136,60 +136,71 @@ async fn upload(
     storage: Option<Extension<FileStore>>,
     request: Request,
 ) -> ApiResult<Json<File>> {
-    let headers = request.headers().clone();
-    let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
-    let storage = store(&storage)?;
-    if request
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        != Some("application/octet-stream")
-    {
-        return Err(invalid("Upload the file as binary data."));
-    }
-    let name = filename(&request)?;
-    let parent = headers
-        .get("x-cupboard-folder")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    destination(&mut tx, &org, parent.as_deref()).await?;
-    let data = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        to_bytes(request.into_body(), MAX_FILE_SIZE),
-    )
-    .await
-    .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "Upload timed out. Try again."))?
-    .map_err(|_| {
-        ApiError(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "Choose a file no larger than 10 MiB.",
+    let operation = async {
+        let headers = request.headers().clone();
+        let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
+        let storage = store(&storage)?;
+        if request
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            != Some("application/octet-stream")
+        {
+            return Err(invalid("Upload the file as binary data."));
+        }
+        let name = filename(&request)?;
+        let parent = headers
+            .get("x-cupboard-folder")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        destination(&mut tx, &org, parent.as_deref()).await?;
+        tx.commit().await?;
+        let data = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            to_bytes(request.into_body(), MAX_FILE_SIZE),
         )
-    })?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let file: File = sqlx::query_as("INSERT INTO organization_files(organization_id,id,name,size,parent_id) VALUES($1,$2,$3,$4,$5) RETURNING id,name,size,created_at,parent_id,is_folder").bind(&org).bind(&id).bind(name).bind(data.len() as i64).bind(parent).fetch_one(&mut *tx).await?;
-    // Persist the key before S3 I/O so interrupted uploads can be reclaimed.
-    tx.commit().await?;
-    let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
-    // A destination deleted while the pending key was committed must not make
-    // this upload reappear in the root folder.
-    destination(&mut tx, &org, file.parent_id.as_deref()).await?;
-    sqlx::query("SELECT id FROM organization_files WHERE organization_id=$1 AND id=$2 FOR UPDATE")
+        .await
+        .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "Upload timed out. Try again."))?
+        .map_err(|_| {
+            ApiError(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Choose a file no larger than 10 MiB.",
+            )
+        })?;
+        let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
+        destination(&mut tx, &org, parent.as_deref()).await?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let file: File = sqlx::query_as("INSERT INTO organization_files(organization_id,id,name,size,parent_id) VALUES($1,$2,$3,$4,$5) RETURNING id,name,size,created_at,parent_id,is_folder").bind(&org).bind(&id).bind(name).bind(data.len() as i64).bind(parent).fetch_one(&mut *tx).await?;
+        // Persist the key before S3 I/O so interrupted uploads can be reclaimed.
+        tx.commit().await?;
+        storage
+            .0
+            .put(&key(&org, &id), data.into())
+            .await
+            .map_err(|_| unavailable())?;
+
+        let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
+        // A destination deleted while the pending key was committed must not make
+        // this upload reappear in the root folder.
+        destination(&mut tx, &org, file.parent_id.as_deref()).await?;
+        sqlx::query(
+            "SELECT id FROM organization_files WHERE organization_id=$1 AND id=$2 FOR UPDATE",
+        )
         .bind(&org)
         .bind(&id)
         .fetch_one(&mut *tx)
         .await?;
-    storage
-        .0
-        .put(&key(&org, &id), data.into())
+        sqlx::query("UPDATE organization_files SET ready=true WHERE organization_id=$1 AND id=$2")
+            .bind(&org)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(Json(file))
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(45), operation)
         .await
-        .map_err(|_| unavailable())?;
-    sqlx::query("UPDATE organization_files SET ready=true WHERE organization_id=$1 AND id=$2")
-        .bind(&org)
-        .bind(&id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-    Ok(Json(file))
+        .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "Upload timed out. Try again."))?
 }
 async fn download(
     State(pool): State<PgPool>,
@@ -267,9 +278,21 @@ async fn delete(
             .await?;
     }
     tx.commit().await?;
-    for entry in entries.iter().rev() {
-        remove(&pool, storage, &org, &entry.id).await?;
-    }
+    // Hiding the subtree is the durable deletion. Physical cleanup can outlive
+    // the HTTP request; failed/interrupted removals retain their retry records.
+    let storage = storage.clone();
+    tokio::spawn(async move {
+        stream::iter(entries)
+            .for_each_concurrent(4, |entry| {
+                let pool = &pool;
+                let storage = &storage;
+                let org = &org;
+                async move {
+                    let _ = remove(pool, storage, org, &entry.id).await;
+                }
+            })
+            .await;
+    });
     Ok(Json(serde_json::json!({"deleted": true})))
 }
 pub(crate) async fn remove(
@@ -278,8 +301,13 @@ pub(crate) async fn remove(
     org: &str,
     id: &str,
 ) -> ApiResult<()> {
-    let mut tx = pool.begin().await?;
-    let row: Option<bool> = sqlx::query_scalar("SELECT is_folder FROM organization_files WHERE organization_id=$1 AND id=$2 AND NOT ready FOR UPDATE").bind(org).bind(id).fetch_optional(&mut *tx).await?;
+    let row: Option<bool> = sqlx::query_scalar(
+        "SELECT is_folder FROM organization_files WHERE organization_id=$1 AND id=$2 AND NOT ready",
+    )
+    .bind(org)
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     if let Some(is_folder) = row {
         if !is_folder {
             match storage.0.delete(&key(org, id)).await {
@@ -287,20 +315,22 @@ pub(crate) async fn remove(
                 Err(_) => return Err(unavailable()),
             }
         }
-        sqlx::query("DELETE FROM organization_files WHERE organization_id=$1 AND id=$2")
-            .bind(org)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "DELETE FROM organization_files WHERE organization_id=$1 AND id=$2 AND NOT ready",
+        )
+        .bind(org)
+        .bind(id)
+        .execute(pool)
+        .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 pub async fn cleanup(pool: PgPool, storage: FileStore) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
     loop {
         interval.tick().await;
-        // An hour exceeds all bounded request times. Row locks serialize cleanup with uploads.
+        // An hour exceeds upload/copy deadlines, so these pending keys cannot
+        // still be published by a live request.
         let rows: Result<Vec<(String, String)>, _> = sqlx::query_as("SELECT organization_id,id FROM organization_files WHERE NOT ready AND created_at < extract(epoch FROM now())::bigint-3600 ORDER BY created_at LIMIT 100").fetch_all(&pool).await;
         if let Ok(rows) = rows {
             for (org, id) in rows {

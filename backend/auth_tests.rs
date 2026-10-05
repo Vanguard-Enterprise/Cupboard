@@ -2015,10 +2015,19 @@ async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloa
         .file_request("POST", &format!("files/{id}/delete"), org, "", vec![])
         .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(matches!(
-        storage.0.get(&path).await,
-        Err(object_store::Error::NotFound { .. })
-    ));
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if matches!(
+                storage.0.get(&path).await,
+                Err(object_store::Error::NotFound { .. })
+            ) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("accepted deletion should eventually remove the stored object");
     assert_eq!(
         owner
             .file_request("GET", &format!("files/{id}"), org, "", vec![])
@@ -2360,5 +2369,223 @@ async fn copying_folders_releases_database_and_publishes_only_into_existing_dest
             assert_eq!(pending_after, 0);
         }
     }
+    server.abort();
+}
+
+#[tokio::test]
+async fn uploads_and_recursive_deletion_release_database_during_storage_io() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    async fn assert_database_available(pool: &sqlx::PgPool, org: &str) {
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(
+                tokio::time::timeout(Duration::from_secs(2), pool.acquire())
+                    .await
+                    .expect("storage I/O must release database connections")
+                    .unwrap(),
+            );
+        }
+        sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(org)
+            .execute(&mut *connections[0])
+            .await
+            .expect("storage I/O must release the organization lock");
+    }
+    let (started, mut requests) = mpsc::channel(16);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(move |request: Request<Body>| {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            let method = request.method().clone();
+            let is_delete = method == axum::http::Method::POST;
+            if is_delete {
+                assert_eq!(request.uri().query(), Some("delete"));
+            }
+            let body = to_bytes(request.into_body(), 1024).await.unwrap();
+            let response = if is_delete {
+                // object_store uses S3 DeleteObjects even for one key.
+                let xml = std::str::from_utf8(&body).unwrap();
+                let key = xml
+                    .split_once("<Key>")
+                    .unwrap()
+                    .1
+                    .split_once("</Key>")
+                    .unwrap()
+                    .0;
+                format!("<DeleteResult><Deleted><Key>{key}</Key></Deleted></DeleteResult>")
+            } else {
+                String::new()
+            };
+            started.send(method.clone()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            (
+                StatusCode::OK,
+                [
+                    (header::ETAG, "\"stored\""),
+                    (header::CONTENT_TYPE, "application/xml"),
+                ],
+                response,
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "upload-cleanup-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap().to_owned();
+
+    for delete_destination in [false, true] {
+        let destination = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Uploads',0,true,true)")
+            .bind(&org).bind(&destination).execute(&pool).await.unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/app-api/files")
+            .header("origin", "http://localhost:5173")
+            .header("x-cupboard-request", "1")
+            .header("x-cupboard-organization", &org)
+            .header("x-cupboard-folder", &destination)
+            .header("x-cupboard-filename", "uploaded.txt")
+            .header("content-type", "application/octet-stream")
+            .header("cookie", &owner.cookie)
+            .body(Body::from("data"))
+            .unwrap();
+        let upload = tokio::spawn(app.clone().oneshot(request));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            axum::http::Method::PUT
+        );
+        assert_database_available(&pool, &org).await;
+        let pending_id: String = sqlx::query_scalar("SELECT id FROM organization_files WHERE organization_id=$1 AND parent_id=$2 AND NOT ready")
+            .bind(&org).bind(&destination).fetch_one(&pool).await.unwrap();
+        if delete_destination {
+            assert_eq!(
+                owner
+                    .file_action(&format!("files/{destination}/delete"), &org, json!({}))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+        }
+        release.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(2), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if delete_destination {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            }
+        );
+        let ready: bool = sqlx::query_scalar(
+            "SELECT ready FROM organization_files WHERE organization_id=$1 AND id=$2",
+        )
+        .bind(&org)
+        .bind(&pending_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ready, !delete_destination);
+    }
+
+    let folder = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Delete tree',0,true,true)")
+        .bind(&org).bind(&folder).execute(&pool).await.unwrap();
+    let mut ids = vec![folder.clone()];
+    for index in 0..5 {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,parent_id,ready) VALUES($1,$2,$3,4,$4,true)")
+            .bind(&org).bind(&id).bind(format!("delete-{index}.txt")).bind(&folder).execute(&pool).await.unwrap();
+        ids.push(id);
+    }
+    let (status, _) = tokio::time::timeout(
+        Duration::from_secs(2),
+        owner.file_action(&format!("files/{folder}/delete"), &org, json!({})),
+    )
+    .await
+    .expect("logical deletion must complete before physical object deletion");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        axum::http::Method::POST
+    );
+    assert_database_available(&pool, &org).await;
+    let ready: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND id=ANY($2) AND ready",
+    )
+    .bind(&org)
+    .bind(&ids)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ready, 0,
+        "the full deleted tree must be durably hidden before responding"
+    );
+    release.add_permits(5);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let remaining: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND id=ANY($2)",
+            )
+            .bind(&org)
+            .bind(&ids)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if remaining == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background deletion should eventually reclaim every file and folder");
     server.abort();
 }

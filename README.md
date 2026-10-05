@@ -410,13 +410,16 @@ previous object versions after a delete; storage lifecycle policy owns their
 expiration.
 
 Uploads record their generated key before writing bytes and publish the file
-only after S3 succeeds. Deletions first hide the file, then remove its object and
-metadata. A provider failure leaves a retryable cleanup record. The Rust runtime
-checks every ten minutes for unpublished records older than one hour, locks each
-record, retries object deletion, and removes metadata only after deletion
-succeeds. Failed cleanup records remain for the next pass. Do not delete metadata
-manually before its objects are reclaimed. A failed deletion can disappear from
-the library before physical cleanup finishes.
+only after S3 succeeds. Uploads and copies have a 45-second deadline and release
+database transactions during object-store I/O. Copies transfer up to four objects
+at once and recheck authorization, source files, and destination before publication.
+Deletions return after durably hiding the subtree. Background cleanup removes up
+to four objects concurrently and removes metadata after each successful deletion.
+A provider failure leaves a retryable cleanup record. The Rust runtime checks
+every ten minutes for unpublished records older than one hour and retries their
+removal. Failed cleanup records remain for the next pass, including after an
+application restart. Do not delete metadata manually before its objects are
+reclaimed.
 
 When storage is unconfigured, the rest of the application remains available;
 file actions report unavailability. Invalid partial S3 configuration fails startup

@@ -194,7 +194,11 @@ there is no new application service or worker. The file library allows organizat
 managers to upload, download, and delete files up to 10 MiB, create nested folders,
 rename entries, copy folders and files, and move them through cut/paste. Folder
 relationships live in PostgreSQL; moves do not rename S3 keys. Copies receive
-independent S3 objects. File mutations serialize per organization to prevent
+independent S3 objects. Uploads and copies use a 45-second deadline and perform
+object-store I/O outside database transactions. Copies transfer up to four objects
+at once, then reauthorize and validate source and destination before publication.
+Deletion returns after durably hiding the subtree; bounded background cleanup and
+the existing retry loop remove physical objects. File metadata mutations serialize per organization to prevent
 concurrent folder cycles and inconsistent recursive operations. All organization file management checks active membership and management
 permission beside tenant-scoped data access. File
 requests carry the page's organization ID so a stale browser tab cannot upload
