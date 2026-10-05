@@ -11,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::{StreamExt, TryStreamExt, stream};
 use object_store::{ObjectStoreExt, path::Path as ObjectPath};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
@@ -440,67 +441,92 @@ async fn copy_file(
     headers: HeaderMap,
     Json(input): Json<Destination>,
 ) -> ApiResult<Json<Vec<File>>> {
-    let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
-    let storage = store(&storage)?;
-    destination(&mut tx, &org, input.parent_id.as_deref()).await?;
-    let entries = subtree(&mut tx, &org, &id).await?;
-    if entries
-        .iter()
-        .any(|file| Some(&file.id) == input.parent_id.as_ref())
-    {
-        return Err(invalid(
-            "Choose a destination outside the folder being copied.",
-        ));
-    }
-    let mut ids = std::collections::HashMap::new();
-    let mut copies: Vec<File> = Vec::new();
-    for entry in &entries {
-        let new_id = uuid::Uuid::new_v4().to_string();
-        let parent = if entry.id == id {
-            input.parent_id.clone()
-        } else {
-            entry.parent_id.as_ref().and_then(|p| ids.get(p)).cloned()
-        };
-        let copy = sqlx::query_as("INSERT INTO organization_files(organization_id,id,name,size,parent_id,is_folder) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,size,created_at,parent_id,is_folder")
-            .bind(&org).bind(&new_id).bind(&entry.name).bind(entry.size).bind(parent).bind(entry.is_folder).fetch_one(&mut *tx).await?;
-        ids.insert(entry.id.clone(), new_id);
-        copies.push(copy);
-    }
-    // Retain unpublished keys for cleanup if S3 copying is interrupted.
-    tx.commit().await?;
-    let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
-    destination(&mut tx, &org, input.parent_id.as_deref()).await?;
-    for (source, copy) in entries.iter().zip(&copies) {
-        let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organization_files WHERE organization_id=$1 AND id=$2 AND ready)")
-            .bind(&org).bind(&source.id).fetch_one(&mut *tx).await?;
-        if !ready {
-            return Err(ApiError(
-                StatusCode::CONFLICT,
-                "The source changed. Refresh and try again.",
+    let operation = async {
+        let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
+        let storage = store(&storage)?;
+        destination(&mut tx, &org, input.parent_id.as_deref()).await?;
+        let entries = subtree(&mut tx, &org, &id).await?;
+        if entries
+            .iter()
+            .any(|file| Some(&file.id) == input.parent_id.as_ref())
+        {
+            return Err(invalid(
+                "Choose a destination outside the folder being copied.",
             ));
         }
-        sqlx::query(
-            "SELECT id FROM organization_files WHERE organization_id=$1 AND id=$2 FOR UPDATE",
-        )
-        .bind(&org)
-        .bind(&copy.id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !source.is_folder {
-            storage
-                .0
-                .copy(&key(&org, &source.id), &key(&org, &copy.id))
-                .await
-                .map_err(|_| unavailable())?;
+        let mut ids = std::collections::HashMap::new();
+        let mut copies: Vec<File> = Vec::new();
+        for entry in &entries {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            let parent = if entry.id == id {
+                input.parent_id.clone()
+            } else {
+                entry.parent_id.as_ref().and_then(|p| ids.get(p)).cloned()
+            };
+            let copy = sqlx::query_as("INSERT INTO organization_files(organization_id,id,name,size,parent_id,is_folder) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,size,created_at,parent_id,is_folder")
+            .bind(&org).bind(&new_id).bind(&entry.name).bind(entry.size).bind(parent).bind(entry.is_folder).fetch_one(&mut *tx).await?;
+            ids.insert(entry.id.clone(), new_id);
+            copies.push(copy);
         }
-        sqlx::query("UPDATE organization_files SET ready=true WHERE organization_id=$1 AND id=$2")
+        // Retain unpublished keys for cleanup if S3 copying is interrupted.
+        tx.commit().await?;
+        // Bound provider requests without occupying database connections. Pending
+        // keys survive cancellation and are reclaimed by the existing cleanup loop.
+        let objects: Vec<_> = entries
+            .iter()
+            .zip(&copies)
+            .filter(|(source, _)| !source.is_folder)
+            .map(|(source, copy)| (key(&org, &source.id), key(&org, &copy.id)))
+            .collect();
+        stream::iter(objects)
+            .map(|(source_key, copy_key)| async move {
+                storage
+                    .0
+                    .copy(&source_key, &copy_key)
+                    .await
+                    .map_err(|_| unavailable())
+            })
+            .buffer_unordered(4)
+            .try_collect::<Vec<_>>()
+            .await?;
+        // Reauthorize and revalidate after storage I/O before publishing atomically.
+        let (mut tx, org) = authorized(&pool, &auth, &session, &headers).await?;
+        destination(&mut tx, &org, input.parent_id.as_deref()).await?;
+        for (source, copy) in entries.iter().zip(&copies) {
+            let ready: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organization_files WHERE organization_id=$1 AND id=$2 AND ready)")
+            .bind(&org).bind(&source.id).fetch_one(&mut *tx).await?;
+            if !ready {
+                return Err(ApiError(
+                    StatusCode::CONFLICT,
+                    "The source changed. Refresh and try again.",
+                ));
+            }
+            sqlx::query(
+                "SELECT id FROM organization_files WHERE organization_id=$1 AND id=$2 FOR UPDATE",
+            )
+            .bind(&org)
+            .bind(&copy.id)
+            .fetch_one(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE organization_files SET ready=true WHERE organization_id=$1 AND id=$2",
+            )
             .bind(&org)
             .bind(&copy.id)
             .execute(&mut *tx)
             .await?;
-    }
-    tx.commit().await?;
-    Ok(Json(copies))
+        }
+        tx.commit().await?;
+        Ok(Json(copies))
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(45), operation)
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::REQUEST_TIMEOUT,
+                "Copy timed out. Try copying fewer files at once.",
+            )
+        })?
 }
 
 #[derive(Deserialize)]

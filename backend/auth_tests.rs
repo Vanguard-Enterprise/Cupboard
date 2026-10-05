@@ -2202,3 +2202,163 @@ async fn paused_private_and_public_downloads_release_database_connections_and_or
     }
     server.abort();
 }
+
+#[tokio::test]
+async fn copying_folders_releases_database_and_publishes_only_into_existing_destinations() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    let (started, mut requests) = mpsc::channel(8);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(axum::routing::put(move || {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            started.send(()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            ([(header::CONTENT_TYPE, "application/xml")],
+             "<CopyObjectResult><LastModified>2026-10-04T00:00:00.000Z</LastModified><ETag>\"copied\"</ETag></CopyObjectResult>")
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "parallel-copy-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap().to_owned();
+    let source = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Source',0,true,true)")
+        .bind(&org).bind(&source).execute(&pool).await.unwrap();
+    for index in 0..5 {
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,parent_id,ready) VALUES($1,$2,$3,4,$4,true)")
+            .bind(&org).bind(uuid::Uuid::new_v4().to_string()).bind(format!("file-{index}.txt"))
+            .bind(&source).execute(&pool).await.unwrap();
+    }
+    for delete_destination in [false, true] {
+        let destination = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Destination',0,true,true)")
+            .bind(&org).bind(&destination).execute(&pool).await.unwrap();
+        let copier = Client {
+            app: app.clone(),
+            cookie: owner.cookie.clone(),
+        };
+        let copy_org = org.clone();
+        let copy_source = source.clone();
+        let copy_destination = destination.clone();
+        let copy = tokio::spawn(async move {
+            copier
+                .file_action(
+                    &format!("files/{copy_source}/copy"),
+                    &copy_org,
+                    json!({"parentId":copy_destination}),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            for _ in 0..4 {
+                assert!(requests.recv().await.is_some());
+            }
+        })
+        .await
+        .expect("four object copies should run concurrently");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), requests.recv())
+                .await
+                .is_err(),
+            "copy concurrency must be bounded to four"
+        );
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(
+                tokio::time::timeout(Duration::from_secs(2), pool.acquire())
+                    .await
+                    .expect("copying objects must release all database connections")
+                    .unwrap(),
+            );
+        }
+        sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(&org)
+            .execute(&mut *connections[0])
+            .await
+            .expect("copying objects must release the organization lock");
+        drop(connections);
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND NOT ready",
+        )
+        .bind(&org)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            pending, 6,
+            "the entire copy stays unpublished during storage I/O"
+        );
+        if delete_destination {
+            let (status, _) = owner
+                .file_action(&format!("files/{destination}/delete"), &org, json!({}))
+                .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        release.add_permits(4);
+        tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        release.add_permits(1);
+        let (status, result) = tokio::time::timeout(Duration::from_secs(2), copy)
+            .await
+            .unwrap()
+            .unwrap();
+        let pending_after: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND NOT ready",
+        )
+        .bind(&org)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if delete_destination {
+            assert_eq!(status, StatusCode::NOT_FOUND, "{result}");
+            assert_eq!(
+                pending_after, 6,
+                "a removed destination must not publish copies at root"
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{result}");
+            assert_eq!(result.as_array().unwrap().len(), 6);
+            assert_eq!(pending_after, 0);
+        }
+    }
+    server.abort();
+}
