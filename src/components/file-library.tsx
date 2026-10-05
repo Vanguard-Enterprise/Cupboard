@@ -610,8 +610,8 @@ export function FileLibrary({ identity }: { identity: Identity }) {
   }
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-5 p-4 max-[360px]:px-3 md:p-6">
-      <div className="grid grid-cols-[auto_1fr] items-center gap-x-1 gap-y-5 md:flex md:flex-wrap md:justify-between md:gap-x-4">
-        <div className={cn("col-span-2 min-w-0", !folder && "max-md:sr-only")}>
+      <div className="flex min-w-0 flex-col gap-5">
+        <div className={cn("min-w-0", !folder && "max-md:sr-only")}>
           {folder ? (
             <nav
               aria-label="Folder path"
@@ -642,33 +642,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
           )}
         </div>
         {allowed && (
-          <div className="flex items-center gap-1 md:gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              className="size-11 md:size-10"
-              aria-label="New folder"
-              title="New folder"
-              disabled={disabled || files === null}
-              onClick={() => startName()}
-            >
-              <FolderPlusIcon />
-            </Button>
-            <Button
-              size="icon"
-              className="size-11 shrink-0 md:size-10"
-              aria-label="Upload file"
-              title="Upload file"
-              ref={uploadTrigger}
-              onClick={openUpload}
-              disabled={disabled || files === null}
-            >
-              <UploadIcon />
-            </Button>
-          </div>
-        )}
-        {allowed && (
-          <div className="flex min-w-0 items-center justify-end gap-1 md:basis-full md:gap-2">
+          <div className="flex min-w-0 items-center gap-1 md:gap-2">
             <Popover open={searchOpen} onOpenChange={setSearchOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -676,7 +650,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   variant="outline"
                   size="icon"
                   className={cn(
-                    "relative size-11 md:hidden",
+                    "relative mr-auto size-11 md:hidden",
                     query && "border-primary text-primary",
                   )}
                   aria-label="Open file search"
@@ -850,7 +824,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 aria-label="File view"
               >
                 <ToggleGroupItem
-                  className="size-11 md:size-9"
+                  className="size-11"
                   value="list"
                   aria-label="List view"
                   title="List view"
@@ -858,7 +832,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   <ListIcon />
                 </ToggleGroupItem>
                 <ToggleGroupItem
-                  className="size-11 md:size-9"
+                  className="size-11"
                   value="grid"
                   aria-label="Grid view"
                   title="Grid view"
@@ -867,6 +841,28 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 </ToggleGroupItem>
               </ToggleGroup>
             </div>
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-11"
+              aria-label="New folder"
+              title="New folder"
+              disabled={disabled || files === null}
+              onClick={() => startName()}
+            >
+              <FolderPlusIcon />
+            </Button>
+            <Button
+              size="icon"
+              className="size-11 shrink-0"
+              aria-label="Upload file"
+              title="Upload file"
+              ref={uploadTrigger}
+              onClick={openUpload}
+              disabled={disabled || files === null}
+            >
+              <UploadIcon />
+            </Button>
           </div>
         )}
       </div>

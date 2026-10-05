@@ -112,7 +112,7 @@ export function Workspace({
     pathname === filesPath
       ? {
           activeSection: "file-library",
-          crumbs: ["Operations", "File store", "Shared library"],
+          crumbs: ["Files"],
         }
       : pathname === serversPath
         ? {

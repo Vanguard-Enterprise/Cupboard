@@ -288,8 +288,9 @@ Before finishing a user-facing change, check that:
 The file library follows Google Drive's compact list/grid switching and selected
 file toolbar, adapted to Cupboard's charcoal and sage tokens. Search and filtering
 sit above the content, with file type and sort options in one menu beside search.
-Place icon-only New folder beside Upload file in the page header, with accessible
-names and tooltips. Filters is also icon-only. Below the medium breakpoint, hide
+Order the toolbar as Search, flexible space, Filters, list/grid view, New folder,
+and Upload file. Use icon-only action buttons with accessible names and tooltips.
+The file library breadcrumbs are Dashboard > Files. Below the medium breakpoint, hide
 the root Files heading visually and put search in a labeled popover opened by a
 44-pixel search button. Put all six mobile toolbar controls in one row with matching
 44-pixel targets. Keep folder navigation available. The folder dialog accepts
