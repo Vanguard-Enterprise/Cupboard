@@ -1458,3 +1458,1136 @@ async fn health_monitor_persists_observations_and_respects_freshness_and_tenant_
         StatusCode::FORBIDDEN
     );
 }
+
+impl Client {
+    async fn file_json(&self, path: &str, org: &str, body: Value) -> axum::response::Response {
+        self.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/app-api/{path}"))
+                    .header("origin", "http://localhost:5173")
+                    .header("x-cupboard-request", "1")
+                    .header("x-cupboard-organization", org)
+                    .header("content-type", "application/json")
+                    .header("cookie", &self.cookie)
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+    async fn file_action(&self, path: &str, org: &str, body: Value) -> (StatusCode, Value) {
+        let response = self.file_json(path, org, body).await;
+        let status = response.status();
+        let value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap())
+            .unwrap();
+        (status, value)
+    }
+    async fn file_request(
+        &self,
+        method: &str,
+        path: &str,
+        org: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> axum::response::Response {
+        self.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(format!("/app-api/{path}"))
+                    .header("origin", "http://localhost:5173")
+                    .header("x-cupboard-request", "1")
+                    .header("x-cupboard-organization", org)
+                    .header("x-cupboard-filename", name)
+                    .header("content-type", "application/octet-stream")
+                    .header("cookie", &self.cookie)
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloads() {
+    use crate::storage::FileStore;
+    use object_store::{ObjectStoreExt, aws::AmazonS3Builder};
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let endpoint =
+        std::env::var("CUPBOARD_TEST_S3_ENDPOINT").expect("Use npm run check to start isolated S3");
+    let storage = FileStore(std::sync::Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(&endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("cupboard-test")
+            .with_secret_access_key("cupboard-storage-test-only")
+            .build()
+            .unwrap(),
+    ));
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner.signup(&format!("files-{suffix}@example.com")).await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("files-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap();
+    let other_identity = other.request("GET", "auth/me", json!(null)).await.1;
+    let other_org = other_identity["organization"]["id"].as_str().unwrap();
+    let anonymous = Client::new(&app);
+    assert_eq!(
+        anonymous
+            .file_request("GET", "files", org, "", vec![])
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        owner
+            .file_request("POST", "files", other_org, "wrong.txt", vec![1])
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    for name in [
+        "..",
+        "%2Fetc%2Fpasswd",
+        "bad%0D%0Aheader",
+        "%FF",
+        "path%5Cname",
+    ] {
+        assert_eq!(
+            owner
+                .file_request("POST", "files", org, name, vec![1])
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        owner
+            .file_request(
+                "POST",
+                "files",
+                org,
+                "large.bin",
+                vec![0; crate::files::MAX_FILE_SIZE + 1]
+            )
+            .await
+            .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    // Larger than the ordinary JSON request limit; includes binary and active HTML content.
+    let content = [
+        b"<script>alert('download only')</script>".to_vec(),
+        vec![0xff; 70_000],
+    ]
+    .concat();
+    let response = owner
+        .file_request("POST", "files", org, "caf%C3%A9.html", content.clone())
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let file: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let id = file["id"].as_str().unwrap();
+    assert_eq!(file["name"], "café.html");
+    assert!(!file.to_string().contains("cupboard-storage-test-only"));
+    assert!(file.get("key").is_none());
+    let path = object_store::path::Path::from(format!("organizations/{org}/files/{id}"));
+    assert_eq!(
+        storage
+            .0
+            .get(&path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    // Cleanup must not remove a published file.
+    crate::files::remove(&pool, &storage, org, id)
+        .await
+        .unwrap();
+    assert!(storage.0.get(&path).await.is_ok());
+    // Rebuild the router to check the persisted session, metadata, and S3 bytes.
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let downloaded = owner
+        .file_request("GET", &format!("files/{id}"), org, "", vec![])
+        .await;
+    assert_eq!(downloaded.status(), StatusCode::OK);
+    assert_eq!(
+        downloaded.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert_eq!(downloaded.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(downloaded.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(
+        downloaded.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("filename*=UTF-8''caf%C3%A9%2Ehtml")
+    );
+    assert_eq!(
+        to_bytes(downloaded.into_body(), 100_000)
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    for (method, route) in [
+        ("GET", format!("files/{id}")),
+        ("POST", format!("files/{id}/delete")),
+    ] {
+        assert_eq!(
+            other
+                .file_request(method, &route, other_org, "", vec![])
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let list = other
+        .file_request("GET", "files", other_org, "", vec![])
+        .await;
+    assert_eq!(&to_bytes(list.into_body(), 4096).await.unwrap()[..], b"[]");
+    let (status, folder) = owner
+        .file_action("files/folders", org, json!({"name":"Configs"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let folder_id = folder[0]["id"].as_str().unwrap();
+    let (status, nested) = owner
+        .file_action(
+            "files/folders",
+            org,
+            json!({"name":"Nested","parentId":folder_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let nested_id = nested[0]["id"].as_str().unwrap();
+    let (status, reused) = owner
+        .file_action("files/folders", org, json!({"name":"Configs/Nested"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reused[0]["id"], folder_id);
+    assert_eq!(reused[1]["id"], nested_id);
+    let (status, tree) = owner
+        .file_action(
+            "files/folders",
+            org,
+            json!({"name":"plugins/custom","parentId":nested_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tree[0]["parentId"], nested_id);
+    assert_eq!(tree[1]["parentId"], tree[0]["id"]);
+    for path in [
+        "uncreated/../bad",
+        "uncreated//bad",
+        "/absolute",
+        "uncreated/",
+        "uncreated/.",
+    ] {
+        assert_eq!(
+            owner
+                .file_action("files/folders", org, json!({"name":path}))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let uncreated: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND name='uncreated'",
+    )
+    .bind(org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(uncreated, 0);
+    assert_eq!(
+        owner
+            .file_action("files/folders", org, json!({"name":"café.html/child"}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{}/delete", tree[0]["id"].as_str().unwrap()),
+                org,
+                json!({})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{id}/move"),
+                org,
+                json!({"parentId":nested_id})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{folder_id}/move"),
+                org,
+                json!({"parentId":nested_id})
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        owner
+            .file_action("files/folders", org, json!({"name":"../bad"}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        other
+            .file_action(
+                "files/folders",
+                other_org,
+                json!({"name":"Intruder","parentId":folder_id})
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    for (action, body) in [
+        ("rename", json!({"name":"stolen"})),
+        ("move", json!({"parentId":null})),
+        ("copy", json!({"parentId":null})),
+        ("share", json!({"days":7})),
+        ("share/revoke", json!({})),
+    ] {
+        assert_eq!(
+            other
+                .file_action(&format!("files/{id}/{action}"), other_org, body)
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        owner
+            .file_action(
+                &format!("files/{id}/rename"),
+                org,
+                json!({"name":"renamed.html"})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, copied) = owner
+        .file_action(
+            &format!("files/{folder_id}/copy"),
+            org,
+            json!({"parentId":null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let copies = copied.as_array().unwrap();
+    assert_eq!(copies.len(), 3);
+    let copied_file = copies.iter().find(|f| f["isFolder"] == false).unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let response = owner
+        .file_request("GET", &format!("files/{copied_file}"), org, "", vec![])
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    let copied_root = copies[0]["id"].as_str().unwrap();
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{copied_root}/delete"), org, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .file_request("GET", &format!("files/{copied_file}"), org, "", vec![])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let (status, share) = owner
+        .file_action(&format!("files/{id}/share"), org, json!({"days":7}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = share["token"].as_str().unwrap();
+    let stored: String = sqlx::query_scalar(
+        "SELECT token_hash FROM organization_file_shares WHERE organization_id=$1 AND file_id=$2",
+    )
+    .bind(org)
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(stored != token && stored == crate::auth::digest(token));
+    let response = anonymous
+        .file_json("public-files/download", "", json!({"token":token}))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        to_bytes(response.into_body(), 100_000)
+            .await
+            .unwrap()
+            .as_ref(),
+        content
+    );
+    let (_, replacement) = owner
+        .file_action(&format!("files/{id}/share"), org, json!({"days":1}))
+        .await;
+    assert_eq!(
+        anonymous
+            .file_json("public-files/download", "", json!({"token":token}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let token = replacement["token"].as_str().unwrap();
+    sqlx::query(
+        "UPDATE organization_file_shares SET expires_at=0 WHERE organization_id=$1 AND file_id=$2",
+    )
+    .bind(org)
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        anonymous
+            .file_json("public-files/download", "", json!({"token":token}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let (_, replacement) = owner
+        .file_action(&format!("files/{id}/share"), org, json!({"days":30}))
+        .await;
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{id}/share/revoke"), org, json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        anonymous
+            .file_json(
+                "public-files/download",
+                "",
+                json!({"token":replacement["token"]})
+            )
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{folder_id}/share"), org, json!({"days":7}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        owner
+            .file_action(&format!("files/{id}/share"), org, json!({"days":365}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    // An active member without organization management cannot read or mutate files.
+    let account = other_identity["user"]["id"].as_str().unwrap();
+    let member = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_members(organization_id,id,account_id,name,email,status) VALUES($1,$2,$3,'Member',$4,'active')")
+        .bind(org).bind(&member).bind(account).bind(format!("files-other-{suffix}@example.com")).execute(&pool).await.unwrap();
+    assert_eq!(
+        other
+            .request("POST", "auth/organization", json!({"id":org}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    for (method, route) in [
+        ("GET", "files".into()),
+        ("POST", "files".into()),
+        ("GET", format!("files/{id}")),
+        ("POST", format!("files/{id}/delete")),
+    ] {
+        assert_eq!(
+            other
+                .file_request(method, &route, org, "no.txt", vec![1])
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    for (route, body) in [
+        ("files/folders".to_owned(), json!({"name":"Forbidden"})),
+        (format!("files/{id}/rename"), json!({"name":"Forbidden"})),
+        (format!("files/{id}/copy"), json!({"parentId":null})),
+        (format!("files/{id}/move"), json!({"parentId":null})),
+        (format!("files/{id}/share"), json!({"days":7})),
+        (format!("files/{id}/share/revoke"), json!({})),
+    ] {
+        assert_eq!(
+            other.file_action(&route, org, body).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    sqlx::query("INSERT INTO organization_member_roles(organization_id,member_id,role_id) SELECT $1,$2,id FROM organization_roles WHERE organization_id=$1 AND name='Administrator'")
+        .bind(org).bind(&member).execute(&pool).await.unwrap();
+    assert_eq!(
+        other
+            .file_request("GET", "files", org, "", vec![])
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    sqlx::query(
+        "UPDATE organization_members SET status='suspended' WHERE organization_id=$1 AND id=$2",
+    )
+    .bind(org)
+    .bind(&member)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        other
+            .file_request("GET", "files", org, "", vec![])
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let response = owner
+        .file_request("POST", &format!("files/{id}/delete"), org, "", vec![])
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if matches!(
+                storage.0.get(&path).await,
+                Err(object_store::Error::NotFound { .. })
+            ) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("accepted deletion should eventually remove the stored object");
+    assert_eq!(
+        owner
+            .file_request("GET", &format!("files/{id}"), org, "", vec![])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Wrong provider credentials are redacted and leave a durable cleanup record.
+    let bad = FileStore(std::sync::Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("private-access-key")
+            .with_secret_access_key("private-secret-key")
+            .build()
+            .unwrap(),
+    ));
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(bad.clone()));
+    let failed = owner
+        .file_request("POST", "files", org, "failed.bin", vec![1])
+        .await;
+    assert_eq!(failed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let message = to_bytes(failed.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&message).unwrap()["error"],
+        "File storage is unavailable. Try again shortly."
+    );
+    let pending: String = sqlx::query_scalar(
+        "SELECT id FROM organization_files WHERE organization_id=$1 AND NOT ready",
+    )
+    .bind(org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Simulate a crash after S3 accepted bytes but before publication, then reclaim the record.
+    let pending_path =
+        object_store::path::Path::from(format!("organizations/{org}/files/{pending}"));
+    storage.0.put(&pending_path, vec![1].into()).await.unwrap();
+    assert!(
+        crate::files::remove(&pool, &bad, org, &pending)
+            .await
+            .is_err()
+    );
+    let retained: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organization_files WHERE organization_id=$1 AND id=$2 AND NOT ready)").bind(org).bind(&pending).fetch_one(&pool).await.unwrap();
+    assert!(retained);
+    crate::files::remove(&pool, &storage, org, &pending)
+        .await
+        .unwrap();
+    assert!(matches!(
+        storage.0.get(&pending_path).await,
+        Err(object_store::Error::NotFound { .. })
+    ));
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn paused_private_and_public_downloads_release_database_connections_and_org_locks() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    let (started, mut requests) = mpsc::channel(2);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(axum::routing::get(move || {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            started.send(()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            (
+                [
+                    (header::CONTENT_LENGTH, "4"),
+                    (header::LAST_MODIFIED, "Sun, 04 Oct 2026 00:00:00 GMT"),
+                    (header::ETAG, "\"test-object\""),
+                ],
+                "data",
+            )
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "parallel-files-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap().to_owned();
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,ready) VALUES($1,$2,'image.png',4,true)")
+        .bind(&org).bind(&id).execute(&pool).await.unwrap();
+    let (status, share) = owner
+        .file_action(&format!("files/{id}/share"), &org, json!({"days":1}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = share["token"].as_str().unwrap().to_owned();
+    let download_org = org.clone();
+    let private = tokio::spawn(async move {
+        owner
+            .file_request("GET", &format!("files/{id}"), &download_org, "", vec![])
+            .await
+    });
+    let anonymous = Client::new(&app);
+    let public = tokio::spawn(async move {
+        anonymous
+            .file_json("public-files/download", "", json!({"token":token}))
+            .await
+    });
+
+    // Both transfers must reach storage before either is allowed to finish.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        assert!(requests.recv().await.is_some());
+        assert!(requests.recv().await.is_some());
+    })
+    .await
+    .expect("downloads must not serialize behind an organization lock");
+    // All five pool connections remain available while the object store is paused.
+    let mut connections = Vec::new();
+    for _ in 0..5 {
+        connections.push(
+            tokio::time::timeout(Duration::from_secs(2), pool.acquire())
+                .await
+                .expect("S3 transfers must not hold database connections")
+                .unwrap(),
+        );
+    }
+    sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+        .bind(&org)
+        .execute(&mut *connections[0])
+        .await
+        .expect("S3 transfers must not hold the organization lock");
+    drop(connections);
+    release.add_permits(2);
+    for task in [private, public] {
+        let response = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 100).await.unwrap().as_ref(),
+            b"data"
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn copying_folders_releases_database_and_publishes_only_into_existing_destinations() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    let (started, mut requests) = mpsc::channel(8);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(axum::routing::put(move || {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            started.send(()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            ([(header::CONTENT_TYPE, "application/xml")],
+             "<CopyObjectResult><LastModified>2026-10-04T00:00:00.000Z</LastModified><ETag>\"copied\"</ETag></CopyObjectResult>")
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "parallel-copy-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap().to_owned();
+    let source = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Source',0,true,true)")
+        .bind(&org).bind(&source).execute(&pool).await.unwrap();
+    for index in 0..5 {
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,parent_id,ready) VALUES($1,$2,$3,4,$4,true)")
+            .bind(&org).bind(uuid::Uuid::new_v4().to_string()).bind(format!("file-{index}.txt"))
+            .bind(&source).execute(&pool).await.unwrap();
+    }
+    for delete_destination in [false, true] {
+        let destination = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Destination',0,true,true)")
+            .bind(&org).bind(&destination).execute(&pool).await.unwrap();
+        let copier = Client {
+            app: app.clone(),
+            cookie: owner.cookie.clone(),
+        };
+        let copy_org = org.clone();
+        let copy_source = source.clone();
+        let copy_destination = destination.clone();
+        let copy = tokio::spawn(async move {
+            copier
+                .file_action(
+                    &format!("files/{copy_source}/copy"),
+                    &copy_org,
+                    json!({"parentId":copy_destination}),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            for _ in 0..4 {
+                assert!(requests.recv().await.is_some());
+            }
+        })
+        .await
+        .expect("four object copies should run concurrently");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), requests.recv())
+                .await
+                .is_err(),
+            "copy concurrency must be bounded to four"
+        );
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(
+                tokio::time::timeout(Duration::from_secs(2), pool.acquire())
+                    .await
+                    .expect("copying objects must release all database connections")
+                    .unwrap(),
+            );
+        }
+        sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(&org)
+            .execute(&mut *connections[0])
+            .await
+            .expect("copying objects must release the organization lock");
+        drop(connections);
+        let pending: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM organization_files WHERE organization_id=$1 AND NOT ready",
+        )
+        .bind(&org)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            pending.len(),
+            6,
+            "the entire copy stays unpublished during storage I/O"
+        );
+        if delete_destination {
+            let (status, _) = owner
+                .file_action(&format!("files/{destination}/delete"), &org, json!({}))
+                .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        release.add_permits(4);
+        tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        release.add_permits(1);
+        let (status, result) = tokio::time::timeout(Duration::from_secs(2), copy)
+            .await
+            .unwrap()
+            .unwrap();
+        let pending_after: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND id=ANY($2) AND NOT ready",
+        )
+        .bind(&org)
+        .bind(&pending)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        if delete_destination {
+            assert_eq!(status, StatusCode::NOT_FOUND, "{result}");
+            assert_eq!(
+                pending_after, 6,
+                "a removed destination must not publish copies at root"
+            );
+        } else {
+            assert_eq!(status, StatusCode::OK, "{result}");
+            assert_eq!(result.as_array().unwrap().len(), 6);
+            assert_eq!(pending_after, 0);
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn uploads_and_recursive_deletion_release_database_during_storage_io() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    async fn assert_database_available(pool: &sqlx::PgPool, org: &str) {
+        let mut connections = Vec::new();
+        for _ in 0..5 {
+            connections.push(
+                tokio::time::timeout(Duration::from_secs(2), pool.acquire())
+                    .await
+                    .expect("storage I/O must release database connections")
+                    .unwrap(),
+            );
+        }
+        sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+            .bind(org)
+            .execute(&mut *connections[0])
+            .await
+            .expect("storage I/O must release the organization lock");
+    }
+    let (started, mut requests) = mpsc::channel(16);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(move |request: Request<Body>| {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            let method = request.method().clone();
+            let is_delete = method == axum::http::Method::POST;
+            if is_delete {
+                assert_eq!(request.uri().query(), Some("delete"));
+            }
+            let body = to_bytes(request.into_body(), 1024).await.unwrap();
+            let response = if is_delete {
+                // object_store uses S3 DeleteObjects even for one key.
+                let xml = std::str::from_utf8(&body).unwrap();
+                let key = xml
+                    .split_once("<Key>")
+                    .unwrap()
+                    .1
+                    .split_once("</Key>")
+                    .unwrap()
+                    .0;
+                format!("<DeleteResult><Deleted><Key>{key}</Key></Deleted></DeleteResult>")
+            } else {
+                String::new()
+            };
+            started.send(method.clone()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            (
+                StatusCode::OK,
+                [
+                    (header::ETAG, "\"stored\""),
+                    (header::CONTENT_TYPE, "application/xml"),
+                ],
+                response,
+            )
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "upload-cleanup-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap().to_owned();
+
+    for delete_destination in [false, true] {
+        let destination = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Uploads',0,true,true)")
+            .bind(&org).bind(&destination).execute(&pool).await.unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri("/app-api/files")
+            .header("origin", "http://localhost:5173")
+            .header("x-cupboard-request", "1")
+            .header("x-cupboard-organization", &org)
+            .header("x-cupboard-folder", &destination)
+            .header("x-cupboard-filename", "uploaded.txt")
+            .header("content-type", "application/octet-stream")
+            .header("cookie", &owner.cookie)
+            .body(Body::from("data"))
+            .unwrap();
+        let upload = tokio::spawn(app.clone().oneshot(request));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), requests.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            axum::http::Method::PUT
+        );
+        assert_database_available(&pool, &org).await;
+        let pending_id: String = sqlx::query_scalar("SELECT id FROM organization_files WHERE organization_id=$1 AND parent_id=$2 AND NOT ready")
+            .bind(&org).bind(&destination).fetch_one(&pool).await.unwrap();
+        if delete_destination {
+            assert_eq!(
+                owner
+                    .file_action(&format!("files/{destination}/delete"), &org, json!({}))
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+        }
+        release.add_permits(1);
+        let response = tokio::time::timeout(Duration::from_secs(2), upload)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if delete_destination {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            }
+        );
+        let ready: bool = sqlx::query_scalar(
+            "SELECT ready FROM organization_files WHERE organization_id=$1 AND id=$2",
+        )
+        .bind(&org)
+        .bind(&pending_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ready, !delete_destination);
+    }
+
+    let folder = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Delete tree',0,true,true)")
+        .bind(&org).bind(&folder).execute(&pool).await.unwrap();
+    let mut ids = vec![folder.clone()];
+    for index in 0..5 {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,parent_id,ready) VALUES($1,$2,$3,4,$4,true)")
+            .bind(&org).bind(&id).bind(format!("delete-{index}.txt")).bind(&folder).execute(&pool).await.unwrap();
+        ids.push(id);
+    }
+    let (status, _) = tokio::time::timeout(
+        Duration::from_secs(2),
+        owner.file_action(&format!("files/{folder}/delete"), &org, json!({})),
+    )
+    .await
+    .expect("logical deletion must complete before physical object deletion");
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        axum::http::Method::POST
+    );
+    assert_database_available(&pool, &org).await;
+    let ready: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND id=ANY($2) AND ready",
+    )
+    .bind(&org)
+    .bind(&ids)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ready, 0,
+        "the full deleted tree must be durably hidden before responding"
+    );
+    release.add_permits(5);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let remaining: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM organization_files WHERE organization_id=$1 AND id=ANY($2)",
+            )
+            .bind(&org)
+            .bind(&ids)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            if remaining == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("background deletion should eventually reclaim every file and folder");
+    server.abort();
+}

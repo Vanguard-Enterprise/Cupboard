@@ -244,6 +244,7 @@ export const dashboardNavigation = [
   },
 ];
 
+export const filesPath = "/dashboard/files";
 export const serversPath = "/dashboard/servers";
 export const profilePath = "/dashboard/organization/settings/profile";
 export const usagePath = "/dashboard/organization/settings/usage";
@@ -260,6 +261,7 @@ export const usersPath = "/dashboard/organization/team/users";
 export const rolesPath = "/dashboard/organization/team/roles";
 
 export function navigationHref(id: string): string | undefined {
+  if (id === "file-library") return filesPath;
   if (id === "servers") return serversPath;
   if (id === "connections") return connectionsPath;
   if (id === "organization") return profilePath;

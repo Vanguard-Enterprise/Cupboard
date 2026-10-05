@@ -1,11 +1,15 @@
+import {
+  backendSessionCookieName,
+  browserSessionCookieName,
+} from "./session-cookie";
 import { cookies } from "next/headers";
 import { backendUrl } from "./api-proxy";
 import type { Identity } from "./api-client";
 export async function getIdentity(): Promise<Identity | null> {
-  const session = (await cookies()).get("cupboard_session")?.value;
+  const session = (await cookies()).get(browserSessionCookieName())?.value;
   if (!session) return null;
   const response = await fetch(backendUrl("auth/me"), {
-    headers: { cookie: `cupboard_session=${session}` },
+    headers: { cookie: `${backendSessionCookieName}=${session}` },
     cache: "no-store",
     signal: AbortSignal.timeout(5000),
   });

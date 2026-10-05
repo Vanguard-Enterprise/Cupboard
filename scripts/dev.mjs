@@ -46,6 +46,10 @@ export function createDevServerConfig(interfaces, port = "5173", statusJson) {
   };
 }
 
+export function developmentSessionCookieName(project) {
+  return `cupboard_session_${project.replaceAll("-", "_")}`;
+}
+
 export function createNextDevArgs({ hostname, port }) {
   return [
     "./node_modules/next/dist/bin/next",
@@ -140,6 +144,45 @@ async function start() {
         );
     }
     if (stopping) return;
+    let storageEnv = {};
+    if (!process.env.CUPBOARD_S3_BUCKET) {
+      if (
+        Object.keys(process.env).some(
+          (key) =>
+            key.startsWith("CUPBOARD_S3_") &&
+            key !== "CUPBOARD_S3_PORT" &&
+            key !== "CUPBOARD_S3_BUCKET",
+        )
+      )
+        throw new Error(
+          "Set CUPBOARD_S3_BUCKET to use external storage, or remove the partial S3 configuration.",
+        );
+      await processes.run("docker", [
+        ...compose,
+        "up",
+        "--detach",
+        "--wait",
+        "--wait-timeout",
+        "90",
+        "storage",
+      ]);
+      if (stopping) return;
+      const port = databasePort(
+        execFileSync("docker", [...compose, "port", "storage", "8333"], {
+          encoding: "utf8",
+          timeout: 10000,
+        }),
+      );
+      storageEnv = {
+        CUPBOARD_S3_BUCKET: "cupboard",
+        CUPBOARD_S3_ENDPOINT: `http://127.0.0.1:${port}`,
+        CUPBOARD_S3_ALLOW_HTTP: "1",
+        AWS_REGION: "us-east-1",
+        AWS_ACCESS_KEY_ID: "cupboard-local",
+        AWS_SECRET_ACCESS_KEY: "cupboard-storage-local-only",
+        AWS_SESSION_TOKEN: "",
+      };
+    }
     let secretKey = process.env.CUPBOARD_SECRET_KEY;
     if (!secretKey) {
       const keyPath = ".dev-stack/secret-key";
@@ -153,7 +196,11 @@ async function start() {
     }
     const env = {
       ...process.env,
+      ...storageEnv,
       CUPBOARD_SECRET_KEY: secretKey,
+      CUPBOARD_SESSION_COOKIE_NAME: developmentSessionCookieName(
+        workspace.project,
+      ),
       DATABASE_URL:
         process.env.DATABASE_URL ||
         `postgres://cupboard:cupboard-local-only@127.0.0.1:${localDatabasePort}/cupboard`,

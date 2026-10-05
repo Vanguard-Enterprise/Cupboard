@@ -30,6 +30,7 @@ import {
   profilePath,
   rolesPath,
   serversPath,
+  filesPath,
   securityAlertsPath,
   usagePath,
   usersPath,
@@ -108,12 +109,17 @@ export function Workspace({
           }
         : undefined;
   const serverPage =
-    pathname === serversPath
+    pathname === filesPath
       ? {
-          activeSection: "servers",
-          crumbs: ["Operations", "Game servers", "Server inventory"],
+          activeSection: "file-library",
+          crumbs: ["Files"],
         }
-      : undefined;
+      : pathname === serversPath
+        ? {
+            activeSection: "servers",
+            crumbs: ["Operations", "Game servers", "Server inventory"],
+          }
+        : undefined;
   const page = identity.organization
     ? (serverPage ?? currentPage ?? teamPage)
     : undefined;
