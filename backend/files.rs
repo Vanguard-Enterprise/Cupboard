@@ -203,8 +203,10 @@ async fn download(
     if file.is_folder {
         return Err(invalid("Open the folder to download its files."));
     }
-    let bytes = file_bytes(store(&storage)?, &org, &file).await?;
+    // Authorization applies when the request is admitted. Do not retain database
+    // connections or locks while downloading immutable object bytes from S3.
     tx.commit().await?;
+    let bytes = file_bytes(store(&storage)?, &org, &file).await?;
     attachment(&file, bytes)
 }
 async fn file_bytes(storage: &FileStore, org: &str, file: &File) -> ApiResult<axum::body::Bytes> {
@@ -594,7 +596,9 @@ async fn public_download(
 
     let file: File = sqlx::query_as("SELECT id,name,size,created_at,parent_id,is_folder FROM organization_files WHERE organization_id=$1 AND id=$2 AND ready AND NOT is_folder FOR SHARE")
         .bind(&org).bind(id).fetch_optional(&mut *tx).await?.ok_or_else(missing)?;
-    let bytes = file_bytes(store(&storage)?, &org, &file).await?;
+    // Authorization applies when the request is admitted. Do not retain database
+    // connections or locks while downloading immutable object bytes from S3.
     tx.commit().await?;
+    let bytes = file_bytes(store(&storage)?, &org, &file).await?;
     attachment(&file, bytes)
 }

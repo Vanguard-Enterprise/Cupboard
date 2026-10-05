@@ -2082,3 +2082,123 @@ async fn files_persist_in_s3_and_enforce_membership_permissions_and_safe_downloa
     ));
     pool.close().await;
 }
+
+#[tokio::test]
+async fn paused_private_and_public_downloads_release_database_connections_and_org_locks() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::{Semaphore, mpsc};
+
+    let (started, mut requests) = mpsc::channel(2);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(axum::routing::get(move || {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            started.send(()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            (
+                [
+                    (header::CONTENT_LENGTH, "4"),
+                    (header::LAST_MODIFIED, "Sun, 04 Oct 2026 00:00:00 GMT"),
+                    (header::ETAG, "\"test-object\""),
+                ],
+                "data",
+            )
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "parallel-files-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let identity = owner.request("GET", "auth/me", json!(null)).await.1;
+    let org = identity["organization"]["id"].as_str().unwrap().to_owned();
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,ready) VALUES($1,$2,'image.png',4,true)")
+        .bind(&org).bind(&id).execute(&pool).await.unwrap();
+    let (status, share) = owner
+        .file_action(&format!("files/{id}/share"), &org, json!({"days":1}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = share["token"].as_str().unwrap().to_owned();
+    let download_org = org.clone();
+    let private = tokio::spawn(async move {
+        owner
+            .file_request("GET", &format!("files/{id}"), &download_org, "", vec![])
+            .await
+    });
+    let anonymous = Client::new(&app);
+    let public = tokio::spawn(async move {
+        anonymous
+            .file_json("public-files/download", "", json!({"token":token}))
+            .await
+    });
+
+    // Both transfers must reach storage before either is allowed to finish.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        assert!(requests.recv().await.is_some());
+        assert!(requests.recv().await.is_some());
+    })
+    .await
+    .expect("downloads must not serialize behind an organization lock");
+    // All five pool connections remain available while the object store is paused.
+    let mut connections = Vec::new();
+    for _ in 0..5 {
+        connections.push(
+            tokio::time::timeout(Duration::from_secs(2), pool.acquire())
+                .await
+                .expect("S3 transfers must not hold database connections")
+                .unwrap(),
+        );
+    }
+    sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+        .bind(&org)
+        .execute(&mut *connections[0])
+        .await
+        .expect("S3 transfers must not hold the organization lock");
+    drop(connections);
+    release.add_permits(2);
+    for task in [private, public] {
+        let response = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(response.into_body(), 100).await.unwrap().as_ref(),
+            b"data"
+        );
+    }
+    server.abort();
+}
