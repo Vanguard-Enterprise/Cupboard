@@ -253,17 +253,18 @@ add generic game art, stock photography, or decorative server illustrations.
 Authentication and onboarding may use one subdued image or texture under a dark
 overlay. It must not compete with the task.
 
-The login page follows the Ferndesk reference's composition: a compact form and
-wordmark grouped in the left column, with full-height artwork on the right.
+The login and signup pages share `src/components/auth-layout.tsx` and follow the
+Ferndesk reference's composition: a compact form and wordmark grouped in the left
+column, with full-height artwork on the right.
 Cupboard keeps its charcoal form and sage action color. The artwork depicts a
 coastal Rust base with a tool cupboard and server operator station in pixel art.
 It is decorative, has a light dark overlay, and is hidden below the desktop
 breakpoint so the form remains the focus on smaller screens.
 
 The selected Cupboard mark is the sage C-shaped cabinet with two server shelves
-from logo concept v3. The login wordmark and favicon use this mark, with
+from logo concept v3. The authentication wordmark and favicon use this mark, with
 transparent negative space and no enclosing tile. The source concept lives in
-`output/imagegen/cupboard-logo-v3.png`; the login asset is
+`output/imagegen/cupboard-logo-v3.png`; the authentication asset is
 `public/images/cupboard-logo.png`. Existing letter tiles elsewhere can migrate
 to this mark when their interface is updated. Do not invent competing marks.
 

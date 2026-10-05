@@ -67,20 +67,12 @@ export function AccountForm({
     >
       <FieldGroup>
         <div className="space-y-2">
-          <h1
-            className={
-              signup
-                ? "text-center text-2xl font-bold"
-                : "text-2xl font-semibold tracking-tight"
-            }
-          >
+          <h1 className="text-2xl font-semibold tracking-tight">
             {signup ? "Create an account" : "Sign in to Cupboard"}
           </h1>
-          {!signup && (
-            <p className="text-sm text-muted-foreground">
-              Manage your Rust servers.
-            </p>
-          )}
+          <p className="text-sm text-muted-foreground">
+            Manage your Rust servers.
+          </p>
         </div>
         {error && (
           <Alert variant="destructive">
@@ -93,6 +85,7 @@ export function AccountForm({
               <FieldLabel htmlFor="name">Name</FieldLabel>
               <Input
                 id="name"
+                className="h-11"
                 name="name"
                 autoComplete="name"
                 required
@@ -105,7 +98,7 @@ export function AccountForm({
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
             id="email"
-            className={signup ? undefined : "h-11"}
+            className="h-11"
             name="email"
             type="email"
             autoComplete="email"
@@ -117,7 +110,7 @@ export function AccountForm({
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
             id="password"
-            className={signup ? undefined : "h-11"}
+            className="h-11"
             name="password"
             type="password"
             autoComplete={signup ? "new-password" : "current-password"}
@@ -132,6 +125,7 @@ export function AccountForm({
             <FieldLabel htmlFor="confirm-password">Confirm password</FieldLabel>
             <Input
               id="confirm-password"
+              className="h-11"
               name="confirm-password"
               type="password"
               autoComplete="new-password"
@@ -140,11 +134,7 @@ export function AccountForm({
           </Field>
         )}
         <Field>
-          <Button
-            type="submit"
-            disabled={busy}
-            className={signup ? undefined : "h-11"}
-          >
+          <Button type="submit" disabled={busy} className="h-11">
             {busy
               ? signup
                 ? "Creating account..."
@@ -154,7 +144,7 @@ export function AccountForm({
                 : "Sign in"}
           </Button>
         </Field>
-        <FieldDescription className={signup ? "text-center" : "text-left"}>
+        <FieldDescription className="text-left">
           {signup ? "Already have an account? " : "New to Cupboard? "}
           <Link
             href={signup ? "/login" : "/signup"}
