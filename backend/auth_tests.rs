@@ -1087,7 +1087,7 @@ async fn role_migration_preserves_existing_memberships() {
             ("viewer".into(), false)
         ]
     );
-    sqlx::raw_sql(include_str!("migrations/202610040003_machines.sql"))
+    sqlx::raw_sql(include_str!("migrations/202610040006_machines.sql"))
         .execute(&mut *tx)
         .await
         .unwrap();
