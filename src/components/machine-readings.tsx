@@ -114,7 +114,7 @@ export function MachineReadings({
       percent = health.cpuUsagePercent ?? null;
       description =
         percent === null
-          ? "Update the agent for CPU utilization. CPU load is available in machine details."
+          ? "Update the agent for CPU utilization. Open machine monitoring for the 1-minute load average."
           : `${percent.toFixed(1)}% CPU utilization across ${health.cpuCount} logical CPUs.`;
     } else {
       const total =

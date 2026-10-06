@@ -113,6 +113,11 @@ function matchesEditableRole(
 
 function PermissionBadges({ permissions }: { permissions: PermissionId[] }) {
   const labels = [
+    permissions.includes("infrastructure.manage")
+      ? "Infrastructure management"
+      : permissions.includes("infrastructure.view")
+        ? "Infrastructure viewing"
+        : null,
     permissions.includes("servers.manage")
       ? "Server management"
       : permissions.includes("servers.view")

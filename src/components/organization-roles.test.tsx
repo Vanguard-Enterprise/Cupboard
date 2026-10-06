@@ -304,3 +304,29 @@ it("moves focus to Roles when a refresh removes the inspected role", async () =>
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(heading));
 });
+
+it.each(["view", "manage", "both"] as const)(
+  "summarizes infrastructure-only roles with %s grants",
+  async (grant) => {
+    const role = api.state.team.roles.find((role) => role.name === "Operator")!;
+    role.permissions =
+      grant === "view"
+        ? ["infrastructure.view"]
+        : grant === "manage"
+          ? ["infrastructure.manage"]
+          : ["infrastructure.view", "infrastructure.manage"];
+    const label =
+      grant === "view" ? "Infrastructure viewing" : "Infrastructure management";
+    mount();
+    const trigger = within(await screen.findByRole("table")).getByRole(
+      "button",
+      {
+        name: "View Operator role",
+      },
+    );
+    const row = trigger.closest("tr")!;
+    expect(within(row).getByText(label)).not.toBeNull();
+    expect(within(row).queryByText("No permissions")).toBeNull();
+    expect(screen.getAllByText(label)).toHaveLength(2);
+  },
+);

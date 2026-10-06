@@ -120,7 +120,15 @@ it("does not invent history or CPU utilization for older agents", async () => {
     expect(screen.getAllByText("Waiting for history")).toHaveLength(2),
   );
   expect(
-    within(screen.getByRole("region", { name: "CPU" })).getByText("—"),
+    within(screen.getByRole("region", { name: "CPU" })).getByText("1.00 load"),
   ).not.toBeNull();
+  expect(
+    within(screen.getByRole("region", { name: "CPU" })).getByText(
+      "1-minute load average · 4 logical CPUs",
+    ),
+  ).not.toBeNull();
+  expect(
+    within(screen.getByRole("region", { name: "CPU" })).queryByText(/%/),
+  ).toBeNull();
   expect(screen.queryByText("View readings")).toBeNull();
 });

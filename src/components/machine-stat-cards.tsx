@@ -121,10 +121,12 @@ export function MachineStatCards({
                   <>
                     <p className="text-2xl font-semibold tabular-nums">
                       {health.cpuUsagePercent == null
-                        ? "—"
+                        ? health.loadOne.toFixed(2) + " load"
                         : health.cpuUsagePercent.toFixed(1) + "%"}
                     </p>
                     <p className="text-xs text-muted-foreground">
+                      {health.cpuUsagePercent == null &&
+                        "1-minute load average · "}
                       {health.cpuCount} logical CPUs
                     </p>
                   </>
