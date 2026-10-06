@@ -31,6 +31,7 @@ import {
   rolesPath,
   serversPath,
   machinesPath,
+  filesPath,
   securityAlertsPath,
   usagePath,
   usersPath,
@@ -109,12 +110,14 @@ export function Workspace({
           }
         : undefined;
   const serverPage =
-    pathname === serversPath
-      ? {
-          activeSection: "servers",
-          crumbs: ["Operations", "Game servers", "Server inventory"],
-        }
-      : undefined;
+    pathname === filesPath
+      ? { activeSection: "file-library", crumbs: ["Files"] }
+      : pathname === serversPath
+        ? {
+            activeSection: "servers",
+            crumbs: ["Operations", "Game servers", "Server inventory"],
+          }
+        : undefined;
   const machinePage =
     pathname === machinesPath || pathname === machinesPath + "/setup"
       ? {

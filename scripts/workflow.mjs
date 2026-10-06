@@ -181,6 +181,12 @@ if (
     if (command === "worktree") createWorktree(args);
     else if (command === "doctor") doctor();
     else if (command === "review") review(args[0]);
+    else if (command === "stop-storage")
+      execFileSync(
+        "docker",
+        ["compose", "--project-name", workspaceIdentity(), "stop", "storage"],
+        { stdio: "inherit" },
+      );
     else if (command === "stop-db")
       execFileSync(
         "docker",

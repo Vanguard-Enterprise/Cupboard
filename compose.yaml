@@ -14,6 +14,39 @@ services:
       interval: 1s
       timeout: 5s
       retries: 30
+  storage:
+    image: chrislusf/seaweedfs:4.48
+    command: ["mini", "-dir=/data", "-ip=127.0.0.1", "-ip.bind=0.0.0.0"]
+    environment:
+      AWS_ACCESS_KEY_ID: cupboard-local
+      AWS_SECRET_ACCESS_KEY: cupboard-storage-local-only
+      S3_BUCKET: cupboard
+    ports:
+      - "127.0.0.1:${CUPBOARD_S3_PORT:-0}:8333"
+    volumes:
+      - storage:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+  storage-test:
+    image: chrislusf/seaweedfs:4.48
+    profiles: ["test"]
+    command: ["mini", "-dir=/data", "-ip=127.0.0.1", "-ip.bind=0.0.0.0"]
+    environment:
+      AWS_ACCESS_KEY_ID: cupboard-test
+      AWS_SECRET_ACCESS_KEY: cupboard-storage-test-only
+      S3_BUCKET: cupboard-test
+    ports:
+      - "127.0.0.1::8333"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/healthz"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
   postgres-test:
     image: postgres:18
     profiles: ["test"]
@@ -32,4 +65,5 @@ services:
       retries: 30
 
 volumes:
+  storage:
   postgres:

@@ -253,17 +253,18 @@ add generic game art, stock photography, or decorative server illustrations.
 Authentication and onboarding may use one subdued image or texture under a dark
 overlay. It must not compete with the task.
 
-The login page follows the Ferndesk reference's composition: a compact form and
-wordmark grouped in the left column, with full-height artwork on the right.
+The login and signup pages share `src/components/auth-layout.tsx` and follow the
+Ferndesk reference's composition: a compact form and wordmark grouped in the left
+column, with full-height artwork on the right.
 Cupboard keeps its charcoal form and sage action color. The artwork depicts a
 coastal Rust base with a tool cupboard and server operator station in pixel art.
 It is decorative, has a light dark overlay, and is hidden below the desktop
 breakpoint so the form remains the focus on smaller screens.
 
 The selected Cupboard mark is the sage C-shaped cabinet with two server shelves
-from logo concept v3. The login wordmark and favicon use this mark, with
+from logo concept v3. The authentication wordmark and favicon use this mark, with
 transparent negative space and no enclosing tile. The source concept lives in
-`output/imagegen/cupboard-logo-v3.png`; the login asset is
+`output/imagegen/cupboard-logo-v3.png`; the authentication asset is
 `public/images/cupboard-logo.png`. Existing letter tiles elsewhere can migrate
 to this mark when their interface is updated. Do not invent competing marks.
 
@@ -345,3 +346,32 @@ on mobile, keep this time below the identity because metric columns are hidden.
 
 Enrollment and offline Last seen overlays use a translucent blurred backdrop,
 centered over the skeleton metrics without adding row height for a separate label.
+
+## File library
+
+The file library follows Google Drive's compact list/grid switching and selected
+file toolbar, adapted to Cupboard's charcoal and sage tokens. Search and filtering
+sit above the content, with file type and sort options in one menu beside search.
+Order the toolbar as Search, flexible space, Filters, list/grid view, New folder,
+and Upload file. Use icon-only action buttons with accessible names and tooltips.
+The file library breadcrumbs are Dashboard > Files. Below the medium breakpoint, hide
+the root Files heading visually and put search in a labeled popover opened by a
+44-pixel search button. Put all six mobile toolbar controls in one row with matching
+44-pixel targets. Keep folder navigation available. The folder dialog accepts
+slash-separated paths to create subdirectories in one action.
+The browser remembers the view per account and organization. List view aligns
+filenames, upload dates, and sizes, with compact image thumbnails beside filenames.
+List and grid views lazily load authenticated PNG, JPEG,
+GIF, and WebP previews after checking their byte signatures. Images use a white
+backdrop so transparent dark artwork remains legible. Other files and failed
+previews use extension-based icons. File and folder context menus match the overflow menus, including copy, cut,
+rename, share, details, and confirmed deletion. Empty-space menus offer new folder,
+upload, and paste. Show folder navigation in the page heading only inside a folder.
+Omit the item count and show the selection toolbar only when an item is selected. Update after mutations and check for changes while the
+page is visible, without a manual Refresh button. Distinguish
+cut entries with reduced opacity until pasted or canceled. Public link creation
+explains who can download, the expiry, and how to revoke access; folder sharing
+uses organization links. Upload uses a dialog with browsing and drag/drop. Keep mobile actions at
+least 44 pixels and allow filenames to be read in the details dialog.
+
+Reference: [Google Drive file list on Mobbin](https://mobbin.com/screens/4e58234e-a5d7-4119-8ab6-f4d7dbc4f20d).

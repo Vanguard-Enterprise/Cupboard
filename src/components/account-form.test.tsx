@@ -8,12 +8,62 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { navigateAfterAuth } from "@/lib/api-client";
+
+vi.mock("@/lib/api-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api-client")>()),
+  navigateAfterAuth: vi.fn(),
+}));
+
 import { AccountForm } from "./account-form";
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
+  window.history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
 });
 describe("account forms", () => {
+  it.each([false, true])(
+    "creates an account and navigates with invitation=%s",
+    async (invited) => {
+      const token = "a".repeat(64);
+      window.history.replaceState(
+        null,
+        "",
+        invited ? `/signup#invite=${token}` : "/signup",
+      );
+      const fetcher = vi.fn(async () => Response.json({}));
+      vi.stubGlobal("fetch", fetcher);
+      render(<AccountForm signup />);
+      fillForm(true, "test-password");
+      await userEvent
+        .setup()
+        .click(screen.getByRole("button", { name: "Create account" }));
+      await waitFor(() =>
+        expect(navigateAfterAuth).toHaveBeenCalledWith(
+          invited ? `/join#${token}` : "/dashboard",
+        ),
+      );
+      expect(vi.mocked(fetch).mock.calls[0][0]).toBe("/app-api/auth/signup");
+      expect(
+        JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)),
+      ).toEqual({
+        name: "Operator",
+        email: "operator@example.com",
+        password: "test-password",
+      });
+      expect(localStorage.length).toBe(0);
+    },
+  );
+  it("preserves the invitation when switching to sign in", async () => {
+    const hash = `#invite=${"a".repeat(64)}`;
+    window.history.replaceState(null, "", `/signup${hash}`);
+    render(<AccountForm signup />);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("link", { name: "Sign in" }));
+    expect(navigateAfterAuth).toHaveBeenCalledWith(`/login${hash}`);
+  });
   it("submits credentials to the API and reports rejected login", async () => {
     const fetcher = vi.fn(async () =>
       Response.json(

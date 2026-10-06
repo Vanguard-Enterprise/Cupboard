@@ -66,8 +66,12 @@ explicit database port. `DATABASE_URL` skips Compose and makes database isolatio
 your responsibility. The launcher supplies its own local `CUPBOARD_API_URL` so the
 web application always talks to this worktree's Rust process.
 
-Use separate browser profiles or isolated contexts for concurrent sign-in tests.
-Cookies share a host across ports, even though local storage uses separate origins.
+The root dev command assigns a stable browser session cookie name per worktree
+through `CUPBOARD_SESSION_COOKIE_NAME`. The Next.js proxy translates it to Rust's
+canonical cookie name. Cookies share a host across ports, so this prevents signing
+in or out in one worktree from replacing another worktree's session. Existing
+shared cookies are not imported; sign in once after adopting this change. Separate
+browser contexts remain useful when testing different users in the same worktree.
 The development origins include localhost, loopback, and the detected NetBird IP.
 For a task-specific DNS hostname, set `CUPBOARD_DEV_ORIGINS` to that hostname
 and include its full web origin in `CUPBOARD_WEB_ORIGINS` when starting dev.
@@ -132,3 +136,17 @@ state, and any blocker. If the dev server was started, include its clickable
 NetBird URL and whether it is still running. Keep the worktree and database for
 follow-up work. Removal of worktrees, branches, and database volumes is a separate,
 explicitly requested action.
+
+## File storage isolation
+
+The dev launcher starts the `storage` Compose service unless `CUPBOARD_S3_BUCKET`
+selects an external bucket. Its SeaweedFS data volume belongs to the same worktree
+project as PostgreSQL. The S3 port is loopback-only and dynamically assigned;
+`CUPBOARD_S3_PORT` overrides it. Use `npm run dev:stop-storage` to stop storage and
+preserve data. Keep both database and storage volumes after handoff. Never point
+concurrent tasks at the same external bucket and database.
+
+Full checks always start disposable `storage-test` alongside the test database
+and remove both on exit. Containerized runners attach to the test network for S3
+as well as PostgreSQL. See the README for production bucket configuration and the
+file cleanup behavior.

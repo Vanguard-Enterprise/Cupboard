@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createDevServerConfig,
+  developmentSessionCookieName,
   createNextDevArgs,
   findNetBirdAddress,
 } from "./dev.mjs";
@@ -103,6 +104,7 @@ it("stops the web server and exits nonzero when the API fails", async () => {
         env: {
           ...process.env,
           DATABASE_URL: "unused-test-database",
+          CUPBOARD_S3_BUCKET: "unused-test-bucket",
           WEB_PID: pidFile,
           PATH: `${join(dir, "bin")}:${process.env.PATH}`,
         },
@@ -135,7 +137,10 @@ it("stops the web server and exits nonzero when the API fails", async () => {
 
 it.each(
   ["SIGINT", "SIGTERM"].flatMap((signal) =>
-    ["database", "build", "serve"].map((phase) => ({ signal, phase })),
+    ["database", "storage", "build", "serve"].map((phase) => ({
+      signal,
+      phase,
+    })),
   ),
 )("shuts down cleanly on $signal during $phase", async ({ signal, phase }) => {
   const { mkdtemp, mkdir, writeFile, readFile, rm } =
@@ -146,8 +151,8 @@ it.each(
   const { promisify } = await import("node:util");
   const { fileURLToPath } = await import("node:url");
   const dir = await mkdtemp(join(tmpdir(), "cupboard-dev-stop-"));
-  const pidFiles = ["database", "build", "serve", "web"].map((name) =>
-    join(dir, `${name}-pid`),
+  const pidFiles = ["database", "storage", "build", "serve", "web"].map(
+    (name) => join(dir, `${name}-pid`),
   );
   const wait = "setInterval(() => {}, 1000)";
   const record = (name) =>
@@ -161,7 +166,7 @@ it.each(
       ["bin/netbird", "process.exit(1)"],
       [
         "bin/docker",
-        record("database") +
+        record(phase === "storage" ? "storage" : "database") +
           "process.on('SIGTERM', () => process.exit(0));" +
           wait,
       ],
@@ -183,6 +188,7 @@ it.each(
         env: {
           ...process.env,
           DATABASE_URL: phase === "database" ? "" : "unused-test-database",
+          CUPBOARD_S3_BUCKET: phase === "storage" ? "" : "unused-test-bucket",
           TEST_PID_DIR: dir,
           PATH: `${join(dir, "bin")}:${process.env.PATH}`,
         },
@@ -201,7 +207,7 @@ it.each(
         ),
       )
       .toBeGreaterThan(0);
-    if (phase !== "database")
+    if (phase !== "database" && phase !== "storage")
       await expect
         .poll(async () =>
           Number(await readFile(join(dir, "web-pid"), "utf8").catch(() => "0")),
@@ -241,4 +247,11 @@ it.each(
     }
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+it("uses stable, distinct session cookie names for development worktrees", () => {
+  const first = developmentSessionCookieName("cupboard-dev-1234abcd");
+  expect(first).toBe("cupboard_session_cupboard_dev_1234abcd");
+  expect(developmentSessionCookieName("cupboard-dev-1234abcd")).toBe(first);
+  expect(developmentSessionCookieName("cupboard-dev-abcd1234")).not.toBe(first);
 });
