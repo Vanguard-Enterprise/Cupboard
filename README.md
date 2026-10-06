@@ -188,9 +188,26 @@ organization details, and public contacts. Private contacts are excluded.
 
 Profile settings use one form with organization, contact, and billing sections.
 A sticky footer keeps Save changes and Cancel within reach.
-Organization logos accept a public HTTPS image URL with a preview and removal.
-Logo URLs use the same browser-local storage as other profile fields; existing
-profiles without a logo remain valid. File uploads are tracked separately in CUP-31.
+Organization logos accept PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, and SVG uploads.
+The server converts them to static PNG images with a maximum edge of 160 pixels,
+keeping proportions and transparency, stripping metadata, and using PNG compression.
+Raster inputs are limited to 2 MiB, 8192 pixels per side, and 16 megapixels.
+SVG inputs are limited to 256 KiB, 2000 XML nodes, and 32 levels of nesting.
+SVGs must contain self-contained paths and shapes. Outline text and flatten images,
+filters, masks, patterns, and use references before uploading. Scripts, event handlers,
+external resources, entities, stylesheets, and animation are rejected. The SVG
+renderer has no font loading, embedded raster decoding, or external resource resolver.
+Previews also use authenticated server conversion; raw uploads never render in the UI.
+
+Select, replace, and remove remain drafts until Save changes; Cancel restores the
+saved logo. Uploaded logos persist in private S3 storage with PostgreSQL metadata
+and require organization management permission to change. Active members can view
+them. The organization switcher displays the saved logo and refreshes after changes.
+Manual logo URLs are no longer supported, and old browser-local URLs are ignored.
+Stale logo revisions are rejected. Replaced objects are queued for deletion;
+interrupted uploads are reclaimed after an hour by the ten-minute cleanup loop.
+The existing file-storage configuration also serves logos, with no additional service
+or credentials.
 Profile edits remain drafts until Save changes is selected. Cancel restores the
 saved values across all sections. Invalid edits show an error and are not saved.
 Updates from another tab refresh untouched forms. If local edits conflict with
@@ -199,7 +216,7 @@ Country and supported state or region fields use searchable source-owned
 comboboxes instead of native browser menus. The country menu supports keyboard
 navigation and common abbreviations such as USA and UK.
 
-Profile settings are a browser-local prototype stored under
+Except for uploaded logos, profile settings are a browser-local prototype stored under
 `cupboard:organization:local-preview:profile:v1:account:<account-id>:organization:<organization-id>`. Nothing is shared between
 browsers or sent to a profile API. Private contacts are a field grouping, not an
 access-control boundary: anyone using this browser profile can read them. Do not

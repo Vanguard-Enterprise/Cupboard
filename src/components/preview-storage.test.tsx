@@ -132,13 +132,12 @@ it("discards a real profile form's dirty draft on organization changes", () => {
       JSON.stringify({
         ...defaultOrganizationProfile,
         name: org,
-        logoUrl: `https://example.com/${org}.png`,
       }),
     );
   const view = (org: string) => (
     <PreviewStorageProvider accountId="alice" organizationId={org}>
       <OrganizationProvider>
-        <OrganizationProfileForm />
+        <OrganizationProfileForm organizationId="test-organization" canManage />
       </OrganizationProvider>
     </PreviewStorageProvider>
   );
@@ -146,20 +145,11 @@ it("discards a real profile form's dirty draft on organization changes", () => {
   fireEvent.change(screen.getByLabelText(/Organization name/), {
     target: { value: "unsaved a" },
   });
-  fireEvent.change(screen.getByLabelText("Organization logo URL"), {
-    target: { value: "https://example.com/unsaved.png" },
-  });
   rendered.rerender(view("b"));
-  expect(
-    (screen.getByLabelText("Organization logo URL") as HTMLInputElement).value,
-  ).toBe("https://example.com/b.png");
   expect(
     (screen.getByLabelText(/Organization name/) as HTMLInputElement).value,
   ).toBe("b");
   rendered.rerender(view("a"));
-  expect(
-    (screen.getByLabelText("Organization logo URL") as HTMLInputElement).value,
-  ).toBe("https://example.com/a.png");
   expect(
     (screen.getByLabelText(/Organization name/) as HTMLInputElement).value,
   ).toBe("a");

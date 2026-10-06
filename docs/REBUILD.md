@@ -273,10 +273,25 @@ attachments; they do not require membership. Folder sharing uses organization
 links. Versions, per-file member permissions, public folder downloads, large
 multipart uploads, and content scanning remain outside this slice. Files download as attachments. Grid cards render authenticated raster image
 previews after checking PNG, JPEG, GIF, or WebP signatures; active content is not
-rendered inline. Organization logo integration remains CUP-31.
+rendered inline. Organization logo uploads are implemented by CUP-31.
 
 CUP-44 isolates development browser sessions by assigning a stable cookie name per
 worktree at the Next.js boundary. Root dev supplies the same name to proxy and
 server-rendered identity reads. Rust retains its canonical session cookie name,
 and production retains its existing default. This prevents parallel local apps
 on one host from overwriting each other's login cookies across ports.
+
+CUP-31 adds shared organization logos using the existing private S3 bucket and
+Rust runtime. PostgreSQL stores tenant-owned metadata and a revision for conflict
+detection. Raster uploads accept PNG, JPEG, WebP, GIF, BMP, ICO, and TIFF within
+2 MiB, 8192 pixels per side, and 16 megapixels. A restricted SVG path accepts
+self-contained shapes within 256 KiB, with XML size/depth limits and no scripts,
+external resources, fonts, embedded images, filters, or reusable subtrees.
+Both preview and save decode off the async executor and return only metadata-free,
+compressed PNG pixels, downscaled to at most 160 pixels on the longest side.
+Management permission is rechecked before publication; active members can read
+the current image. Save publishes a replacement or removal, while Cancel discards
+selections. The organization switcher shows the saved logo and refreshes on updates.
+Manual logo URLs are removed; other profile fields remain browser-local.
+Replacement cleanup and abandoned uploads use the existing storage cleanup loop.
+No additional runtime, worker, bucket, or credentials are introduced.

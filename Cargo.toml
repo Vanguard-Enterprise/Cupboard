@@ -33,6 +33,9 @@ tokio-tungstenite = "0.30.0"
 futures-util = "0.3.34"
 percent-encoding = "2.3.2"
 object_store = { version = "0.14.2", default-features = false, features = ["aws"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff"] }
+resvg = { version = "0.48.1", default-features = false }
+roxmltree = "0.21.1"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
