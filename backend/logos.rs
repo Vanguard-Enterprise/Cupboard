@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use image::{ImageFormat, ImageReader, Limits};
+use image::{ImageDecoder, ImageFormat, ImageReader, Limits};
 use object_store::{ObjectStoreExt, path::Path as ObjectPath};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -240,9 +240,20 @@ pub(crate) fn validate_image(bytes: Vec<u8>) -> ApiResult<Vec<u8>> {
     limits.max_image_width = Some(8192);
     limits.max_image_height = Some(8192);
     limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder().map_err(|_| invalid(IMAGE_ERROR))?;
+    // Preserve ImageReader::decode's allocation budget when using the decoder directly.
+    limits
+        .reserve(decoder.total_bytes())
+        .map_err(|_| invalid(IMAGE_ERROR))?;
+    decoder
+        .set_limits(limits)
+        .map_err(|_| invalid(IMAGE_ERROR))?;
+    let orientation = decoder.orientation().map_err(|_| invalid(IMAGE_ERROR))?;
+    let mut image = image::DynamicImage::from_decoder(decoder).map_err(|_| invalid(IMAGE_ERROR))?;
+    image.apply_orientation(orientation);
     // Decode a single frame; animation and all original metadata are discarded.
-    png(reader.decode().map_err(|_| invalid(IMAGE_ERROR))?)
+    png(image)
 }
 async fn normalized(request: Request) -> ApiResult<Vec<u8>> {
     if request
@@ -422,6 +433,43 @@ mod tests {
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, format).unwrap();
         bytes.into_inner()
+    }
+    #[test]
+    fn applies_exif_rotation_and_mirroring_before_stripping_metadata() {
+        let pixels = image::RgbImage::from_fn(32, 16, |x, _| {
+            if x < 16 {
+                image::Rgb([240, 0, 0])
+            } else {
+                image::Rgb([0, 0, 240])
+            }
+        });
+        let mut jpeg = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(pixels)
+            .write_to(&mut jpeg, ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = jpeg.into_inner();
+        for orientation in [2_u8, 6] {
+            // JPEG APP1 with a little-endian TIFF IFD containing the orientation tag.
+            let mut exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec();
+            exif.extend_from_slice(&[orientation, 0, 0, 0, 0, 0, 0, 0]);
+            let mut source = jpeg[..2].to_vec();
+            source.extend_from_slice(&[0xff, 0xe1]);
+            source.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+            source.extend_from_slice(&exif);
+            source.extend_from_slice(&jpeg[2..]);
+            let normalized = validate_image(source).unwrap();
+            assert!(!normalized.windows(4).any(|w| w == b"eXIf"));
+            let output = image::load_from_memory(&normalized).unwrap().to_rgb8();
+            let (red, blue) = if orientation == 2 {
+                assert_eq!(output.dimensions(), (32, 16));
+                (output.get_pixel(28, 8), output.get_pixel(3, 8))
+            } else {
+                assert_eq!(output.dimensions(), (16, 32));
+                (output.get_pixel(8, 3), output.get_pixel(8, 28))
+            };
+            assert!(red[0] > 200 && red[2] < 30);
+            assert!(blue[2] > 200 && blue[0] < 30);
+        }
     }
     #[test]
     fn decodes_supported_formats_and_strips_nonpixel_content() {
