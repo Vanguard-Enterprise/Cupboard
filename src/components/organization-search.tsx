@@ -33,6 +33,7 @@ import {
   notificationsDataPath,
   rolesPath,
   serversPath,
+  machinesPath,
   usersPath,
 } from "@/lib/dashboard-navigation";
 
@@ -111,6 +112,12 @@ export function OrganizationSearch({
             <CommandList className="max-h-[min(60vh,24rem)]">
               <CommandEmpty>No results found.</CommandEmpty>
               <CommandGroup heading="Pages">
+                <CommandItem
+                  value="Machines nodes infrastructure hosts"
+                  onSelect={() => navigate(machinesPath)}
+                >
+                  Machines
+                </CommandItem>
                 <CommandItem
                   value="Dashboard overview"
                   onSelect={() => navigate("/dashboard")}

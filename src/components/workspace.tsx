@@ -30,6 +30,7 @@ import {
   profilePath,
   rolesPath,
   serversPath,
+  machinesPath,
   filesPath,
   securityAlertsPath,
   usagePath,
@@ -110,18 +111,24 @@ export function Workspace({
         : undefined;
   const serverPage =
     pathname === filesPath
-      ? {
-          activeSection: "file-library",
-          crumbs: ["Files"],
-        }
+      ? { activeSection: "file-library", crumbs: ["Files"] }
       : pathname === serversPath
         ? {
             activeSection: "servers",
             crumbs: ["Operations", "Game servers", "Server inventory"],
           }
         : undefined;
+  const machinePage =
+    pathname === machinesPath || pathname === machinesPath + "/setup"
+      ? {
+          activeSection: "nodes",
+          crumbs: pathname.endsWith("/setup")
+            ? ["Machines", "Setup"]
+            : ["Machines"],
+        }
+      : undefined;
   const page = identity.organization
-    ? (serverPage ?? currentPage ?? teamPage)
+    ? (machinePage ?? serverPage ?? currentPage ?? teamPage)
     : undefined;
   const [searchOpen, setSearchOpen] = useState(false);
   return (
@@ -156,6 +163,10 @@ export function Workspace({
                       <BreadcrumbItem>
                         {index === page.crumbs.length - 1 ? (
                           <BreadcrumbPage>{crumb}</BreadcrumbPage>
+                        ) : crumb === "Machines" ? (
+                          <BreadcrumbLink asChild>
+                            <Link href={machinesPath}>{crumb}</Link>
+                          </BreadcrumbLink>
                         ) : (
                           <span>{crumb}</span>
                         )}

@@ -10,12 +10,14 @@ use tower::ServiceExt;
 struct Client {
     app: Router,
     cookie: String,
+    organization: String,
 }
 impl Client {
     fn new(app: &Router) -> Self {
         Self {
             app: app.clone(),
             cookie: String::new(),
+            organization: String::new(),
         }
     }
     async fn request(&mut self, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -25,6 +27,9 @@ impl Client {
             .header("origin", "http://localhost:5173")
             .header("x-cupboard-request", "1")
             .header("content-type", "application/json");
+        if path == "machines" || path.starts_with("machines/") {
+            request = request.header("x-cupboard-organization", &self.organization);
+        }
         if !self.cookie.is_empty() {
             request = request.header("cookie", &self.cookie);
         }
@@ -48,8 +53,18 @@ impl Client {
         );
         let status = response.status();
         let bytes = to_bytes(response.into_body(), 100_000).await.unwrap();
-        let value = serde_json::from_slice(&bytes)
+        let value: Value = serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| panic!("unexpected non-JSON response: {status}"));
+        if let Some(org) = value
+            .get("organization")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+        {
+            self.organization = org.to_owned();
+        }
+        if path == "organizations" && status == StatusCode::OK {
+            self.organization = value["id"].as_str().unwrap().to_owned();
+        }
         (status, value)
     }
     async fn signup(&mut self, email: &str) {
@@ -457,6 +472,7 @@ async fn accounts_sessions_membership_roles_and_tenant_isolation() {
     );
     assert_ne!(alice.cookie, previous_cookie);
     let mut previous = Client {
+        organization: String::new(),
         app: app.clone(),
         cookie: previous_cookie,
     };
@@ -1087,6 +1103,10 @@ async fn role_migration_preserves_existing_memberships() {
             ("viewer".into(), false)
         ]
     );
+    sqlx::raw_sql(include_str!("migrations/202610040006_machines.sql"))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let admin_permissions: Vec<String> =
         sqlx::query_scalar("SELECT permissions FROM organization_roles WHERE id='administrator'")
             .fetch_one(&mut *tx)
@@ -2280,6 +2300,7 @@ async fn copying_folders_releases_database_and_publishes_only_into_existing_dest
         sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Destination',0,true,true)")
             .bind(&org).bind(&destination).execute(&pool).await.unwrap();
         let copier = Client {
+            organization: owner.organization.clone(),
             app: app.clone(),
             cookie: owner.cookie.clone(),
         };
@@ -2592,6 +2613,623 @@ async fn uploads_and_recursive_deletion_release_database_during_storage_io() {
     server.abort();
 }
 
+async fn node_request(app: &Router, path: &str, token: &str, body: Value) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/node-api/{path}"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
+    );
+    let bytes = to_bytes(response.into_body(), 100_000).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+fn machine_input() -> Value {
+    json!({"name":"EU host", "address":"192.0.2.12", "provider":"Dedicated", "notes":"Rack 2"})
+}
+fn node_health() -> Value {
+    json!({"hostname":"rust-host", "os":"Linux", "agentVersion":"1.0.0", "cpuCount":8, "loadOne":1.25, "cpuUsagePercent":25.0, "networkReceiveBytesPerSecond":2048.0, "networkSendBytesPerSecond":1024.0, "geolocation":{"publicIp":"8.8.8.8","countryCode":"US"}, "memoryTotalBytes":16000, "memoryAvailableBytes":8000, "diskTotalBytes":32000, "diskAvailableBytes":10000, "uptimeSeconds":3600})
+}
+#[tokio::test]
+async fn machines_inventory_enforces_tenants_permissions_validation_and_revision() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut owner = Client::new(&app);
+    let mut outsider = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner
+        .signup(&format!("machines-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    outsider
+        .signup(&format!("other-machines-{suffix}@example.com"))
+        .await;
+    outsider.create_organization().await;
+    assert_eq!(
+        anonymous.request("GET", "machines", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        anonymous
+            .request("POST", "machines", machine_input())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut invalid = machine_input();
+    invalid["name"] = json!("");
+    invalid["address"] = json!("https://host:22");
+    let (status, result) = owner.request("POST", "machines", invalid).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(result["fields"]["name"].is_string());
+    assert!(result["fields"]["address"].is_string());
+    for address in ["10.1.1.30.50", "256.1.2.3", "2001:::1", "host.example.com"] {
+        let mut invalid_ip = machine_input();
+        invalid_ip["address"] = json!(address);
+        let (status, result) = owner.request("POST", "machines", invalid_ip).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(result["fields"]["address"].is_string());
+    }
+    let mut with_secret = machine_input();
+    with_secret["password"] = json!("must-not-be-saved");
+    assert_eq!(
+        owner.request("POST", "machines", with_secret).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let (status, machine) = owner.request("POST", "machines", machine_input()).await;
+    assert_eq!(status, StatusCode::OK);
+    let id = machine["id"].as_str().unwrap();
+    let path = format!("machines/{id}");
+    let history_path = format!("{path}/history");
+    assert_eq!(
+        anonymous.request("GET", &history_path, json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        outsider.request("GET", &history_path, json!(null)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        owner.request("GET", &history_path, json!(null)).await.1["samples"],
+        json!([])
+    );
+
+    assert_eq!(
+        outsider.request("GET", "machines", json!(null)).await.1,
+        json!([])
+    );
+    for action in [
+        path.clone(),
+        format!("{path}/enrollment"),
+        format!("{path}/disconnect"),
+        format!("{path}/remove"),
+    ] {
+        assert_eq!(
+            outsider.request("POST", &action, machine_input()).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let mut changed = machine_input();
+    changed["revision"] = machine["revision"].clone();
+    changed["name"] = json!("Renamed host");
+    let (status, updated) = owner.request("POST", &path, changed.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["revision"], json!(2));
+    assert_eq!(
+        owner.request("POST", &path, changed).await.0,
+        StatusCode::CONFLICT
+    );
+    let other_instance = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    owner.app = other_instance;
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.1[0]["name"],
+        "Renamed host"
+    );
+    // Move the owner privilege away to exercise a currently signed-in ordinary member.
+    let org = owner.request("GET", "auth/me", json!(null)).await.1["organization"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let outsider_id = outsider.request("GET", "auth/me", json!(null)).await.1["user"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sqlx::query("UPDATE organizations SET owner_account_id=$2 WHERE id=$1")
+        .bind(&org)
+        .bind(outsider_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['infrastructure.view']::text[] WHERE organization_id=$1").bind(&org).execute(&pool).await.unwrap();
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.0,
+        StatusCode::OK
+    );
+    for path in [
+        "machines".to_owned(),
+        path.clone(),
+        format!("{path}/enrollment"),
+        format!("{path}/disconnect"),
+    ] {
+        assert_eq!(
+            owner.request("POST", &path, machine_input()).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    sqlx::query(
+        "UPDATE organization_roles SET permissions=ARRAY[]::text[] WHERE organization_id=$1",
+    )
+    .bind(&org)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        owner.request("GET", &history_path, json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+    pool.close().await;
+}
+#[tokio::test]
+async fn machine_enrollment_is_single_use_scoped_expiring_and_revocable() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!("agent-{}@example.com", uuid::Uuid::new_v4()))
+        .await;
+    owner.create_organization().await;
+    let machine = owner.request("POST", "machines", machine_input()).await.1;
+    let second = owner.request("POST", "machines", machine_input()).await.1;
+    let id = machine["id"].as_str().unwrap();
+    let endpoint = format!("machines/{id}/enrollment");
+    let enrollment = owner.request("POST", &endpoint, json!({})).await.1;
+    let issued_at = enrollment["issuedAt"].as_i64().unwrap();
+    assert_eq!(
+        enrollment["expiresAt"].as_i64().unwrap() - issued_at,
+        600_000
+    );
+    let token = enrollment["token"].as_str().unwrap().to_owned();
+    let stored: String = sqlx::query_scalar("SELECT enrollment_hash FROM machines WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, crate::auth::digest(&token));
+    assert_ne!(stored, token);
+    assert_eq!(
+        node_request(&app, "heartbeat", &token, node_health())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let inventory = owner
+        .request("GET", "machines", json!(null))
+        .await
+        .1
+        .to_string();
+    assert!(!inventory.contains(&token));
+    assert!(!inventory.contains(&stored));
+    let (a, b) = tokio::join!(
+        node_request(&app, "enroll", &token, json!({})),
+        node_request(&app, "enroll", &token, json!({}))
+    );
+    let credential = if a.0 == StatusCode::OK {
+        assert_eq!(b.0, StatusCode::UNAUTHORIZED);
+        a.1
+    } else {
+        assert_eq!(a.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(b.0, StatusCode::OK);
+        b.1
+    };
+    let credential = credential["credential"].as_str().unwrap();
+    assert_eq!(
+        node_request(&app, "heartbeat", credential, node_health())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let inventory = owner.request("GET", "machines", json!(null)).await.1;
+    let own = inventory
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == id)
+        .unwrap();
+    assert!(own["enrolledAt"].as_i64().unwrap() >= issued_at);
+    assert!(own["lastSeenAt"].as_i64().unwrap() >= own["enrolledAt"].as_i64().unwrap());
+    assert_eq!(own["health"]["hostname"], "rust-host");
+    assert_eq!(own["health"]["cpuUsagePercent"], 25.0);
+    let history_path = format!("machines/{id}/history");
+    let history = owner.request("GET", &history_path, json!(null)).await.1;
+    assert_eq!(history["samples"].as_array().unwrap().len(), 1);
+    assert_eq!(history["samples"][0]["cpu"], 25.0);
+    assert_eq!(
+        history["samples"][0]["networkReceiveBytesPerSecond"],
+        2048.0
+    );
+    assert_eq!(history["samples"][0]["networkSendBytesPerSecond"], 1024.0);
+    assert_eq!(history["samples"][0]["memoryUsed"], 8000);
+    assert_eq!(history["samples"][0]["storageUsed"], 22000);
+    assert!(!history.to_string().contains(credential));
+    assert!(!history.to_string().contains("rust-host"));
+    let now = history["windowEnd"].as_i64().unwrap();
+    let seed: Vec<Value> = (1..=125)
+        .rev()
+        .map(|i| {
+            let mut sample = history["samples"][0].clone();
+            sample["at"] = json!(now - i * 20000 - 30000);
+            sample
+        })
+        .collect();
+    sqlx::query("UPDATE machines SET metric_history=$2 WHERE id=$1")
+        .bind(id)
+        .bind(json!(seed))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        node_request(&app, "heartbeat", credential, node_health())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let bounded = owner.request("GET", &history_path, json!(null)).await.1;
+    assert_eq!(bounded["samples"].as_array().unwrap().len(), 120);
+    let mut old_sample = history["samples"][0].clone();
+    old_sample["at"] = json!(now - 7200000);
+    sqlx::query("UPDATE machines SET metric_history=$2 WHERE id=$1")
+        .bind(id)
+        .bind(json!([old_sample]))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        owner.request("GET", &history_path, json!(null)).await.1["samples"],
+        json!([])
+    );
+    assert_eq!(
+        node_request(&app, "heartbeat", credential, node_health())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner.request("GET", &history_path, json!(null)).await.1["samples"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    assert_eq!(own["health"]["geolocation"]["countryCode"], "US");
+    assert!(!inventory.to_string().contains(credential));
+    let second = inventory
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == second["id"])
+        .unwrap();
+    assert!(second["lastSeenAt"].is_null());
+    let stored: String = sqlx::query_scalar("SELECT agent_hash FROM machines WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, crate::auth::digest(credential));
+    let mut invalid = node_health();
+    invalid["memoryAvailableBytes"] = json!(999999);
+    assert_eq!(
+        node_request(&app, "heartbeat", credential, invalid).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut forged = node_health();
+    forged["machineId"] = second["id"].clone();
+    assert_eq!(
+        node_request(&app, "heartbeat", credential, forged).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // A machine credential cannot use operator endpoints, even with browser CSRF markers.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app-api/machines")
+                .header("authorization", format!("Bearer {credential}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let pending = owner.request("POST", &endpoint, json!({})).await.1["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let replacement = owner.request("POST", &endpoint, json!({})).await.1["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        node_request(&app, "enroll", &pending, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    sqlx::query("UPDATE machines SET enrollment_expires_at=0 WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        node_request(&app, "enroll", &replacement, json!({}))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let token = owner.request("POST", &endpoint, json!({})).await.1["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let new = node_request(&app, "enroll", &token, json!({})).await;
+    assert_eq!(new.0, StatusCode::OK);
+    let new_credential = new.1["credential"].as_str().unwrap();
+    assert_eq!(
+        owner.request("GET", &history_path, json!(null)).await.1["samples"],
+        json!([])
+    );
+    assert_eq!(
+        node_request(&app, "heartbeat", credential, node_health())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        node_request(&app, "heartbeat", new_credential, node_health())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let pending = owner.request("POST", &endpoint, json!({})).await.1["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        owner
+            .request("POST", &format!("machines/{id}/disconnect"), json!({}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        node_request(&app, "heartbeat", new_credential, node_health())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        node_request(&app, "enroll", &pending, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let state: (Option<String>, Option<i64>, Option<Value>) =
+        sqlx::query_as("SELECT agent_hash,last_seen_at,health FROM machines WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, (None, None, None));
+    assert_eq!(
+        owner.request("GET", &history_path, json!(null)).await.1["samples"],
+        json!([])
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn machine_removal_is_scoped_unenrolled_only_and_revokes_pending_tokens() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut owner = Client::new(&app);
+    let mut outsider = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner.signup(&format!("remove-{suffix}@example.com")).await;
+    owner.create_organization().await;
+    outsider
+        .signup(&format!("remove-other-{suffix}@example.com"))
+        .await;
+    outsider.create_organization().await;
+    let record = owner.request("POST", "machines", machine_input()).await.1;
+    let id = record["id"].as_str().unwrap();
+    let path = format!("machines/{id}");
+    let removal = format!("{path}/remove");
+    let token = owner
+        .request("POST", &format!("{path}/enrollment"), json!({}))
+        .await
+        .1["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        anonymous.request("POST", &removal, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        outsider.request("POST", &removal, json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        owner.request("POST", &removal, json!({})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner.request("POST", &removal, json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        node_request(&app, "enroll", &token, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let record = owner.request("POST", "machines", machine_input()).await.1;
+    let id = record["id"].as_str().unwrap();
+    let path = format!("machines/{id}");
+    let token = owner
+        .request("POST", &format!("{path}/enrollment"), json!({}))
+        .await
+        .1["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        node_request(&app, "enroll", &token, json!({})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .request("POST", &format!("{path}/remove"), json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .request("GET", "machines", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn machines_reject_a_page_organization_after_another_tab_switches_session() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "machine-tabs-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let first_org = owner.organization.clone();
+    let first = owner.request("POST", "machines", machine_input()).await.1;
+    owner.create_organization().await;
+    let second_org = owner.organization.clone();
+    let second = owner.request("POST", "machines", machine_input()).await.1;
+    let before = owner.request("GET", "machines", json!(null)).await.1;
+    for expected in [&first_org, &String::new(), &"invalid".to_owned()] {
+        owner.organization = expected.clone();
+        assert_eq!(
+            owner.request("GET", "machines", json!(null)).await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            owner.request("POST", "machines", machine_input()).await.0,
+            StatusCode::CONFLICT
+        );
+        for record in [&first, &second] {
+            let id = record["id"].as_str().unwrap();
+            for (method, suffix) in [
+                ("GET", "/history"),
+                ("POST", ""),
+                ("POST", "/enrollment"),
+                ("POST", "/disconnect"),
+                ("POST", "/remove"),
+            ] {
+                assert_eq!(
+                    owner
+                        .request(method, &format!("machines/{id}{suffix}"), machine_input())
+                        .await
+                        .0,
+                    StatusCode::CONFLICT
+                );
+            }
+        }
+    }
+    let response = owner
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app-api/machines")
+                .header("cookie", &owner.cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    owner.organization = second_org;
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.1,
+        before
+    );
+    owner
+        .request("POST", "auth/organization", json!({"id":first_org}))
+        .await;
+    owner.organization = first_org;
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.1,
+        json!([first])
+    );
+}
+
 impl Client {
     async fn logo_upload(&self, org: &str, revision: i64, bytes: Vec<u8>) -> (StatusCode, Value) {
         let response = self
@@ -2766,6 +3404,7 @@ async fn logos_are_persistent_scoped_authorized_versioned_and_cleaned_up() {
     )
     .layer(axum::Extension(storage.clone()));
     let restarted = Client {
+        organization: owner.organization.clone(),
         app: restarted_app,
         cookie: owner.cookie.clone(),
     };
@@ -2940,6 +3579,7 @@ async fn logo_uploads_reauthorize_after_storage_io_and_redact_storage_errors() {
         .unwrap();
     let pending_org = org.clone();
     let pending = Client {
+        organization: owner.organization.clone(),
         app: app.clone(),
         cookie: owner.cookie.clone(),
     };
@@ -2999,6 +3639,7 @@ async fn logo_uploads_reauthorize_after_storage_io_and_redact_storage_errors() {
     )
     .layer(axum::Extension(storage.clone()));
     let owner = Client {
+        organization: owner.organization.clone(),
         app,
         cookie: owner.cookie,
     };

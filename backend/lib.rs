@@ -4,6 +4,7 @@ mod logos;
 pub mod storage;
 pub use files::cleanup as cleanup_files;
 mod connectivity;
+mod machines;
 pub mod servers;
 mod team;
 use axum::{Router, extract::State, http::StatusCode, routing::get};
@@ -37,6 +38,7 @@ pub fn router_with_auth(pool: PgPool, config: auth::AuthConfig) -> Router {
         .route("/health/live", get(|| async { StatusCode::NO_CONTENT }))
         .route("/health/ready", get(readiness))
         .with_state(pool.clone())
+        .merge(machines::agent_routes().with_state(pool.clone()))
         .merge(auth::routes(pool, config))
 }
 

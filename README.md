@@ -357,6 +357,79 @@ The poller runs in the existing Rust process and stops with it. PostgreSQL
 advisory locks prevent simultaneous checks of a record across API instances and
 manual requests. There is no health-history store or separate worker.
 
+## Machines
+
+Open `/dashboard/infrastructure/machines` to add and edit machine records, search
+hosts, and filter by connection status or provider. Select a machine for its latest CPU load, memory, root-disk usage, and uptime.
+Enrollment shows setup progress and confirms the new agent's first report.
+Infrastructure viewing and management permissions
+are separate from game-server permissions. Owners and Administrators receive both;
+custom roles must be granted them explicitly.
+
+Select Enroll agent on a machine, download the Linux agent, and follow the dialog.
+The agent requires Python 3.10+ and a trusted HTTPS address for Cupboard. The local
+HTTP development URL cannot be used by the agent. Use HTTPS termination with a
+trusted certificate when testing a real agent. HTTPS forwards `/node-api/enroll`
+and `/node-api/heartbeat` through Next.js to the existing Rust API. These endpoints
+accept machine bearer credentials, not account cookies.
+
+[Agent setup instructions](public/agent/setup.txt) include continuous reporting,
+private credential storage, replacement, revocation, and an optional systemd user
+service. The downloadable source is
+[public/agent/cupboard-agent.py](public/agent/cupboard-agent.py). The script needs
+no third-party Python packages or root privileges. `npm run check` also runs its
+standard-library unit tests, so development and CI require Python 3.10+.
+
+A Connected status means a report arrived within 90 seconds. Stale means the
+last report is older; it does not prove the host is down. Disconnect agent revokes
+credentials and clears readings without deleting the saved machine. Inventory
+edits, enrollment state, and the latest readings persist in PostgreSQL.
+
+Inventory rows show CPU, memory, and root-filesystem usage bars from the latest
+report, with status details on hover or keyboard focus. CPU utilization samples
+Linux CPU counters over 200ms; older agents report load only and show no
+utilization value. These bars show current capacity, not historical trends.
+
+Agent 1.1 looks up its outbound public IP and country through
+[IPWhois](https://ipwhois.io/documentation) over HTTPS at startup and hourly.
+The lookup sends no Cupboard credential or machine metadata. Failed lookups show
+an unknown country and retry after an hour without stopping health reporting.
+A flag represents approximate public-IP location, which may be a NAT or VPN exit.
+
+Machine details show CPU and network receive/send charts for the last hour,
+circular memory and root-disk capacity meters, and uptime beside the machine name.
+Chart tooltips show timestamped values. Configuration and agent actions live in
+the Machine details dialog. Agent 1.2 reports average network bytes per second
+across non-loopback interfaces between reports; virtual interfaces may count the
+same traffic more than once. The first report and counter resets leave rates unknown. PostgreSQL keeps at most 120 samples per
+machine, one per 30-second bucket. History starts with the first report after
+this update; no past samples are synthesized. Gaps longer than 90 seconds remain
+visible. Disconnecting or replacing the agent clears its history.
+
+Machine rows show provider beside the name, with
+a combined in/out network sparkline. After 90 seconds without a report, row and
+detail graphs show skeletons with the last-seen timestamp until reporting resumes.
+
+Machine location is read-only and derived from the agent’s public-IP country.
+The details dialog shows Unknown until a lookup succeeds; location is not manually entered.
+
+Machine setup lives at /dashboard/infrastructure/machines/setup. Details drafts
+are saved in this browser under the current user and organization. Saving details
+creates the machine in PostgreSQL and gives setup a resumable machine URL.
+Resume setup from an unenrolled machine’s enrollment prompt. Enrollment and first-report
+progress comes from the server; raw enrollment tokens stay in memory, so a reload
+before enrollment requires a new token. Completed setup clears the browser draft.
+
+Machine addresses must be IPv4 or IPv6 literals; hostnames, URLs, ports, and
+malformed numeric addresses are rejected in both forms and API validation.
+Unenrolled rows invite enrollment; enrolled machines awaiting a first report
+show skeletons. Offline flags use a disconnected-cable overlay with a blurred backdrop.
+
+Unenrolled machines can be removed from their action menu after confirmation.
+Removal checks ownership and management permission, locks the machine against
+concurrent enrollment, and deletes its pending token. Enrolled machines must be
+disconnected before removal.
+
 ## File storage
 
 The File store > Shared library page at `/dashboard/files` supports upload,

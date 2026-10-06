@@ -13,6 +13,8 @@ use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
 use tower_sessions::Session;
 
 pub const PERMISSIONS: &[&str] = &[
+    "infrastructure.view",
+    "infrastructure.manage",
     "servers.view",
     "servers.manage",
     "players.moderate",

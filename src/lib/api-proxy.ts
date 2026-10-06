@@ -11,6 +11,7 @@ const paths = new Set([
   "auth/organization",
   "team",
   "servers",
+  "machines",
   "files",
   "organization-logo",
   "organization-logo/remove",
@@ -45,6 +46,9 @@ export async function proxyApi(
     !paths.has(path) &&
     !logoDownload &&
     !/^servers\/[0-9a-f-]{36}\/check$/.test(path) &&
+    !/^machines\/[0-9a-f-]{36}(?:\/(?:enrollment|disconnect|history|remove))?$/.test(
+      path,
+    ) &&
     !/^files\/[0-9a-f-]{36}(?:\/(?:delete|rename|move|copy|share|share\/revoke))?$/.test(
       path,
     )
@@ -65,6 +69,8 @@ export async function proxyApi(
   if (
     path === "files" ||
     path.startsWith("files/") ||
+    path === "machines" ||
+    path.startsWith("machines/") ||
     path.startsWith("organization-logo")
   ) {
     const organization = request.headers.get("x-cupboard-organization");

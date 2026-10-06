@@ -233,6 +233,7 @@ pub fn routes(pool: PgPool, config: AuthConfig) -> Router {
         .route("/app-api/auth/organization", post(switch_organization))
         .merge(crate::team::routes())
         .merge(crate::servers::routes())
+        .merge(crate::machines::routes())
         .merge(crate::files::routes())
         .merge(crate::logos::routes())
         .with_state(pool)

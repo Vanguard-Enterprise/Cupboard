@@ -26,7 +26,7 @@ export const dashboardNavigation = [
         sections: [
           {
             id: "nodes",
-            title: "Machines & nodes",
+            title: "Machines",
           },
           {
             id: "maintenance",
@@ -244,6 +244,7 @@ export const dashboardNavigation = [
   },
 ];
 
+export const machinesPath = "/dashboard/infrastructure/machines";
 export const filesPath = "/dashboard/files";
 export const serversPath = "/dashboard/servers";
 export const profilePath = "/dashboard/organization/settings/profile";
@@ -261,6 +262,7 @@ export const usersPath = "/dashboard/organization/team/users";
 export const rolesPath = "/dashboard/organization/team/roles";
 
 export function navigationHref(id: string): string | undefined {
+  if (id === "nodes") return machinesPath;
   if (id === "file-library") return filesPath;
   if (id === "servers") return serversPath;
   if (id === "connections") return connectionsPath;
