@@ -165,7 +165,10 @@ async function start() {
           .filter(Boolean)
           .join(","),
       CUPBOARD_INSECURE_COOKIES: "1",
-      CUPBOARD_DEV_ORIGINS: config.allowedDevOrigins.join(","),
+      CUPBOARD_DEV_ORIGINS: [
+        ...config.allowedDevOrigins,
+        ...(process.env.CUPBOARD_DEV_ORIGINS?.split(",").filter(Boolean) ?? []),
+      ].join(","),
     };
     rust = startRustDev({ env });
     await Promise.race([

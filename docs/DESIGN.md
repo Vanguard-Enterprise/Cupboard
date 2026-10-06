@@ -267,6 +267,27 @@ transparent negative space and no enclosing tile. The source concept lives in
 `public/images/cupboard-logo.png`. Existing letter tiles elsewhere can migrate
 to this mark when their interface is updated. Do not invent competing marks.
 
+## Machines
+
+Use [Twingate's inventory](https://mobbin.com/screens/5385e167-f213-4cd4-a354-14b01d30c2b9)
+for the compact machine table, search and filters, and restrained row actions.
+Agent enrollment follows its
+[guided setup](https://mobbin.com/screens/0764a44a-ad61-44a1-b75a-08b220f75d26):
+prepare, install, then verify a report from the newly enrolled agent.
+
+Machine details follow
+[Neon's monitoring layout](https://mobbin.com/screens/a140f8f1-d12e-407f-81c8-e06186ce5350)
+with grouped resource panels and a Machine details dialog for configuration.
+Show actual memory and root-disk capacity, CPU load, uptime, and report time.
+Machine details use [StackAI's compact value-and-chart cards](https://mobbin.com/screens/03fb91f0-89d0-45e6-ada1-34d533a3febf)
+for CPU and network receive/send, with circular memory and storage meters and
+uptime beside the machine name. Charts cover
+the last hour, use actual report timestamps, and leave gaps after missed reports.
+Detailed history values belong in chart tooltips; capacity meters expose used and
+available bytes alongside the percentage. Keep configuration and agent actions
+in the Machine details dialog.
+Keep Cupboard's charcoal, sage, and shared components.
+
 ## Review checklist
 
 Before finishing a user-facing change, check that:
@@ -282,3 +303,45 @@ Before finishing a user-facing change, check that:
 - Desktop and mobile layouts have been inspected.
 - Tests cover the main interaction and risky state transitions.
 - Any intentional change to the product's design direction is recorded here.
+
+Machine rows combine status with the public-IP country flag: a focusable flag tile
+uses a gently pulsing colored border. Align the tile and machine name at the top
+on every screen size; the full identity block opens monitoring.
+Use green for connected, red for stale reports, yellow for awaiting a report,
+and gray for unenrolled machines. Enrolled states pulse gently with reduced
+motion respected. Tooltips provide text, report time, and an explanation.
+Resource columns use usage bars with accessible values and text details; missing
+readings remain empty. Unreachable machines replace every graph with a skeleton
+and show relative Last seen time and its timestamp in the stats area; never present stale utilization as current.
+Provider belongs beside the host name. Location appears only in machine details,
+derived from the public-IP country used by the flag. Do not offer a manual
+location field. A combined
+in/out network sparkline occupies the final metric column. Mobile rows hide resource stats and the network chart below the medium breakpoint.
+Keep identity, status, last-seen information, and actions visible; tapping the
+machine opens its full monitoring view.
+
+Machine refresh failures use a brief top-right toast once per outage; automatic
+retries continue without a persistent banner or retry button.
+
+Adding a machine opens a dedicated Machine setup page: Details, Install agent,
+Verify connection. Keep progress visible and resumable; preserve non-secret drafts
+and use server state for enrollment and verification. Show the country flag beside
+the derived location in the details dialog. Before the first report, every metric
+column uses skeleton placeholders, including network labels.
+
+Unenrolled machines use one enrollment invitation across the resource columns.
+Place decorative skeletons behind the enrollment action. Offline
+flags stay small and faded behind a disconnected-cable icon on a blurred translucent backdrop.
+Machine address forms accept IPv4 and IPv6 literals and label the requirement.
+
+Keep the enrollment invitation borderless; omit duplicate Continue setup/Enroll
+menu entries. Unenrolled machine menus offer Remove with confirmation. Offline
+flag content stays static and faded beneath the cable overlay; only its red
+border pulses, respecting reduced-motion preferences.
+
+Center the Enroll machine button by itself across the resource columns. Offline
+rows overlay relative Last seen time with an absolute timestamp on their skeletons;
+on mobile, keep this time below the identity because metric columns are hidden.
+
+Enrollment and offline Last seen overlays use a translucent blurred backdrop,
+centered over the skeleton metrics without adding row height for a separate label.

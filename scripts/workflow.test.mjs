@@ -21,6 +21,11 @@ it("quick checks skip Docker, Rust database tests, and production builds", async
       "#!/usr/bin/env node\nprocess.exit(99)",
       { mode: 0o755 },
     );
+    await writeFile(
+      join(cwd, "bin/python3"),
+      `#!/usr/bin/env node\n${record}`,
+      { mode: 0o755 },
+    );
     await writeFile(join(cwd, "npm.cjs"), record);
     await promisify(execFile)(
       process.execPath,
@@ -42,6 +47,16 @@ it("quick checks skip Docker, Rust database tests, and production builds", async
       .split("\n")
       .map(JSON.parse);
     expect(commands).toEqual([
+      [
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-p",
+        "test_agent.py",
+      ],
       ["fmt", "--all", "--check"],
       ["clippy", "--locked", "--all-targets", "--", "-D", "warnings"],
       ["run", "format:check"],

@@ -185,3 +185,56 @@ Deployment manifests live in `v-deployments`; old Cupboard overlays are not used
 Both images are pinned to one commit's release tags. The smoke check verifies the
 containerized proxy and persisted account, tenant, server, and health data across
 runtime restarts, including tenant isolation and secret redaction.
+
+CUP-43 adds organization-scoped machine inventory and agent health at
+`/dashboard/infrastructure/machines`. Infrastructure has separate viewing and
+management permissions. Machine edits use revisions to detect conflicting saves.
+Operators issue ten-minute, single-use enrollment tokens. The agent exchanges a
+token for a credential that can only submit health for its assigned machine.
+PostgreSQL stores token and credential hashes, never their plaintext. Replacing
+an agent revokes its previous credential; disconnecting also cancels pending
+enrollment and clears readings while retaining the inventory record.
+
+The Linux agent is a downloadable Python 3.10+ standard-library script. This
+adds a process on each managed host because Cupboard cannot read remote host
+memory, uptime, or disk capacity from its application runtime. It sends outbound
+HTTPS reports every 30 seconds, verifies certificates, refuses redirects, and
+stores its credential in a private file. No new central service or worker is
+introduced. Reports include hostname, OS, logical CPU count, one-minute load,
+memory, root-disk capacity, uptime, and agent version. Readings become stale after
+90 seconds without a report. Current readings and one hour of resource history are retained. Remote commands,
+software installation, Windows hosts, and longer-term host telemetry are outside
+this slice. A machine connection reports agent reachability, not game-server
+health. The agent setup guide includes an optional systemd user service.
+
+Machine inventory includes status indicators, country flags, and current CPU,
+memory, and root-disk usage bars. Agent 1.1 adds optional CPU utilization and
+public-IP country fields to the existing health JSON, so older agents remain
+accepted. The agent resolves its own outbound IP through IPWhois over HTTPS,
+caching for one hour; failure leaves country unknown. No additional service or browser geolocation request is introduced.
+
+Machine details now retain up to 120 timestamped CPU, memory, and root-disk samples
+in a bounded JSON column on each machine. Heartbeats replace the current 30-second
+bucket, evict samples older than one hour, and cap storage at 120 samples.
+History reads filter expired samples even while an agent is offline. The detail
+history endpoint enforces infrastructure viewing permission and tenant ownership;
+inventory responses do not include history. Disconnect and replacement clear it.
+Charts show real samples, with no backfill. Agent 1.2 adds optional network
+receive/send rates from Linux interface counters, averaged between reports and
+excluding loopback. Counter resets or interface changes leave one interval unknown.
+Older agents and stored samples remain valid. Details use circular capacity meters
+and a configuration dialog; no new service or migration is needed.
+
+Machine location comes from the agent’s public-IP country lookup. A forward-only
+migration removes the former manually entered location column; create/update
+contracts no longer accept location. Details and the country flag share the same
+reported country, with no new lookup service.
+
+Machine creation now uses a dedicated resumable setup route. User/organization-
+scoped browser storage preserves unfinished non-secret details; after creation,
+the existing machine record and enrollment fields are the persistent setup state.
+No extra service or draft table is required. Raw enrollment tokens remain ephemeral.
+
+Machine address validation now requires a standard IPv4 or IPv6 literal instead
+of the shared server hostname validator. Existing stored addresses are not
+guessed or rewritten; subsequent edits must supply a valid IP.

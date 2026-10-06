@@ -1,0 +1,80 @@
+Cupboard Linux agent setup
+
+Requires Linux, Python 3.10 or later, and a trusted HTTPS address for Cupboard.
+The agent reads /proc and root-filesystem capacity. It needs no root privileges,
+inbound port, SSH access, or access to game-server passwords. It executes no
+remote commands. Run it on the host to measure that host, not inside a container.
+
+1. Download cupboard-agent.py from the enrollment dialog and place it at
+   ~/.local/lib/cupboard-agent/cupboard-agent.py on the target machine.
+2. On that machine, run:
+
+   python3 ~/.local/lib/cupboard-agent/cupboard-agent.py enroll --url https://YOUR-CUPBOARD-HOST
+
+3. Paste the enrollment token at the hidden prompt. Never put it in a command,
+   environment variable, shared note, or shell history. The token expires after
+   10 minutes and works once. If enrollment succeeds but the credential cannot
+   be saved, generate another token in Cupboard and enroll again.
+4. Verify a report:
+
+   python3 ~/.local/lib/cupboard-agent/cupboard-agent.py once
+
+5. For continuous reporting, run:
+
+   python3 ~/.local/lib/cupboard-agent/cupboard-agent.py run
+
+The credential is stored at ~/.config/cupboard-agent/credential.json with 0600
+permissions. Keep it private. Use --config PATH before the subcommand for a
+custom location. The file and its directory must belong to the service user.
+HTTPS certificate verification cannot be disabled. Redirects are refused.
+
+Run after reboot with a systemd user service
+
+Create ~/.config/systemd/user/cupboard-agent.service containing:
+
+[Unit]
+Description=Cupboard machine health agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/lib/cupboard-agent/cupboard-agent.py run
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=2
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
+
+Then run:
+
+systemctl --user daemon-reload
+systemctl --user enable --now cupboard-agent.service
+
+To keep the user's service running without an interactive login, an administrator
+can enable lingering for the service user:
+
+sudo loginctl enable-linger YOUR-SERVICE-USER
+
+Check service state with systemctl --user status cupboard-agent.service.
+Network failures retry every 30 seconds. A revoked credential stops the agent
+with exit status 2. It needs enrollment again before restarting the service.
+After replacing enrollment, restart an already-running service so it reloads
+the saved credential. Do not run multiple agents with the same credential.
+
+Disconnecting in Cupboard revokes both the current agent and pending enrollment,
+and clears health readings. The saved machine record remains. The agent cannot
+read inventory, change permissions, control hosts, or access another machine.
+
+To stop and remove an agent, disable its user service and delete only its script,
+service file, and private credential file. Revoke the connection in Cupboard too.
+
+Agent 1.1 adds CPU utilization and country flags. Replace the script and restart
+the service to upgrade. It samples CPU counters over 200ms for each report.
+It also contacts https://ipwho.is/ at startup and hourly to resolve its outbound
+public IP and country. No Cupboard token, hostname, or machine metadata is sent.
+The request times out after 3 seconds; failure does not stop health reporting.
+IP country is approximate and may identify a NAT gateway or VPN exit location.

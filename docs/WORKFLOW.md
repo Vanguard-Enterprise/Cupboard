@@ -69,6 +69,9 @@ web application always talks to this worktree's Rust process.
 Use separate browser profiles or isolated contexts for concurrent sign-in tests.
 Cookies share a host across ports, even though local storage uses separate origins.
 The development origins include localhost, loopback, and the detected NetBird IP.
+For a task-specific DNS hostname, set `CUPBOARD_DEV_ORIGINS` to that hostname
+and include its full web origin in `CUPBOARD_WEB_ORIGINS` when starting dev.
+Explicit development hostnames extend the detected NetBird hostname list.
 
 Ctrl+C stops the dev launcher and application processes. PostgreSQL stays running
 with its data. Stop only the current worktree's database with:

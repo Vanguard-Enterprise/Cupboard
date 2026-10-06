@@ -6,6 +6,7 @@ const paths = new Set([
   "auth/organization",
   "team",
   "servers",
+  "machines",
   "servers/health",
   "organizations",
   "invitations/accept",
@@ -18,7 +19,13 @@ export async function proxyApi(
   request: Request,
   path: string,
 ): Promise<Response> {
-  if (!paths.has(path) && !/^servers\/[0-9a-f-]{36}\/check$/.test(path))
+  if (
+    !paths.has(path) &&
+    !/^servers\/[0-9a-f-]{36}\/check$/.test(path) &&
+    !/^machines\/[0-9a-f-]{36}(?:\/(?:enrollment|disconnect|history|remove))?$/.test(
+      path,
+    )
+  )
     return Response.json({ error: "Not found." }, { status: 404 });
   const headers = new Headers();
   const cookie = request.headers

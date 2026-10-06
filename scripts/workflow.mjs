@@ -54,6 +54,14 @@ function doctor() {
   for (const [label, command, args] of [
     ["Node", process.execPath, ["--version"]],
     ["Git", "git", ["--version"]],
+    [
+      "Python",
+      "python3",
+      [
+        "-c",
+        "import sys; assert sys.version_info >= (3, 10); print(sys.version.split()[0])",
+      ],
+    ],
     ["Rust toolchain", "rustup", ["show", "active-toolchain"]],
     ["Docker daemon", "docker", ["info", "--format", "{{.ServerVersion}}"]],
     ["Compose", "docker", ["compose", "version", "--short"]],

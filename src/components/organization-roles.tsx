@@ -147,7 +147,12 @@ function RoleFields({
   lockPermissions: boolean;
   onChange: (draft: RoleDraft) => void;
 }) {
-  const groups = ["Servers", "Community", "Organization"] as const;
+  const groups = [
+    "Infrastructure",
+    "Servers",
+    "Community",
+    "Organization",
+  ] as const;
   return (
     <div className="grid gap-5">
       {error && !errorField ? (
@@ -1070,43 +1075,45 @@ export function OrganizationRoles() {
                     Reassign this role&apos;s members before deleting it.
                   </p>
                 ) : null}
-                {["Servers", "Community", "Organization"].map((group) => (
-                  <section key={group}>
-                    <h3 className="mb-2 font-medium">{group}</h3>
-                    <ul className="divide-y divide-border">
-                      {permissionDefinitions
-                        .filter((permission) => permission.group === group)
-                        .map((permission) => {
-                          const granted = selectedRole.permissions.includes(
-                            permission.id,
-                          );
-                          return (
-                            <li
-                              key={permission.id}
-                              className="flex items-start gap-3 py-3"
-                            >
-                              {granted ? (
-                                <CheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
-                              ) : (
-                                <MinusIcon className="mt-0.5 size-4 shrink-0 text-text-muted" />
-                              )}
-                              <div>
-                                <p>
-                                  {permission.label}
-                                  <span className="sr-only">
-                                    {granted ? ": Granted" : ": Not granted"}
-                                  </span>
-                                </p>
-                                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                                  {permission.description}
-                                </p>
-                              </div>
-                            </li>
-                          );
-                        })}
-                    </ul>
-                  </section>
-                ))}
+                {["Infrastructure", "Servers", "Community", "Organization"].map(
+                  (group) => (
+                    <section key={group}>
+                      <h3 className="mb-2 font-medium">{group}</h3>
+                      <ul className="divide-y divide-border">
+                        {permissionDefinitions
+                          .filter((permission) => permission.group === group)
+                          .map((permission) => {
+                            const granted = selectedRole.permissions.includes(
+                              permission.id,
+                            );
+                            return (
+                              <li
+                                key={permission.id}
+                                className="flex items-start gap-3 py-3"
+                              >
+                                {granted ? (
+                                  <CheckIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+                                ) : (
+                                  <MinusIcon className="mt-0.5 size-4 shrink-0 text-text-muted" />
+                                )}
+                                <div>
+                                  <p>
+                                    {permission.label}
+                                    <span className="sr-only">
+                                      {granted ? ": Granted" : ": Not granted"}
+                                    </span>
+                                  </p>
+                                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                                    {permission.description}
+                                  </p>
+                                </div>
+                              </li>
+                            );
+                          })}
+                      </ul>
+                    </section>
+                  ),
+                )}
               </div>
               <SheetFooter className="border-t border-border p-6">
                 <Button

@@ -1,5 +1,17 @@
 export const permissionDefinitions = [
   {
+    id: "infrastructure.view",
+    label: "View infrastructure",
+    description: "See machine inventory and node health.",
+    group: "Infrastructure",
+  },
+  {
+    id: "infrastructure.manage",
+    label: "Manage infrastructure",
+    description: "Manage machine records and node connections.",
+    group: "Infrastructure",
+  },
+  {
     id: "servers.view",
     label: "View servers",
     description: "See server status, configuration, and activity.",

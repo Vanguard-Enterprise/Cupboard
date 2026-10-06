@@ -1,0 +1,3 @@
+country-flag-icons 1.6.20, MIT license.
+Source: https://www.npmjs.com/package/country-flag-icons/v/1.6.20
+Only optimized 3x2 SVG files are included.

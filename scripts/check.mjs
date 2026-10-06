@@ -16,6 +16,16 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 try {
+  await processes.run("python3", [
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests",
+    "-p",
+    "test_agent.py",
+  ]);
   await processes.run("cargo", ["fmt", "--all", "--check"]);
   await processes.run("cargo", [
     "clippy",
