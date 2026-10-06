@@ -3404,6 +3404,7 @@ async fn logos_are_persistent_scoped_authorized_versioned_and_cleaned_up() {
     )
     .layer(axum::Extension(storage.clone()));
     let restarted = Client {
+        organization: owner.organization.clone(),
         app: restarted_app,
         cookie: owner.cookie.clone(),
     };
@@ -3578,6 +3579,7 @@ async fn logo_uploads_reauthorize_after_storage_io_and_redact_storage_errors() {
         .unwrap();
     let pending_org = org.clone();
     let pending = Client {
+        organization: owner.organization.clone(),
         app: app.clone(),
         cookie: owner.cookie.clone(),
     };
@@ -3637,6 +3639,7 @@ async fn logo_uploads_reauthorize_after_storage_io_and_redact_storage_errors() {
     )
     .layer(axum::Extension(storage.clone()));
     let owner = Client {
+        organization: owner.organization.clone(),
         app,
         cookie: owner.cookie,
     };
