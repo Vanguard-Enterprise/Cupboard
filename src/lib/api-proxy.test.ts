@@ -322,3 +322,52 @@ describe("worktree session isolation", () => {
     ).toBe(false);
   });
 });
+
+it("forwards scoped logo uploads and enforces their smaller body limit", async () => {
+  const fetcher = vi.fn(async () => Response.json({ id: "logo", revision: 1 }));
+  vi.stubGlobal("fetch", fetcher);
+  const upload = (size: number) =>
+    new Request("http://localhost:5173/app-api/organization-logo", {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:5173",
+        "content-type": "application/octet-stream",
+        "x-cupboard-request": "1",
+        "x-cupboard-organization": "org",
+        "x-cupboard-logo-revision": "0",
+      },
+      body: new Uint8Array(size),
+    });
+  expect((await proxyApi(upload(12), "organization-logo")).status).toBe(200);
+  const options = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+  expect(new Headers(options[1].headers).get("x-cupboard-organization")).toBe(
+    "org",
+  );
+  expect(new Headers(options[1].headers).get("x-cupboard-logo-revision")).toBe(
+    "0",
+  );
+  expect(
+    (await proxyApi(upload(2 * 1024 * 1024 + 1), "organization-logo")).status,
+  ).toBe(413);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+it("serves authenticated logo bytes with a fixed safe image type", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response("png", { headers: { "content-type": "text/html" } }),
+    ),
+  );
+  const path = "organization-logo/11111111-1111-1111-1111-111111111111";
+  const response = await proxyApi(
+    new Request(`http://localhost:5173/app-api/${path}`, {
+      headers: { "x-cupboard-organization": "org" },
+    }),
+    path,
+  );
+  expect(response.headers.get("content-type")).toBe("image/png");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(await response.text()).toBe("png");
+});

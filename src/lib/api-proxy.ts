@@ -12,6 +12,9 @@ const paths = new Set([
   "team",
   "servers",
   "files",
+  "organization-logo",
+  "organization-logo/remove",
+  "organization-logo/preview",
   "files/folders",
   "public-files/download",
   "servers/health",
@@ -26,12 +29,21 @@ export async function proxyApi(
   request: Request,
   path: string,
 ): Promise<Response> {
-  const fileUpload = path === "files" && request.method === "POST";
+  const logoUpload =
+    (path === "organization-logo" || path === "organization-logo/preview") &&
+    request.method === "POST";
+  const logoDownload =
+    (path === "organization-logo/preview" && request.method === "POST") ||
+    (/^organization-logo\/[0-9a-f-]{36}$/.test(path) &&
+      request.method === "GET");
+  const fileUpload =
+    (path === "files" && request.method === "POST") || logoUpload;
   const fileDownload =
     (/^files\/[0-9a-f-]{36}$/.test(path) && request.method === "GET") ||
     (path === "public-files/download" && request.method === "POST");
   if (
     !paths.has(path) &&
+    !logoDownload &&
     !/^servers\/[0-9a-f-]{36}\/check$/.test(path) &&
     !/^files\/[0-9a-f-]{36}(?:\/(?:delete|rename|move|copy|share|share\/revoke))?$/.test(
       path,
@@ -50,7 +62,11 @@ export async function proxyApi(
       "cookie",
       `${backendSessionCookieName}=${cookie.slice(browserCookiePrefix.length)}`,
     );
-  if (path === "files" || path.startsWith("files/")) {
+  if (
+    path === "files" ||
+    path.startsWith("files/") ||
+    path.startsWith("organization-logo")
+  ) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);
   }
@@ -82,6 +98,10 @@ export async function proxyApi(
       "content-type",
       fileUpload ? "application/octet-stream" : "application/json",
     );
+    if (logoUpload) {
+      const revision = request.headers.get("x-cupboard-logo-revision");
+      if (revision) headers.set("x-cupboard-logo-revision", revision);
+    }
     if (fileUpload) {
       const name = request.headers.get("x-cupboard-filename");
       if (name) headers.set("x-cupboard-filename", name);
@@ -96,7 +116,10 @@ export async function proxyApi(
         const chunk = await reader.read();
         if (chunk.done) break;
         size += chunk.value.length;
-        if (size > (fileUpload ? 10 * 1024 * 1024 : 65536)) {
+        if (
+          size >
+          (logoUpload ? 2 * 1024 * 1024 : fileUpload ? 10 * 1024 * 1024 : 65536)
+        ) {
           await reader.cancel();
           return Response.json(
             { error: "Request is too large." },
@@ -121,7 +144,9 @@ export async function proxyApi(
       redirect: "error",
       cache: "no-store",
       signal: AbortSignal.timeout(
-        fileUpload || fileDownload || path.startsWith("files/") ? 60000 : 15000,
+        fileUpload || fileDownload || logoDownload || path.startsWith("files/")
+          ? 60000
+          : 15000,
       ),
     });
     const resultHeaders = new Headers({
@@ -144,6 +169,18 @@ export async function proxyApi(
         },
         { status: 503, headers: { "Cache-Control": "no-store" } },
       );
+    if (logoDownload && upstream.ok) {
+      resultHeaders.set("Content-Type", "image/png");
+      resultHeaders.set("X-Content-Type-Options", "nosniff");
+      resultHeaders.set(
+        "Content-Security-Policy",
+        "default-src 'none'; sandbox",
+      );
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: resultHeaders,
+      });
+    }
     if (fileDownload && upstream.ok) {
       resultHeaders.set("Content-Type", "application/octet-stream");
       resultHeaders.set("X-Content-Type-Options", "nosniff");

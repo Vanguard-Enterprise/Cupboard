@@ -2591,3 +2591,444 @@ async fn uploads_and_recursive_deletion_release_database_during_storage_io() {
     .expect("background deletion should eventually reclaim every file and folder");
     server.abort();
 }
+
+impl Client {
+    async fn logo_upload(&self, org: &str, revision: i64, bytes: Vec<u8>) -> (StatusCode, Value) {
+        let response = self
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/app-api/organization-logo")
+                    .header("origin", "http://localhost:5173")
+                    .header("x-cupboard-request", "1")
+                    .header("x-cupboard-organization", org)
+                    .header("x-cupboard-logo-revision", revision)
+                    .header("content-type", "application/octet-stream")
+                    .header("cookie", &self.cookie)
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let status = response.status();
+        let value = serde_json::from_slice(&to_bytes(response.into_body(), 100_000).await.unwrap())
+            .unwrap();
+        (status, value)
+    }
+}
+#[tokio::test]
+async fn logos_are_persistent_scoped_authorized_versioned_and_cleaned_up() {
+    use crate::storage::FileStore;
+    use object_store::{ObjectStoreExt, path::Path};
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let storage = FileStore(std::sync::Arc::new(
+        object_store::aws::AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(std::env::var("CUPBOARD_TEST_S3_ENDPOINT").unwrap())
+            .with_allow_http(true)
+            .with_access_key_id("cupboard-test")
+            .with_secret_access_key("cupboard-storage-test-only")
+            .build()
+            .unwrap(),
+    ));
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner
+        .signup(&format!("logo-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("logo-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let org = owner.request("GET", "auth/me", json!(null)).await.1["organization"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let other_org = other.request("GET", "auth/me", json!(null)).await.1["organization"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let png = || {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(24, 24)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    };
+    assert_eq!(
+        anonymous.logo_upload(&org, 0, png()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        other.logo_upload(&org, 0, png()).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .logo_upload(&org, 0, b"<svg><script>secret</script></svg>".to_vec())
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        owner
+            .logo_upload(&org, 0, vec![0; crate::logos::MAX_LOGO_SIZE + 1])
+            .await
+            .0,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="800"><rect width="1600" height="800" fill="red"/></svg>"#.to_vec();
+    assert_eq!(
+        anonymous
+            .file_request("POST", "organization-logo/preview", &org, "", svg.clone())
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        other
+            .file_request("POST", "organization-logo/preview", &org, "", svg.clone())
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let preview = owner
+        .file_request("POST", "organization-logo/preview", &org, "", svg)
+        .await;
+    assert_eq!(preview.status(), StatusCode::OK);
+    assert_eq!(preview.headers()["content-type"], "image/png");
+    let preview_image =
+        image::load_from_memory(&to_bytes(preview.into_body(), 200_000).await.unwrap()).unwrap();
+    assert_eq!((preview_image.width(), preview_image.height()), (160, 80));
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM organization_logos WHERE organization_id=$1")
+            .bind(&org)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        count, 0,
+        "Preview must not persist an object or change the saved logo"
+    );
+    let (status, first) = owner.logo_upload(&org, 0, png()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["revision"], 1);
+    assert_eq!(
+        first.as_object().unwrap().len(),
+        2,
+        "No object keys or storage configuration in responses"
+    );
+    let first_id = first["id"].as_str().unwrap();
+    let path = format!("organization-logo/{first_id}");
+    assert_eq!(
+        other
+            .file_request("GET", &path, &other_org, "", vec![])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let download = owner.file_request("GET", &path, &org, "", vec![]).await;
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(download.headers()["content-type"], "image/png");
+    assert_eq!(download.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(download.headers()["cache-control"], "no-store");
+    assert!(
+        image::load_from_memory(
+            &to_bytes(download.into_body(), 20 * 1024 * 1024)
+                .await
+                .unwrap()
+        )
+        .is_ok()
+    );
+    let restarted_app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let restarted = Client {
+        app: restarted_app,
+        cookie: owner.cookie.clone(),
+    };
+    let response = restarted
+        .file_request("GET", "organization-logo", &org, "", vec![])
+        .await;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&to_bytes(response.into_body(), 1000).await.unwrap())
+            .unwrap(),
+        first
+    );
+    assert_eq!(
+        owner.logo_upload(&org, 0, png()).await.0,
+        StatusCode::CONFLICT
+    );
+    let (status, second) = owner.logo_upload(&org, 1, png()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(first["id"], second["id"]);
+    assert_eq!(
+        owner
+            .file_request("GET", &path, &org, "", vec![])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    crate::logos::cleanup(&pool, &storage).await;
+    assert!(
+        storage
+            .0
+            .get(&Path::from(format!("organizations/{org}/logos/{first_id}")))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        other
+            .file_action("organization-logo/remove", &org, json!({"revision":2}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .file_action("organization-logo/remove", &org, json!({"revision":1}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    // Removing management permission leaves image reads available to active members.
+    sqlx::query("UPDATE organizations SET owner_account_id=(SELECT owner_account_id FROM organizations WHERE id=$2) WHERE id=$1").bind(&org).bind(&other_org).execute(&pool).await.unwrap();
+    sqlx::query(
+        "UPDATE organization_roles SET permissions=ARRAY[]::text[] WHERE organization_id=$1",
+    )
+    .bind(&org)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owner.logo_upload(&org, 2, png()).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        owner
+            .file_action("organization-logo/remove", &org, json!({"revision":2}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        owner
+            .file_request(
+                "GET",
+                &format!("organization-logo/{}", second["id"].as_str().unwrap()),
+                &org,
+                "",
+                vec![]
+            )
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['organization.manage']::text[] WHERE organization_id=$1").bind(&org).execute(&pool).await.unwrap();
+    let (status, removed) = owner
+        .file_action("organization-logo/remove", &org, json!({"revision":2}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(removed, json!({"id":null,"revision":3}));
+    crate::logos::cleanup(&pool, &storage).await;
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM organization_logos WHERE organization_id=$1")
+            .bind(&org)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    // Pending objects survive a canceled upload until the grace period, then retry cleanup.
+    let pending = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO organization_logos(organization_id,id) VALUES($1,$2)")
+        .bind(&org)
+        .bind(&pending)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let key = Path::from(format!("organizations/{org}/logos/{pending}"));
+    storage.0.put(&key, png().into()).await.unwrap();
+    crate::logos::cleanup(&pool, &storage).await;
+    assert!(storage.0.get(&key).await.is_ok());
+    sqlx::query("UPDATE organization_logos SET created_at=0 WHERE organization_id=$1 AND id=$2")
+        .bind(&org)
+        .bind(&pending)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::logos::cleanup(&pool, &storage).await;
+    assert!(storage.0.get(&key).await.is_err());
+}
+
+#[tokio::test]
+async fn logo_uploads_reauthorize_after_storage_io_and_redact_storage_errors() {
+    use crate::storage::FileStore;
+    use object_store::aws::AmazonS3Builder;
+    use std::sync::Arc;
+    use tokio::sync::{Semaphore, mpsc};
+    let (started, mut requests) = mpsc::channel(4);
+    let release = Arc::new(Semaphore::new(0));
+    let gate = release.clone();
+    let s3 = Router::new().fallback(move || {
+        let started = started.clone();
+        let gate = gate.clone();
+        async move {
+            started.send(()).await.unwrap();
+            gate.acquire().await.unwrap().forget();
+            (StatusCode::OK, [(header::ETAG, "\"saved\"")], "")
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, s3).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test-secret-never-return")
+            .build()
+            .unwrap(),
+    ));
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!("logo-race-{}@example.com", uuid::Uuid::new_v4()))
+        .await;
+    owner.create_organization().await;
+    let org = owner.request("GET", "auth/me", json!(null)).await.1["organization"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(8, 8)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let pending_org = org.clone();
+    let pending = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+    };
+    let upload = tokio::spawn(async move {
+        pending
+            .logo_upload(&pending_org, 0, bytes.into_inner())
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE NOWAIT")
+        .bind(&org)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE organization_members SET status='suspended' WHERE organization_id=$1")
+        .bind(&org)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    release.add_permits(1);
+    assert_eq!(upload.await.unwrap().0, StatusCode::FORBIDDEN);
+    let row:(i64,i64) = sqlx::query_as("SELECT count(*),count(*) FILTER (WHERE active) FROM organization_logos WHERE organization_id=$1").bind(&org).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        row,
+        (1, 0),
+        "Lost authorization leaves only a cleanup record"
+    );
+    server.abort();
+
+    let failing = Router::new()
+        .fallback(|| async { (StatusCode::FORBIDDEN, "storage-key-secret-never-return") });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, failing).await.unwrap() });
+    let storage = FileStore(Arc::new(
+        AmazonS3Builder::new()
+            .with_bucket_name("cupboard-test")
+            .with_region("us-east-1")
+            .with_endpoint(endpoint)
+            .with_allow_http(true)
+            .with_access_key_id("test")
+            .with_secret_access_key("test-secret-never-return")
+            .build()
+            .unwrap(),
+    ));
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(storage.clone()));
+    let owner = Client {
+        app,
+        cookie: owner.cookie,
+    };
+    sqlx::query("UPDATE organization_members SET status='active' WHERE organization_id=$1")
+        .bind(&org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(8, 8)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let (status, error) = owner.logo_upload(&org, 0, bytes.into_inner()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        error,
+        json!({"error":"Logo storage is unavailable. Try again shortly."})
+    );
+    sqlx::query("UPDATE organization_logos SET created_at=0 WHERE organization_id=$1")
+        .bind(&org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::logos::cleanup(&pool, &storage).await;
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM organization_logos WHERE organization_id=$1")
+            .bind(&org)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 2, "Failed deletions retain retry records");
+    server.abort();
+}

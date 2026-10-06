@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
+import { useOrganizationLogo } from "@/hooks/use-organization-logo";
+import { OrganizationLogoPicker } from "./organization-logo-picker";
 import { Building2Icon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -25,14 +28,13 @@ import {
 } from "@/lib/address-options";
 import {
   validateProfile,
-  isValidLogoUrl,
   type OrganizationProfile,
   type ProfileErrors,
 } from "@/lib/organization-profile";
 
 function LogoPreview({ url }: { url: string }) {
   const [failed, setFailed] = useState(false);
-  const src = isValidLogoUrl(url) ? url : undefined;
+  const src = url.startsWith("blob:") ? url : undefined;
   return (
     <div className="space-y-2">
       <Avatar className="size-20 rounded-xl after:rounded-xl">
@@ -49,7 +51,7 @@ function LogoPreview({ url }: { url: string }) {
       </Avatar>
       {src && failed && (
         <p className="max-w-48 text-xs text-muted-foreground" role="status">
-          Image could not be loaded. Check the URL is publicly accessible.
+          Image could not be loaded. Choose another image.
         </p>
       )}
     </div>
@@ -59,15 +61,19 @@ function LogoPreview({ url }: { url: string }) {
 function ProfileEditor({
   saved,
   save,
+  organizationId,
+  canManage,
 }: {
+  organizationId: string;
+  canManage: boolean;
   saved: OrganizationProfile;
   save: (profile: OrganizationProfile) => void;
 }) {
+  const logo = useOrganizationLogo(organizationId);
+  const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState(saved);
-  const [previewUrl, setPreviewUrl] = useState(saved.logoUrl.trim());
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [saveError, setSaveError] = useState("");
-  const [saveMessage, setSaveMessage] = useState("");
   const [baseline, setBaseline] = useState(saved);
   const [conflict, setConflict] = useState(false);
   const { contains: countryNameContains } = useComboboxFilter();
@@ -81,13 +87,12 @@ function ProfileEditor({
     setBaseline(saved);
     if (JSON.stringify(draft) === JSON.stringify(baseline)) {
       setDraft(saved);
-      setPreviewUrl(saved.logoUrl.trim());
       setConflict(false);
     } else {
       setConflict(JSON.stringify(draft) !== JSON.stringify(saved));
     }
   }
-  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
+  const dirty = logo.dirty || JSON.stringify(draft) !== JSON.stringify(saved);
   function field(
     key: keyof OrganizationProfile,
     label: string,
@@ -116,7 +121,6 @@ function ProfileEditor({
         ...(key === "country" && value !== draft.country ? { region: "" } : {}),
       });
       setSaveError("");
-      setSaveMessage("");
       setErrors({
         ...errors,
         [key]: undefined,
@@ -128,12 +132,9 @@ function ProfileEditor({
       name: key,
       value: draft[key],
       required: key === "name",
-      maxLength:
-        key === "logoUrl"
-          ? 2048
-          : ["description", "addressLine1", "addressLine2"].includes(key)
-            ? 1000
-            : 200,
+      maxLength: ["description", "addressLine1", "addressLine2"].includes(key)
+        ? 1000
+        : 200,
       autoComplete: (
         {
           addressLine1: "billing address-line1",
@@ -152,11 +153,6 @@ function ProfileEditor({
       onChange: (
         event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
       ) => updateValue(event.target.value),
-      onBlur:
-        key === "logoUrl"
-          ? (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-              setPreviewUrl(event.target.value.trim())
-          : undefined,
     };
     return (
       <div
@@ -242,16 +238,15 @@ function ProfileEditor({
     <form
       noValidate
       className="space-y-8"
-      onSubmit={(event) => {
+      onSubmit={async (event) => {
         event.preventDefault();
-        if (conflict) return;
+        if (conflict || saving) return;
         const normalized = Object.fromEntries(
           Object.entries(draft).map(([key, value]) => [key, value.trim()]),
         ) as OrganizationProfile;
         const nextErrors = validateProfile(normalized);
         setErrors(nextErrors);
         setSaveError("");
-        setSaveMessage("");
         if (Object.keys(nextErrors).length) {
           const firstInvalidControl = Array.from(
             event.currentTarget.querySelectorAll<
@@ -263,51 +258,62 @@ function ProfileEditor({
           firstInvalidControl?.focus();
           return;
         }
+        setSaving(true);
         try {
-          save(normalized);
+          await logo.save();
+          try {
+            save(normalized);
+          } catch {
+            throw new Error(
+              logo.dirty
+                ? "The logo was saved, but organization details could not be saved in this browser. Try saving again."
+                : "Could not save your changes. Please try again.",
+            );
+          }
           setDraft(normalized);
-          setPreviewUrl(normalized.logoUrl);
-          setSaveMessage("Changes saved.");
-        } catch {
-          setSaveError("Could not save your changes. Please try again.");
+          toast.success("Changes saved.");
+        } catch (error) {
+          setSaveError(
+            error instanceof Error
+              ? error.message
+              : "Could not save your changes. Please try again.",
+          );
+        } finally {
+          setSaving(false);
         }
       }}
     >
-      <div className="divide-y divide-border">
+      <fieldset disabled={saving} className="divide-y divide-border">
         <section aria-labelledby="details-heading" className="space-y-6 pb-8">
           <div className="space-y-1">
             <h2 id="details-heading" className="text-base font-semibold">
-              Organization details
+              Organization
             </h2>
-            <p className="text-sm text-muted-foreground">
-              Your organization&apos;s name, website, and description.
-            </p>
           </div>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6">
-            <LogoPreview key={previewUrl} url={previewUrl} />
+            <LogoPreview key={logo.preview} url={logo.preview} />
             <div className="min-w-0 flex-1 space-y-2">
-              {field(
-                "logoUrl",
-                "Organization logo URL",
-                "url",
-                "https://example.com/logo.png",
-                "Use a public HTTPS image URL. Square images work best.",
-              )}
-              {draft.logoUrl && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-10 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-                  onClick={() => {
-                    setDraft({ ...draft, logoUrl: "" });
-                    setPreviewUrl("");
-                    setErrors({ ...errors, logoUrl: undefined });
+              <OrganizationLogoPicker
+                disabled={!canManage || !logo.ready || saving || logo.loading}
+                hasLogo={logo.hasLogo}
+                error={logo.error}
+                loading={logo.loading || logo.processing}
+                onRetry={logo.dirty ? undefined : () => void logo.reload()}
+                onRemove={() => {
+                  logo.select(null);
+                  setSaveError("");
+                }}
+                onSelect={(file) => {
+                  if (logo.select(file)) {
                     setSaveError("");
-                    setSaveMessage("");
-                  }}
-                >
-                  Remove logo
-                </Button>
+                  }
+                }}
+              />
+              {!canManage && (
+                <p className="text-xs text-muted-foreground">
+                  Organization management permission is required to change the
+                  uploaded logo.
+                </p>
               )}
             </div>
           </div>
@@ -334,11 +340,8 @@ function ProfileEditor({
         <section aria-labelledby="contacts-heading" className="space-y-6 py-8">
           <div className="space-y-1">
             <h2 id="contacts-heading" className="text-base font-semibold">
-              Contact information
+              Contact
             </h2>
-            <p className="text-sm text-muted-foreground">
-              Contact details for your community and staff.
-            </p>
           </div>
           <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
             {field("publicEmail", "Public email", "email", "hello@example.com")}
@@ -353,7 +356,7 @@ function ProfileEditor({
               "Internal contact email",
               "email",
               undefined,
-              "For staff communication. Excluded from organization search.",
+              undefined,
               true,
             )}
           </div>
@@ -361,11 +364,8 @@ function ProfileEditor({
         <section aria-labelledby="billing-heading" className="space-y-6 pt-8">
           <div className="space-y-1">
             <h2 id="billing-heading" className="text-base font-semibold">
-              Billing information
+              Billing
             </h2>
-            <p className="text-sm text-muted-foreground">
-              Legal name, billing contact, and address.
-            </p>
           </div>
           <div className="grid gap-x-4 gap-y-6 md:grid-cols-2">
             {field("legalName", "Legal name")}
@@ -392,7 +392,7 @@ function ProfileEditor({
             {field("postalCode", "ZIP / postal code")}
           </div>
         </section>
-      </div>
+      </fieldset>
       <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-background py-4">
         {conflict && (
           <Alert variant="destructive" className="w-full">
@@ -412,45 +412,45 @@ function ProfileEditor({
             Unsaved changes
           </p>
         )}
-        {saveMessage && (
-          <Alert
-            role="status"
-            className="mr-auto w-auto max-w-full border-primary/25 bg-primary/5"
-          >
-            <AlertDescription className="text-primary">
-              {saveMessage}
-            </AlertDescription>
-          </Alert>
-        )}
         <Button
           type="button"
           variant="outline"
-          className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-          disabled={!dirty && !conflict}
+          className="min-h-11 px-4 sm:h-10 sm:min-h-0 [@media(any-pointer:coarse)]:min-h-11"
+          disabled={saving || (!dirty && !conflict)}
           onClick={() => {
+            logo.cancel();
             setDraft(saved);
-            setPreviewUrl(saved.logoUrl.trim());
             setConflict(false);
             setErrors({});
             setSaveError("");
-            setSaveMessage("");
           }}
         >
           Cancel
         </Button>
         <Button
           type="submit"
-          className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-          disabled={!dirty || conflict}
+          className="min-h-11 px-4 sm:h-10 sm:min-h-0 [@media(any-pointer:coarse)]:min-h-11"
+          disabled={
+            saving ||
+            !dirty ||
+            conflict ||
+            (logo.dirty && (!canManage || !logo.ready || !logo.validPreview))
+          }
         >
-          Save changes
+          {saving ? "Saving changes..." : "Save changes"}
         </Button>
       </div>
     </form>
   );
 }
 
-export function OrganizationProfileForm() {
+export function OrganizationProfileForm({
+  organizationId,
+  canManage,
+}: {
+  organizationId: string;
+  canManage: boolean;
+}) {
   const { profile, ready, save, storageError } = useOrganization();
   if (!ready)
     return (
@@ -465,7 +465,13 @@ export function OrganizationProfileForm() {
           <AlertDescription>{storageError}</AlertDescription>
         </Alert>
       )}
-      <ProfileEditor saved={profile} save={save} />
+      <ProfileEditor
+        key={organizationId}
+        saved={profile}
+        save={save}
+        organizationId={organizationId}
+        canManage={canManage}
+      />
     </>
   );
 }
