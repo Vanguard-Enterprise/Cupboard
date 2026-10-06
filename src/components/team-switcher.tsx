@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { OrganizationLogo } from "./organization-logo";
 import { CreateOrganizationDialog } from "@/components/create-organization-dialog";
 
 import {
@@ -55,7 +56,14 @@ export function TeamSwitcher({
                 className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
               >
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-surface-elevated text-foreground">
-                  {activeTeam.logo}
+                  {activeId ? (
+                    <OrganizationLogo
+                      key={activeId}
+                      organizationId={activeId}
+                    />
+                  ) : (
+                    activeTeam.logo
+                  )}
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">

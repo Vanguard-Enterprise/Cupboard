@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { render, testPreviewKey } from "@/test/preview-storage";
-import { act, cleanup, screen } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
 import { OrganizationProfileForm } from "./organization-profile-form";
 import { OrganizationProvider } from "./organization-provider";
 import { TooltipProvider } from "./ui/tooltip";
@@ -11,14 +13,18 @@ import {
   organizationProfileKey as organizationProfileKeyBase,
 } from "@/lib/organization-profile";
 
-function mount() {
-  return render(
+async function mount() {
+  const view = render(
     <OrganizationProvider>
       <TooltipProvider>
-        <OrganizationProfileForm />
+        <OrganizationProfileForm organizationId="test-organization" canManage />
       </TooltipProvider>
     </OrganizationProvider>,
   );
+  await waitFor(() =>
+    expect(screen.queryByText("Preparing logo...")).toBeNull(),
+  );
+  return view;
 }
 function externalSave(name: string) {
   const profile = { ...defaultOrganizationProfile, name };
@@ -39,77 +45,31 @@ const cancelButton = () =>
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockImplementation(async () => Response.json({ id: null, revision: 0 })),
+  );
+  vi.stubGlobal("URL", URL);
+  URL.createObjectURL = vi.fn(() => "blob:test-logo");
+  URL.revokeObjectURL = vi.fn();
 });
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("Organization profile persistence", () => {
-  it("loads logo previews only after leaving the URL field", async () => {
-    const requests = vi
-      .spyOn(HTMLImageElement.prototype, "src", "set")
-      .mockImplementation(() => {});
-    const user = userEvent.setup();
-    mount();
-    const input = screen.getByLabelText("Organization logo URL");
-    await user.type(input, "https://example.com/logo.png");
-    expect(requests).not.toHaveBeenCalled();
-    await user.tab();
-    expect(requests.mock.calls).toEqual([["https://example.com/logo.png"]]);
-    await user.click(input);
-    await user.type(input, "?version=2");
-    expect(requests).toHaveBeenCalledTimes(1);
-    await user.tab();
-    expect(requests.mock.calls).toEqual([
-      ["https://example.com/logo.png"],
-      ["https://example.com/logo.png?version=2"],
-    ]);
-  });
-
-  it("saves a logo URL, restores it, and cancels or saves removal", async () => {
-    const user = userEvent.setup();
-    const view = mount();
-    const logoInput = () =>
-      screen.getByLabelText("Organization logo URL") as HTMLInputElement;
-    await user.type(logoInput(), "https://example.com/logo.png");
-    await user.click(saveButton());
-    expect(
-      JSON.parse(localStorage.getItem(organizationProfileKey)!),
-    ).toHaveProperty("logoUrl", "https://example.com/logo.png");
-    view.unmount();
-    mount();
-    expect(logoInput().value).toBe("https://example.com/logo.png");
-    await user.click(screen.getByRole("button", { name: "Remove logo" }));
-    expect(logoInput().value).toBe("");
-    await user.click(cancelButton());
-    expect(logoInput().value).toBe("https://example.com/logo.png");
-    await user.click(screen.getByRole("button", { name: "Remove logo" }));
-    await user.click(saveButton());
-    expect(
-      JSON.parse(localStorage.getItem(organizationProfileKey)!),
-    ).toHaveProperty("logoUrl", "");
-  });
-
-  it("rejects credential-bearing logo URLs without rendering or saving them", async () => {
-    const requests = vi
-      .spyOn(HTMLImageElement.prototype, "src", "set")
-      .mockImplementation(() => {});
-    const user = userEvent.setup();
-    mount();
-    const input = screen.getByLabelText("Organization logo URL");
-    await user.type(input, "https://user:password@example.com/logo.png");
-    await user.click(saveButton());
-    expect(screen.getByText(/Enter an https:\/\/ image URL/)).toBeTruthy();
-    expect(document.activeElement).toBe(input);
-    expect(screen.queryByRole("img", { name: "Organization logo" })).toBeNull();
-    expect(localStorage.getItem(organizationProfileKey)).toBeNull();
-    expect(requests).not.toHaveBeenCalled();
+  it("does not offer manual logo URLs", async () => {
+    await mount();
+    expect(screen.queryByLabelText("Organization logo URL")).toBeNull();
   });
 
   it("navigates filtered countries by keyboard", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
 
     const country = screen.getByLabelText("Country") as HTMLInputElement;
     await user.type(country, "United");
@@ -120,7 +80,7 @@ describe("Organization profile persistence", () => {
 
   it("highlights hovered country options", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
 
     const country = screen.getByLabelText("Country") as HTMLInputElement;
     await user.type(country, "United");
@@ -136,7 +96,7 @@ describe("Organization profile persistence", () => {
 
   it("sizes combobox controls for coarse pointers", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
 
     const country = screen.getByLabelText("Country") as HTMLInputElement;
     const inputGroup = country.closest('[data-slot="input-group"]')!;
@@ -161,7 +121,7 @@ describe("Organization profile persistence", () => {
 
   it("filters countries by common abbreviations", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
 
     const country = screen.getByLabelText("Country") as HTMLInputElement;
     await user.type(country, "USA");
@@ -180,7 +140,7 @@ describe("Organization profile persistence", () => {
 
   it("keeps accent and punctuation insensitive country search", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
 
     const country = screen.getByLabelText("Country") as HTMLInputElement;
     const searches = [
@@ -199,7 +159,7 @@ describe("Organization profile persistence", () => {
 
   it("filters and selects countries with the shared combobox", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
 
     const country = screen.getByLabelText("Country") as HTMLInputElement;
     expect(country.tagName).toBe("INPUT");
@@ -227,7 +187,7 @@ describe("Organization profile persistence", () => {
 
   it("saves all sections, restores after remount, and cancels unsaved edits", async () => {
     const user = userEvent.setup();
-    const view = mount();
+    const view = await mount();
     expect(saveButton().disabled).toBe(true);
     expect(cancelButton().disabled).toBe(true);
     await user.clear(nameInput());
@@ -243,10 +203,11 @@ describe("Organization profile persistence", () => {
     });
     expect(saveButton().disabled).toBe(true);
     expect(cancelButton().disabled).toBe(true);
-    expect(screen.getByRole("status").textContent).toContain("Changes saved.");
+    expect(toast.success).toHaveBeenCalledWith("Changes saved.");
+    expect(screen.queryByText("Changes saved.")).toBeNull();
     expect(screen.queryByText("Unsaved changes")).toBeNull();
     view.unmount();
-    mount();
+    await mount();
     expect(nameInput().value).toBe("New organization");
     await user.type(nameInput(), " draft");
     const email = screen.getByLabelText("Public email") as HTMLInputElement;
@@ -258,8 +219,8 @@ describe("Organization profile persistence", () => {
     expect(nameInput().value).toBe("New organization");
   });
 
-  it("updates a pristine form when another tab saves", () => {
-    mount();
+  it("updates a pristine form when another tab saves", async () => {
+    await mount();
     externalSave("Other tab");
     expect(nameInput().value).toBe("Other tab");
     expect(saveButton().disabled).toBe(true);
@@ -268,7 +229,7 @@ describe("Organization profile persistence", () => {
 
   it("preserves pending edits and blocks stale saves until Cancel loads the latest profile", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
     await user.type(nameInput(), " local draft");
     externalSave("Other tab");
     expect(nameInput().value).toBe("Cupboard local draft");
@@ -288,7 +249,7 @@ describe("Organization profile persistence", () => {
 
   it("keeps invalid edits out of storage and focuses the invalid field", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
     await user.clear(nameInput());
     await user.click(saveButton());
     expect(screen.getByText("Enter an organization name.")).toBeTruthy();
@@ -298,22 +259,20 @@ describe("Organization profile persistence", () => {
 
   it("focuses errors in visual order when multiple fields are invalid", async () => {
     const user = userEvent.setup();
-    mount();
-    const logo = screen.getByLabelText("Organization logo URL");
-    await user.type(logo, "invalid");
+    await mount();
+    const website = screen.getByLabelText("Website");
+    await user.type(website, "invalid");
     await user.clear(nameInput());
     await user.click(saveButton());
-    expect(document.activeElement).toBe(logo);
-    expect(screen.getByText("Enter an organization name.")).toBeTruthy();
-    expect(localStorage.getItem(organizationProfileKey)).toBeNull();
-    await user.clear(logo);
-    await user.click(saveButton());
     expect(document.activeElement).toBe(nameInput());
+    await user.type(nameInput(), "Valid name");
+    await user.click(saveButton());
+    expect(document.activeElement).toBe(website);
   });
 
   it("reports a storage failure without discarding the draft", async () => {
     const user = userEvent.setup();
-    mount();
+    await mount();
     await user.type(nameInput(), " draft");
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("Storage unavailable");
@@ -329,3 +288,157 @@ describe("Organization profile persistence", () => {
 });
 
 const organizationProfileKey = testPreviewKey(organizationProfileKeyBase);
+
+describe("Shared organization logo uploads", () => {
+  it("previews and cancels without uploading, then saves only on Save changes", async () => {
+    const user = userEvent.setup();
+    const fetcher = vi.mocked(fetch);
+    fetcher.mockImplementation(async (url, options) => {
+      if (String(url).endsWith("/preview"))
+        return new Response(new Blob(["png"], { type: "image/png" }));
+      if (options?.method === "POST")
+        return Response.json({ id: "saved-logo", revision: 1 });
+      if (String(url).endsWith("/saved-logo"))
+        return new Response(new Blob(["png"], { type: "image/png" }));
+      return Response.json({ id: null, revision: 0 });
+    });
+    await mount();
+    await screen.findByRole("button", { name: "Select logo" });
+    const file = new File(["image"], "logo.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("Upload organization logo"), file);
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    expect(URL.createObjectURL).not.toHaveBeenCalledWith(file);
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(saveButton().disabled).toBe(false);
+    expect(
+      fetcher.mock.calls.filter(
+        ([url, options]) =>
+          url === "/app-api/organization-logo" && options?.method === "POST",
+      ),
+    ).toHaveLength(0);
+    await user.click(cancelButton());
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-logo");
+    expect(
+      fetcher.mock.calls.filter(
+        ([url, options]) =>
+          url === "/app-api/organization-logo" && options?.method === "POST",
+      ),
+    ).toHaveLength(0);
+    await user.upload(screen.getByLabelText("Upload organization logo"), file);
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    await user.click(saveButton());
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Changes saved."),
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      "/app-api/organization-logo",
+      expect.objectContaining({
+        method: "POST",
+        body: file,
+        headers: expect.objectContaining({
+          "X-Cupboard-Organization": "test-organization",
+          "X-Cupboard-Logo-Revision": "0",
+        }),
+      }),
+    );
+    expect(localStorage.getItem(organizationProfileKey)).not.toContain("blob:");
+    expect(screen.getByRole("button", { name: "Replace logo" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Remove logo" }));
+    expect(
+      fetcher.mock.calls.filter(([url]) => String(url).endsWith("/remove")),
+    ).toHaveLength(0);
+    await user.click(cancelButton());
+  });
+  it("keeps a failed upload draft and permits retry", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockImplementation(async (url, options) =>
+      String(url).endsWith("/preview")
+        ? new Response(new Blob(["png"], { type: "image/png" }))
+        : options?.method === "POST"
+          ? Response.json(
+              { error: "Logo storage is unavailable." },
+              { status: 400 },
+            )
+          : Response.json({ id: null, revision: 0 }),
+    );
+    await mount();
+    await user.upload(
+      screen.getByLabelText("Upload organization logo"),
+      new File(["bad"], "large.png", { type: "image/png" }),
+    );
+    await waitFor(() => expect(saveButton().disabled).toBe(false));
+    await user.click(saveButton());
+    expect(
+      (await screen.findAllByText("Logo storage is unavailable.")).length,
+    ).toBeGreaterThan(0);
+    expect(saveButton().disabled).toBe(false);
+    expect(localStorage.getItem(organizationProfileKey)).toBeNull();
+  });
+  it("rejects oversized files locally and disables uploads for members without management permission", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    const view = await mount();
+    await user.upload(
+      screen.getByLabelText("Upload organization logo"),
+      new File([new Uint8Array(2 * 1024 * 1024 + 1)], "logo.png", {
+        type: "image/png",
+      }),
+    );
+    expect(
+      await screen.findByText("Choose an image no larger than 2 MiB."),
+    ).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+    view.unmount();
+    render(
+      <OrganizationProvider>
+        <OrganizationProfileForm
+          organizationId="test-organization"
+          canManage={false}
+        />
+      </OrganizationProvider>,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Select logo" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+  it("can retry loading after a storage error", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("Storage unavailable"));
+    await mount();
+    await user.click(
+      await screen.findByRole("button", { name: "Reload logo" }),
+    );
+    expect(
+      (screen.getByRole("button", { name: "Select logo" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+});
+
+it("never renders an original SVG and blocks save when server conversion rejects it", async () => {
+  const user = userEvent.setup();
+  vi.mocked(fetch).mockImplementation(async (url) =>
+    String(url).endsWith("/preview")
+      ? Response.json(
+          { error: "Use a self-contained SVG with outlined text." },
+          { status: 400 },
+        )
+      : Response.json({ id: null, revision: 0 }),
+  );
+  await mount();
+  const file = new File(
+    ["<svg><script>alert(1)</script></svg>"],
+    "unsafe.svg",
+    { type: "image/svg+xml" },
+  );
+  await user.upload(screen.getByLabelText("Upload organization logo"), file);
+  expect(
+    await screen.findByText("Use a self-contained SVG with outlined text."),
+  ).toBeTruthy();
+  expect(URL.createObjectURL).not.toHaveBeenCalled();
+  expect(saveButton().disabled).toBe(true);
+  await user.click(cancelButton());
+  expect(
+    screen.queryByText("Use a self-contained SVG with outlined text."),
+  ).toBeNull();
+});

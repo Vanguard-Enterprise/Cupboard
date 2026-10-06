@@ -1,5 +1,6 @@
 pub mod auth;
 mod files;
+mod logos;
 pub mod storage;
 pub use files::cleanup as cleanup_files;
 mod connectivity;

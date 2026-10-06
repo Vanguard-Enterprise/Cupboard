@@ -329,6 +329,7 @@ pub async fn cleanup(pool: PgPool, storage: FileStore) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
     loop {
         interval.tick().await;
+        crate::logos::cleanup(&pool, &storage).await;
         // An hour exceeds upload/copy deadlines, so these pending keys cannot
         // still be published by a live request.
         let rows: Result<Vec<(String, String)>, _> = sqlx::query_as("SELECT organization_id,id FROM organization_files WHERE NOT ready AND created_at < extract(epoch FROM now())::bigint-3600 ORDER BY created_at LIMIT 100").fetch_all(&pool).await;
