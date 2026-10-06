@@ -117,6 +117,8 @@ export function useOrganizationLogo(organizationId: string, live = false) {
   }, [selection, saved, organizationId]);
   function select(file: File | null) {
     if (file && (file.size > 2 * 1024 * 1024 || file.size === 0)) {
+      setSelection(undefined);
+      setValidPreview(false);
       setError("Choose an image no larger than 2 MiB.");
       return false;
     }

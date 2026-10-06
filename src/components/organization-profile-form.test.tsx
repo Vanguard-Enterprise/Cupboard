@@ -374,6 +374,44 @@ describe("Shared organization logo uploads", () => {
     expect(saveButton().disabled).toBe(false);
     expect(localStorage.getItem(organizationProfileKey)).toBeNull();
   });
+  it.each([0, 2 * 1024 * 1024 + 1])(
+    "discards the prior draft when rejecting a %i-byte file",
+    async (size) => {
+      const user = userEvent.setup();
+      vi.mocked(fetch).mockImplementation(async (url) =>
+        String(url).endsWith("/preview")
+          ? new Response(new Blob(["png"], { type: "image/png" }))
+          : Response.json({ id: null, revision: 0 }),
+      );
+      await mount();
+      const input = screen.getByLabelText("Upload organization logo");
+      await user.upload(
+        input,
+        new File(["image"], "valid.png", { type: "image/png" }),
+      );
+      await waitFor(() => expect(saveButton().disabled).toBe(false));
+      await user.upload(
+        input,
+        new File([new Uint8Array(size)], "invalid.png", { type: "image/png" }),
+      );
+      expect(
+        await screen.findByText("Choose an image no larger than 2 MiB."),
+      ).toBeTruthy();
+      await waitFor(() => expect(saveButton().disabled).toBe(true));
+      expect(screen.getByRole("button", { name: "Select logo" })).toBeTruthy();
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:test-logo");
+      await user.click(saveButton());
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.filter(
+            ([url, options]) =>
+              url === "/app-api/organization-logo" &&
+              options?.method === "POST",
+          ),
+      ).toHaveLength(0);
+    },
+  );
   it("rejects oversized files locally and disables uploads for members without management permission", async () => {
     const user = userEvent.setup({ applyAccept: false });
     const view = await mount();
