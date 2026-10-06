@@ -24,14 +24,14 @@ import {
 export function MachineMonitoring({
   machine,
   now,
-  stale,
+  organization,
   manage,
   onEdit,
   onEnroll,
 }: {
   machine: Machine;
   now: number;
-  stale: boolean;
+  organization: string;
   manage: boolean;
   onEdit: () => void;
   onEnroll: () => void;
@@ -39,7 +39,7 @@ export function MachineMonitoring({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const status = machineStatus(machine, now);
   const health = machine.health;
-  const old = stale || status === "Stale";
+  const old = status === "Stale";
   return (
     <div className="space-y-6">
       {old && (
@@ -75,6 +75,7 @@ export function MachineMonitoring({
       </div>
       {health && !old && (
         <MachineStatCards
+          organization={organization}
           key={`${machine.id}:${machine.enrolledAt}`}
           machine={machine}
         />

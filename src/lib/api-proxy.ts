@@ -54,7 +54,12 @@ export async function proxyApi(
       "cookie",
       `${backendSessionCookieName}=${cookie.slice(browserCookiePrefix.length)}`,
     );
-  if (path === "files" || path.startsWith("files/")) {
+  if (
+    path === "files" ||
+    path.startsWith("files/") ||
+    path === "machines" ||
+    path.startsWith("machines/")
+  ) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);
   }

@@ -5,7 +5,7 @@ use crate::{
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -85,10 +85,21 @@ async fn access<'a>(
     pool: &'a PgPool,
     auth: &AuthSession,
     session: &Session,
+    headers: &HeaderMap,
     permission: &str,
 ) -> ApiResult<(Transaction<'a, Postgres>, String)> {
     let user = account(auth)?;
     let org = team::organization_id(session).await?;
+    if headers
+        .get("x-cupboard-organization")
+        .and_then(|value| value.to_str().ok())
+        != Some(org.as_str())
+    {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "The active organization changed. Refresh the page before accessing machines.",
+        ));
+    }
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR SHARE")
         .bind(&org)
@@ -114,8 +125,9 @@ async fn list(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
 ) -> ApiResult<Json<Vec<Machine>>> {
-    let (mut tx, org) = access(&pool, &auth, &session, "infrastructure.view").await?;
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.view").await?;
     let records = sqlx::query_as("SELECT id,name,address,provider,notes,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health FROM machines WHERE organization_id=$1 ORDER BY lower(name),id").bind(org).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(records))
@@ -124,27 +136,30 @@ async fn create(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
     input: Result<Json<MachineInput>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Machine>, Response> {
-    save(&pool, &auth, &session, None, input).await
+    save(&pool, &auth, &session, &headers, None, input).await
 }
 async fn update(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
     Path(id): Path<String>,
     input: Result<Json<MachineInput>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Machine>, Response> {
-    save(&pool, &auth, &session, Some(id), input).await
+    save(&pool, &auth, &session, &headers, Some(id), input).await
 }
 async fn save(
     pool: &PgPool,
     auth: &AuthSession,
     session: &Session,
+    headers: &HeaderMap,
     id: Option<String>,
     input: Result<Json<MachineInput>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Machine>, Response> {
-    let (mut tx, org) = access(pool, auth, session, "infrastructure.manage")
+    let (mut tx, org) = access(pool, auth, session, headers, "infrastructure.manage")
         .await
         .map_err(IntoResponse::into_response)?;
     let Json(mut input) = input.map_err(|_| {
@@ -181,9 +196,10 @@ async fn enrollment(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let (mut tx, org) = access(&pool, &auth, &session, "infrastructure.manage").await?;
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.manage").await?;
     let token = crate::auth::secret();
     let expires: Option<i64> = sqlx::query_scalar("UPDATE machines SET enrollment_hash=$3,enrollment_expires_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint+600000 WHERE organization_id=$1 AND id=$2 RETURNING enrollment_expires_at")
         .bind(org).bind(id).bind(crate::auth::digest(&token)).fetch_optional(&mut *tx).await?;
@@ -197,9 +213,10 @@ async fn disconnect(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let (mut tx, org) = access(&pool, &auth, &session, "infrastructure.manage").await?;
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.manage").await?;
     let changed = sqlx::query("UPDATE machines SET enrollment_hash=NULL,enrollment_expires_at=NULL,agent_hash=NULL,enrolled_at=NULL,last_seen_at=NULL,health=NULL,metric_history='[]'::jsonb WHERE organization_id=$1 AND id=$2")
         .bind(org).bind(id).execute(&mut *tx).await?;
     if changed.rows_affected() == 0 {
@@ -213,9 +230,10 @@ async fn remove(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let (mut tx, org) = access(&pool, &auth, &session, "infrastructure.manage").await?;
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.manage").await?;
     let enrolled: Option<bool> = sqlx::query_scalar(
         "SELECT agent_hash IS NOT NULL FROM machines WHERE organization_id=$1 AND id=$2 FOR UPDATE",
     )
@@ -274,9 +292,10 @@ async fn history(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let (mut tx, org) = access(&pool, &auth, &session, "infrastructure.view").await?;
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.view").await?;
     let row: Option<serde_json::Value> = sqlx::query_scalar(
         "SELECT metric_history FROM machines WHERE organization_id=$1 AND id=$2",
     )

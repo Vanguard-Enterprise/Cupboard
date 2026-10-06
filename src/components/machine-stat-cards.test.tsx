@@ -66,7 +66,7 @@ it("renders current utilization as accessible circular meters and network rates"
       ],
     }),
   );
-  render(<MachineStatCards machine={machine} />);
+  render(<MachineStatCards organization="org" machine={machine} />);
   expect(
     within(screen.getByRole("region", { name: "CPU" })).getByText("42.0%"),
   ).not.toBeNull();
@@ -96,7 +96,7 @@ it("renders current utilization as accessible circular meters and network rates"
 });
 it("keeps current readings usable when history fails", async () => {
   vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Offline"));
-  render(<MachineStatCards machine={machine} />);
+  render(<MachineStatCards organization="org" machine={machine} />);
   await screen.findByText("History unavailable. Retrying automatically.");
   expect(
     within(screen.getByRole("region", { name: "CPU" })).getByText("42.0%"),
@@ -109,6 +109,7 @@ it("does not invent history or CPU utilization for older agents", async () => {
   );
   render(
     <MachineStatCards
+      organization="org"
       machine={{
         ...machine,
         health: { ...machine.health!, cpuUsagePercent: null },

@@ -14,7 +14,13 @@ import {
 const timeLabel = (at: number) =>
   new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-export function MachineStatCards({ machine }: { machine: Machine }) {
+export function MachineStatCards({
+  machine,
+  organization,
+}: {
+  machine: Machine;
+  organization: string;
+}) {
   const [history, setHistory] = useState<MachineHistory | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
@@ -23,6 +29,8 @@ export function MachineStatCards({ machine }: { machine: Machine }) {
       try {
         const result = await apiRequest<MachineHistory>(
           `machines/${machine.id}/history`,
+          undefined,
+          organization,
         );
         if (
           !Array.isArray(result.samples) ||
@@ -43,7 +51,7 @@ export function MachineStatCards({ machine }: { machine: Machine }) {
       active = false;
       clearInterval(poll);
     };
-  }, [machine.id, machine.enrolledAt]);
+  }, [machine.id, machine.enrolledAt, organization]);
   const health = machine.health!;
   const end = history?.windowEnd ?? machine.lastSeenAt ?? 0;
   const start = end - 3600000;

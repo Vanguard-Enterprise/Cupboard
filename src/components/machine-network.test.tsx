@@ -59,18 +59,23 @@ it("plots recorded in/out rates, leaves report gaps, and hides them when unreach
       ],
     }),
   );
-  const view = render(<MachineNetwork machine={machine} now={now} />);
+  const view = render(
+    <MachineNetwork organization="org" machine={machine} now={now} />,
+  );
   const graph = await screen.findByRole("img");
   const paths = graph.querySelectorAll("path");
   expect(paths).toHaveLength(2);
   expect(paths[0].getAttribute("d")?.match(/M/g)).toHaveLength(2);
   expect(screen.getByText("↓ In 2.0 KiB/s")).not.toBeNull();
-  view.rerender(<MachineNetwork machine={machine} now={now + 91000} />);
+  view.rerender(
+    <MachineNetwork organization="org" machine={machine} now={now + 91000} />,
+  );
   expect(screen.queryByRole("img")).toBeNull();
   expect(screen.queryByText("↓ In 2.0 KiB/s")).toBeNull();
   expect(screen.getByText(/Last seen/)).not.toBeNull();
   view.rerender(
     <MachineNetwork
+      organization="org"
       machine={{ ...machine, lastSeenAt: now + 92000 }}
       now={now + 92000}
     />,
@@ -83,6 +88,7 @@ it("shows only skeletons before the first report without fetching history", () =
   const fetcher = vi.spyOn(globalThis, "fetch");
   const view = render(
     <MachineNetwork
+      organization="org"
       machine={{ ...machine, lastSeenAt: null, health: null }}
       now={now}
     />,

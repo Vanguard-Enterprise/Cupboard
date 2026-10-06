@@ -33,6 +33,7 @@ export function MachineSetup({
   identity: Identity;
   initialMachineId?: string | null;
 }) {
+  const organization = identity.organization?.id;
   const allowed =
     !!identity.organization &&
     ["infrastructure.view", "infrastructure.manage"].every((p) =>
@@ -99,7 +100,11 @@ export function MachineSetup({
     let active = true;
     async function load() {
       try {
-        const records = await apiRequest<Machine[]>("machines");
+        const records = await apiRequest<Machine[]>(
+          "machines",
+          undefined,
+          organization!,
+        );
         const record = records.find((m) => m.id === machineId);
         if (!record)
           throw Error(
@@ -128,7 +133,7 @@ export function MachineSetup({
       active = false;
       clearInterval(interval);
     };
-  }, [allowed, machineId]);
+  }, [allowed, machineId, organization]);
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -149,6 +154,7 @@ export function MachineSetup({
         headers: {
           "Content-Type": "application/json",
           "X-Cupboard-Request": "1",
+          "X-Cupboard-Organization": organization!,
         },
         body: JSON.stringify({ ...draft, revision: null }),
         cache: "no-store",
@@ -206,6 +212,7 @@ export function MachineSetup({
       const result = await apiRequest<Token>(
         `machines/${machineId}/enrollment`,
         {},
+        organization!,
       );
       setToken(result);
       setNow(Date.now());

@@ -322,3 +322,33 @@ describe("worktree session isolation", () => {
     ).toBe(false);
   });
 });
+
+it("forwards the expected organization for machine reads and mutations", async () => {
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json([]));
+  vi.stubGlobal("fetch", fetcher);
+  for (const path of [
+    "machines",
+    "machines/00000000-0000-0000-0000-000000000000/history",
+    "machines/00000000-0000-0000-0000-000000000000/remove",
+  ]) {
+    const method = path.endsWith("remove") ? "POST" : "GET";
+    await proxyApi(
+      new Request(`http://localhost:5173/app-api/${path}`, {
+        method,
+        headers: {
+          origin: "http://localhost:5173",
+          "x-cupboard-request": "1",
+          "content-type": "application/json",
+          "x-cupboard-organization": "page-org",
+        },
+        ...(method === "POST" ? { body: "{}" } : {}),
+      }),
+      path,
+    );
+    expect(
+      new Headers(fetcher.mock.calls.at(-1)?.[1]?.headers).get(
+        "x-cupboard-organization",
+      ),
+    ).toBe("page-org");
+  }
+});

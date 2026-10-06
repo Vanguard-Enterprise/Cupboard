@@ -362,3 +362,60 @@ it("removes an unenrolled machine after confirmation and omits duplicate enrollm
   await screen.findByText("No machines yet");
   expect(fetcher.mock.calls[1][0]).toBe("/app-api/machines/machine/remove");
 });
+
+it("preserves fresh monitoring after a failed refresh and marks only aged reports unreachable", async () => {
+  const started = Date.now();
+  let now = started;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const intervals = vi.spyOn(globalThis, "setInterval");
+  const report = {
+    ...machine,
+    enrolled: true,
+    enrolledAt: started - 60000,
+    lastSeenAt: started,
+    health: {
+      hostname: "host",
+      os: "Linux",
+      agentVersion: "1.2",
+      cpuCount: 4,
+      loadOne: 1,
+      cpuUsagePercent: 42,
+      memoryTotalBytes: 100,
+      memoryAvailableBytes: 50,
+      diskTotalBytes: 100,
+      diskAvailableBytes: 50,
+      uptimeSeconds: 100,
+    },
+  };
+  let failed = false;
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input) => {
+      if (String(input) === "/app-api/machines") {
+        if (failed) throw new Error("Refresh failed");
+        return Response.json([report]);
+      }
+      return Response.json({ samples: [], windowEnd: started });
+    });
+  const user = userEvent.setup();
+  render(<MachineInventory identity={identity} />);
+  await user.click(await screen.findByRole("button", { name: machine.name }));
+  await screen.findByRole("meter", { name: "Memory used" });
+  const poll = intervals.mock.calls.find(
+    (call) => call[1] === 30000,
+  )![0] as () => void;
+  failed = true;
+  await act(async () => poll());
+  expect(screen.queryByText(/Machine unreachable/)).toBeNull();
+  expect(screen.getByRole("meter", { name: "Memory used" })).not.toBeNull();
+  expect(screen.getByText(/uptime/)).not.toBeNull();
+  for (const [, options] of fetcher.mock.calls) {
+    expect(new Headers(options?.headers).get("X-Cupboard-Organization")).toBe(
+      identity.organization!.id,
+    );
+  }
+  now = started + 91000;
+  await act(async () => poll());
+  expect(screen.getByText(/Machine unreachable/)).not.toBeNull();
+  expect(screen.queryByRole("meter")).toBeNull();
+});

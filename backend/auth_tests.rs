@@ -10,12 +10,14 @@ use tower::ServiceExt;
 struct Client {
     app: Router,
     cookie: String,
+    organization: String,
 }
 impl Client {
     fn new(app: &Router) -> Self {
         Self {
             app: app.clone(),
             cookie: String::new(),
+            organization: String::new(),
         }
     }
     async fn request(&mut self, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
@@ -25,6 +27,9 @@ impl Client {
             .header("origin", "http://localhost:5173")
             .header("x-cupboard-request", "1")
             .header("content-type", "application/json");
+        if path == "machines" || path.starts_with("machines/") {
+            request = request.header("x-cupboard-organization", &self.organization);
+        }
         if !self.cookie.is_empty() {
             request = request.header("cookie", &self.cookie);
         }
@@ -48,8 +53,18 @@ impl Client {
         );
         let status = response.status();
         let bytes = to_bytes(response.into_body(), 100_000).await.unwrap();
-        let value = serde_json::from_slice(&bytes)
+        let value: Value = serde_json::from_slice(&bytes)
             .unwrap_or_else(|_| panic!("unexpected non-JSON response: {status}"));
+        if let Some(org) = value
+            .get("organization")
+            .and_then(|v| v.get("id"))
+            .and_then(Value::as_str)
+        {
+            self.organization = org.to_owned();
+        }
+        if path == "organizations" && status == StatusCode::OK {
+            self.organization = value["id"].as_str().unwrap().to_owned();
+        }
         (status, value)
     }
     async fn signup(&mut self, email: &str) {
@@ -457,6 +472,7 @@ async fn accounts_sessions_membership_roles_and_tenant_isolation() {
     );
     assert_ne!(alice.cookie, previous_cookie);
     let mut previous = Client {
+        organization: String::new(),
         app: app.clone(),
         cookie: previous_cookie,
     };
@@ -2284,6 +2300,7 @@ async fn copying_folders_releases_database_and_publishes_only_into_existing_dest
         sqlx::query("INSERT INTO organization_files(organization_id,id,name,size,is_folder,ready) VALUES($1,$2,'Destination',0,true,true)")
             .bind(&org).bind(&destination).execute(&pool).await.unwrap();
         let copier = Client {
+            organization: owner.organization.clone(),
             app: app.clone(),
             cookie: owner.cookie.clone(),
         };
@@ -3128,4 +3145,87 @@ async fn machine_removal_is_scoped_unenrolled_only_and_revokes_pending_tokens() 
         1
     );
     pool.close().await;
+}
+
+#[tokio::test]
+async fn machines_reject_a_page_organization_after_another_tab_switches_session() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "machine-tabs-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let first_org = owner.organization.clone();
+    let first = owner.request("POST", "machines", machine_input()).await.1;
+    owner.create_organization().await;
+    let second_org = owner.organization.clone();
+    let second = owner.request("POST", "machines", machine_input()).await.1;
+    let before = owner.request("GET", "machines", json!(null)).await.1;
+    for expected in [&first_org, &String::new(), &"invalid".to_owned()] {
+        owner.organization = expected.clone();
+        assert_eq!(
+            owner.request("GET", "machines", json!(null)).await.0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            owner.request("POST", "machines", machine_input()).await.0,
+            StatusCode::CONFLICT
+        );
+        for record in [&first, &second] {
+            let id = record["id"].as_str().unwrap();
+            for (method, suffix) in [
+                ("GET", "/history"),
+                ("POST", ""),
+                ("POST", "/enrollment"),
+                ("POST", "/disconnect"),
+                ("POST", "/remove"),
+            ] {
+                assert_eq!(
+                    owner
+                        .request(method, &format!("machines/{id}{suffix}"), machine_input())
+                        .await
+                        .0,
+                    StatusCode::CONFLICT
+                );
+            }
+        }
+    }
+    let response = owner
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app-api/machines")
+                .header("cookie", &owner.cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    owner.organization = second_org;
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.1,
+        before
+    );
+    owner
+        .request("POST", "auth/organization", json!({"id":first_org}))
+        .await;
+    owner.organization = first_org;
+    assert_eq!(
+        owner.request("GET", "machines", json!(null)).await.1,
+        json!([first])
+    );
 }

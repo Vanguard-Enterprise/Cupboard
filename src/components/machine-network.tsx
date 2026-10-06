@@ -19,9 +19,11 @@ function rate(value: number | null | undefined) {
 export function MachineNetwork({
   machine,
   now,
+  organization,
 }: {
   machine: Machine;
   now: number;
+  organization: string;
 }) {
   const [history, setHistory] = useState<MachineHistory | null>(null);
   const [failed, setFailed] = useState(false);
@@ -34,6 +36,8 @@ export function MachineNetwork({
       try {
         const result = await apiRequest<MachineHistory>(
           `machines/${machine.id}/history`,
+          undefined,
+          organization,
         );
         if (
           !Array.isArray(result.samples) ||
@@ -54,7 +58,7 @@ export function MachineNetwork({
       active = false;
       clearInterval(interval);
     };
-  }, [machine.id, machine.enrolledAt, connected, hasHealth]);
+  }, [machine.id, machine.enrolledAt, connected, hasHealth, organization]);
 
   if (machineStatus(machine, now) !== "Connected" || !machine.health)
     return (

@@ -82,6 +82,7 @@ const errorMessage = (cause: unknown) =>
     ? cause.message
     : "The request could not be completed.";
 export function MachineInventory({ identity }: { identity: Identity }) {
+  const organization = identity.organization?.id;
   const view = identity.permissions.includes("infrastructure.view");
   const manage = identity.permissions.includes("infrastructure.manage");
   const [machines, setMachines] = useState<Machine[] | null>(null);
@@ -116,7 +117,11 @@ export function MachineInventory({ identity }: { identity: Identity }) {
   const load = useCallback(async () => {
     const current = ++generation.current;
     try {
-      const records = await apiRequest<Machine[]>("machines");
+      const records = await apiRequest<Machine[]>(
+        "machines",
+        undefined,
+        organization!,
+      );
       if (mounted.current && current === generation.current) {
         setMachines(records);
         setError("");
@@ -138,7 +143,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
       if (mounted.current && current === generation.current)
         setRefreshing(false);
     }
-  }, []);
+  }, [organization]);
   useEffect(() => {
     mounted.current = true;
     const initial = setTimeout(() => {
@@ -190,6 +195,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
         headers: {
           "Content-Type": "application/json",
           "X-Cupboard-Request": "1",
+          "X-Cupboard-Organization": organization!,
         },
         body: JSON.stringify({
           ...draft,
@@ -236,10 +242,14 @@ export function MachineInventory({ identity }: { identity: Identity }) {
           token: string;
           expiresAt: number;
           issuedAt: number;
-        }>(`machines/${action.machine.id}/enrollment`, {});
+        }>(`machines/${action.machine.id}/enrollment`, {}, organization!);
         if (mounted.current) setToken(result);
       } else {
-        await apiRequest(`machines/${action.machine.id}/${action.kind}`, {});
+        await apiRequest(
+          `machines/${action.machine.id}/${action.kind}`,
+          {},
+          organization!,
+        );
         if (mounted.current) {
           setAction(null);
           toast.success(
@@ -580,6 +590,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                                       ))}
                                       <TableCell className="hidden md:table-cell">
                                         <MachineNetwork
+                                          organization={organization!}
                                           machine={machine}
                                           now={now}
                                         />
@@ -687,7 +698,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                   <MachineMonitoring
                     machine={selected}
                     now={now}
-                    stale={Boolean(error)}
+                    organization={organization!}
                     manage={manage}
                     onEdit={() => edit(selected)}
                     onEnroll={() => beginAction(selected, "enroll")}
