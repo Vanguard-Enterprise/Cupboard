@@ -130,11 +130,17 @@ try {
     storageEnv = { CUPBOARD_TEST_S3_ENDPOINT: `http://${host}:${port}` };
   }
   if (!quick)
-    await processes.run("cargo", ["test", "--locked", "--all-targets"], {
-      ...process.env,
-      CUPBOARD_TEST_DATABASE_URL: databaseUrl,
-      ...storageEnv,
-    });
+    // Auth tests share the process-wide four-slot password hashing semaphore.
+    // Run tests serially so unrelated signup requests do not receive busy 429s.
+    await processes.run(
+      "cargo",
+      ["test", "--locked", "--all-targets", "--", "--test-threads=1"],
+      {
+        ...process.env,
+        CUPBOARD_TEST_DATABASE_URL: databaseUrl,
+        ...storageEnv,
+      },
+    );
   for (const script of [
     "format:check",
     "lint",
