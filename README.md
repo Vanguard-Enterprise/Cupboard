@@ -84,13 +84,27 @@ node scripts/smoke-images.mjs cupboard-api cupboard-web
 
 Production targets USE1 Kubernetes through Argo CD in `v-deployments`, with
 cluster PostgreSQL and environment-provided credentials. GitHub Actions runs
-checks, both container builds, and a disposable release smoke test on GitHub-hosted
-`ubuntu-24.04` runners. The smoke test exercises browser assets, sign-in,
+full checks alongside both container builds and a disposable release smoke test on
+`[self-hosted, Linux, X64, ve-runner]` runners. Buildx Bake builds the two images
+in parallel. The required `check` job gates both paths before publication.
+Fork pull requests are excluded from these Docker-privileged runners. The smoke test exercises browser assets, sign-in,
 organization setup, server creation, connectivity results, tenant isolation,
 secret handling, and persistence across web/API restarts. Its database and
 containers are removed afterward. A successful main-branch run publishes
 `ghcr.io/vanguard-enterprise/cupboard-api:sha-<commit>` and
 `ghcr.io/vanguard-enterprise/cupboard-web:sha-<commit>`. Pull requests never publish.
+
+CI restores npm downloads, Cargo dependencies and compiled dependency artifacts,
+and `.next/cache`. Docker layers use separate GitHub Actions v2 cache scopes for
+the API and web images. The backend caches dependency compilation separately
+from application sources. These remote caches survive runner recreation and
+nightly disk eviction; cache misses run the same builds and checks. Runner-local
+npm and SDK caches also follow `/opt/ve-runner/MAINTENANCE.md` on `ve-runner-01`.
+Daily maintenance at 03:00 America/New_York drains workers before cleanup and
+reboot, retaining recent download and Docker caches. Checks and smoke tests attach
+the runner container to their own disposable networks because the shared Docker
+socket belongs to the host. Main images are transferred as tested artifacts to
+the publish job and never rebuilt there.
 
 ## Staging operations
 
