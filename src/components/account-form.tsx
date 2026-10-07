@@ -176,7 +176,14 @@ export function AccountForm({
               fieldErrors.password ? "password-error" : undefined
             }
             onChange={() =>
-              setFieldErrors((current) => ({ ...current, password: undefined }))
+              setFieldErrors((current) => ({
+                ...current,
+                password: undefined,
+                confirmPassword:
+                  current.confirmPassword === "Passwords do not match."
+                    ? undefined
+                    : current.confirmPassword,
+              }))
             }
           />
           {fieldErrors.password && (

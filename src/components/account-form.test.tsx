@@ -169,6 +169,35 @@ describe("account forms", () => {
     );
     expect(localStorage.length).toBe(0);
   });
+  it("clears mismatch feedback when the first password changes", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<AccountForm signup />);
+    fillForm(true, "test-password");
+    fireEvent.change(screen.getByLabelText("Confirm password"), {
+      target: { value: "other-password" },
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Create account" }));
+    expect(screen.getByText("Passwords do not match.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "other-password" },
+    });
+    expect(screen.queryByText("Passwords do not match.")).toBeNull();
+    expect(
+      screen.getByLabelText("Confirm password").getAttribute("aria-invalid"),
+    ).toBe("false");
+    fireEvent.change(screen.getByLabelText("Confirm password"), {
+      target: { value: "" },
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Create account" }));
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "changed-password" },
+    });
+    expect(screen.getByText("Confirm your password.")).toBeTruthy();
+  });
   it("focuses confirmation and never sends mismatched passwords", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
