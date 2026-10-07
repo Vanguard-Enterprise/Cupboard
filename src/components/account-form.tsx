@@ -1,6 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
+import { toast } from "sonner";
 import { validPasswordLength, passwordLengthMessage } from "@/lib/password";
 import { navigateAfterAuth, apiRequest } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import {
   FieldGroup,
   FieldLabel,
   FieldDescription,
+  FieldError,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -21,6 +23,12 @@ export function AccountForm({
   className?: string;
 }) {
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{
+    name?: string;
+    confirmPassword?: string;
+    email?: string;
+    password?: string;
+  }>({});
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -29,13 +37,44 @@ export function AccountForm({
     const data = new FormData(form);
     const password = String(data.get("password"));
     setError("");
+    const emailInput = form.querySelector<HTMLInputElement>("#email")!;
+    const errors = {
+      name:
+        signup && !String(data.get("name")).trim()
+          ? "Enter your name."
+          : undefined,
+      email: !emailInput.value.trim()
+        ? "Enter your email."
+        : !emailInput.validity.valid
+          ? "Enter a valid email address."
+          : undefined,
+      password: !password ? "Enter your password." : undefined,
+      confirmPassword:
+        signup && !data.get("confirm-password")
+          ? "Confirm your password."
+          : undefined,
+    };
+    setFieldErrors(errors);
+    const firstInvalid = errors.name
+      ? "name"
+      : errors.email
+        ? "email"
+        : errors.password
+          ? "password"
+          : errors.confirmPassword
+            ? "confirm-password"
+            : undefined;
+    if (firstInvalid) {
+      form.querySelector<HTMLInputElement>(`#${firstInvalid}`)?.focus();
+      return;
+    }
     if (!validPasswordLength(password)) {
-      setError(passwordLengthMessage);
+      toast.error(passwordLengthMessage);
       form.querySelector<HTMLInputElement>("#password")?.focus();
       return;
     }
     if (signup && password !== data.get("confirm-password")) {
-      setError("Passwords do not match.");
+      setFieldErrors({ confirmPassword: "Passwords do not match." });
       form.querySelector<HTMLInputElement>("#confirm-password")?.focus();
       return;
     }
@@ -64,6 +103,7 @@ export function AccountForm({
       method="post"
       action={signup ? "/signup" : "/login"}
       onSubmit={submit}
+      noValidate
     >
       <FieldGroup>
         <div className="space-y-2">
@@ -81,7 +121,7 @@ export function AccountForm({
         )}
         {signup && (
           <>
-            <Field>
+            <Field data-invalid={!!fieldErrors.name}>
               <FieldLabel htmlFor="name">Name</FieldLabel>
               <Input
                 id="name"
@@ -90,11 +130,19 @@ export function AccountForm({
                 autoComplete="name"
                 required
                 maxLength={100}
+                aria-invalid={!!fieldErrors.name}
+                aria-describedby={fieldErrors.name ? "name-error" : undefined}
+                onChange={() =>
+                  setFieldErrors((current) => ({ ...current, name: undefined }))
+                }
               />
+              {fieldErrors.name && (
+                <FieldError id="name-error">{fieldErrors.name}</FieldError>
+              )}
             </Field>
           </>
         )}
-        <Field>
+        <Field data-invalid={!!fieldErrors.email}>
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
             id="email"
@@ -104,9 +152,17 @@ export function AccountForm({
             autoComplete="email"
             required
             maxLength={254}
+            aria-invalid={!!fieldErrors.email}
+            aria-describedby={fieldErrors.email ? "email-error" : undefined}
+            onChange={() =>
+              setFieldErrors((current) => ({ ...current, email: undefined }))
+            }
           />
+          {fieldErrors.email && (
+            <FieldError id="email-error">{fieldErrors.email}</FieldError>
+          )}
         </Field>
-        <Field>
+        <Field data-invalid={!!fieldErrors.password}>
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
             id="password"
@@ -115,13 +171,23 @@ export function AccountForm({
             type="password"
             autoComplete={signup ? "new-password" : "current-password"}
             required
+            aria-invalid={!!fieldErrors.password}
+            aria-describedby={
+              fieldErrors.password ? "password-error" : undefined
+            }
+            onChange={() =>
+              setFieldErrors((current) => ({ ...current, password: undefined }))
+            }
           />
+          {fieldErrors.password && (
+            <FieldError id="password-error">{fieldErrors.password}</FieldError>
+          )}
           {signup && (
             <FieldDescription>Use 8 to 128 characters.</FieldDescription>
           )}
         </Field>
         {signup && (
-          <Field>
+          <Field data-invalid={!!fieldErrors.confirmPassword}>
             <FieldLabel htmlFor="confirm-password">Confirm password</FieldLabel>
             <Input
               id="confirm-password"
@@ -130,7 +196,24 @@ export function AccountForm({
               type="password"
               autoComplete="new-password"
               required
+              aria-invalid={!!fieldErrors.confirmPassword}
+              aria-describedby={
+                fieldErrors.confirmPassword
+                  ? "confirm-password-error"
+                  : undefined
+              }
+              onChange={() =>
+                setFieldErrors((current) => ({
+                  ...current,
+                  confirmPassword: undefined,
+                }))
+              }
             />
+            {fieldErrors.confirmPassword && (
+              <FieldError id="confirm-password-error">
+                {fieldErrors.confirmPassword}
+              </FieldError>
+            )}
           </Field>
         )}
         <Field>
