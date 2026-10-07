@@ -159,6 +159,11 @@ values the full width. Show field errors beside the field and move focus to the
 first invalid input after submission. Keep unsaved edits until the user cancels
 or saves them.
 
+Login and signup password-length failures use a top-right toast that dismisses
+after four seconds, as requested for authentication. Keep focus on Password.
+Missing fields, invalid email, and password confirmation mismatches use inline
+field errors.
+
 Use tabs for a few peer sections that share one task and URL. Use navigation when
 sections need separate URLs, permissions, or history. Keep the active state
 obvious without adding a second accent color.

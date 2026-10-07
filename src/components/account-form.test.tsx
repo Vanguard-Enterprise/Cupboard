@@ -16,6 +16,8 @@ vi.mock("@/lib/api-client", async (importOriginal) => ({
 }));
 
 import { AccountForm } from "./account-form";
+import { toast } from "sonner";
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -23,6 +25,85 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("account forms", () => {
+  it("shows styled signup errors and focuses missing name then confirmation", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    render(<AccountForm signup />);
+    const user = userEvent.setup();
+    expect(screen.getByLabelText("Name").closest("form")?.noValidate).toBe(
+      true,
+    );
+    await user.click(screen.getByRole("button", { name: "Create account" }));
+    expect(screen.getByText("Enter your name.").id).toBe("name-error");
+    expect(screen.getByText("Enter your email.")).toBeTruthy();
+    expect(screen.getByText("Enter your password.")).toBeTruthy();
+    expect(screen.getByText("Confirm your password.").id).toBe(
+      "confirm-password-error",
+    );
+    expect(document.activeElement).toBe(screen.getByLabelText("Name"));
+    fillForm(true, "test-password");
+    fireEvent.change(screen.getByLabelText("Confirm password"), {
+      target: { value: "" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create account" }));
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("Confirm password"),
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("shows styled required errors and focuses the first missing login field", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    render(<AccountForm />);
+    const email = screen.getByLabelText("Email");
+    const password = screen.getByLabelText("Password");
+    expect(email.closest("form")?.noValidate).toBe(true);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sign in" }));
+    expect(screen.getByText("Enter your email.").id).toBe("email-error");
+    expect(screen.getByText("Enter your password.").id).toBe("password-error");
+    expect(email.getAttribute("aria-invalid")).toBe("true");
+    expect(password.getAttribute("aria-describedby")).toBe("password-error");
+    expect(document.activeElement).toBe(email);
+    fireEvent.change(email, { target: { value: "operator@example.com" } });
+    expect(screen.queryByText("Enter your email.")).toBeNull();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sign in" }));
+    expect(document.activeElement).toBe(password);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("rejects malformed email with styled field feedback", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    render(<AccountForm />);
+    fillForm(false, "test-password");
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "invalid" },
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sign in" }));
+    expect(screen.getByText("Enter a valid email address.")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("Email"));
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("signs in and navigates after successful authentication", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({})),
+    );
+    render(<AccountForm />);
+    fillForm(false, "test-password");
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() =>
+      expect(navigateAfterAuth).toHaveBeenCalledWith("/dashboard"),
+    );
+  });
+
   it.each([false, true])(
     "creates an account and navigates with invitation=%s",
     async (invited) => {
@@ -88,6 +169,35 @@ describe("account forms", () => {
     );
     expect(localStorage.length).toBe(0);
   });
+  it("clears mismatch feedback when the first password changes", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    render(<AccountForm signup />);
+    fillForm(true, "test-password");
+    fireEvent.change(screen.getByLabelText("Confirm password"), {
+      target: { value: "other-password" },
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Create account" }));
+    expect(screen.getByText("Passwords do not match.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "other-password" },
+    });
+    expect(screen.queryByText("Passwords do not match.")).toBeNull();
+    expect(
+      screen.getByLabelText("Confirm password").getAttribute("aria-invalid"),
+    ).toBe("false");
+    fireEvent.change(screen.getByLabelText("Confirm password"), {
+      target: { value: "" },
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Create account" }));
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "changed-password" },
+    });
+    expect(screen.getByText("Confirm your password.")).toBeTruthy();
+  });
   it("focuses confirmation and never sends mismatched passwords", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
@@ -98,9 +208,7 @@ describe("account forms", () => {
     await user.type(screen.getByLabelText("Password"), "a long password here");
     await user.type(screen.getByLabelText("Confirm password"), "different");
     await user.click(screen.getByRole("button", { name: "Create account" }));
-    expect(screen.getByRole("alert").textContent).toContain(
-      "Passwords do not match",
-    );
+    expect(screen.getByText("Passwords do not match.")).toBeTruthy();
     expect(document.activeElement).toBe(
       screen.getByLabelText("Confirm password"),
     );
@@ -125,8 +233,9 @@ for (const signup of [false, true]) {
               name: signup ? "Create account" : "Sign in",
             }),
           );
-          expect(screen.getByRole("alert").textContent).toContain(
-            "8 to 128 characters",
+          expect(screen.queryByRole("alert")).toBeNull();
+          expect(toast.error).toHaveBeenCalledWith(
+            "Use a password of 8 to 128 characters.",
           );
           expect(document.activeElement).toBe(
             screen.getByLabelText("Password"),
