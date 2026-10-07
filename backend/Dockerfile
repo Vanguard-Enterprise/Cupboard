@@ -1,6 +1,9 @@
 FROM rust:1.96.0-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
+RUN mkdir backend && printf 'fn main() {}\n' > backend/main.rs && touch backend/lib.rs \
+    && cargo build --release --locked \
+    && cargo clean --release --package cupboard
 COPY backend ./backend
 RUN cargo build --release --locked
 

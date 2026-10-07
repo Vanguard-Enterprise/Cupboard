@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  verify:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -25,6 +25,12 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup
+            ~/.cargo/bin
+          key: rust-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
       - name: Install Rust toolchain
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
@@ -34,17 +40,44 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
-      - run: npm ci
-      - run: npm run check
-      - name: Build backend image
-        run: docker build --file backend/Dockerfile --tag cupboard-api:check-${{ github.run_id }} .
-      - name: Build web image
-        run: docker build --file Dockerfile --tag cupboard-web:check-${{ github.run_id }} .
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: checks
+          cache-on-failure: false
+      - uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: next-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc', 'package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc', 'package-lock.json') }}-
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check
+
+  images:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, ve-runner]
+    timeout-minutes: 30
+    env:
+      IMAGE_TAG: check-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: docker/setup-buildx-action@v3
+      - name: Build release images in parallel
+        uses: docker/bake-action@v6
+        with:
+          source: .
+          files: docker-bake.hcl
+          load: true
       - name: Verify release images and restart persistence
-        run: node scripts/smoke-images.mjs cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }}
+        run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" node scripts/smoke-images.mjs cupboard-api:check-${{ github.run_id }}-${{ github.run_attempt }} cupboard-web:check-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Save tested release images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker save cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }} | gzip > "$RUNNER_TEMP/cupboard-images.tar.gz"
+        run: docker save cupboard-api:check-${{ github.run_id }}-${{ github.run_attempt }} cupboard-web:check-${{ github.run_id }}-${{ github.run_attempt }} | gzip -1 > "$RUNNER_TEMP/cupboard-images.tar.gz"
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
@@ -54,12 +87,25 @@ jobs:
           retention-days: 1
       - name: Remove check image
         if: always()
-        run: docker image rm cupboard-api:check-${{ github.run_id }} cupboard-web:check-${{ github.run_id }} || true
+        run: docker image rm cupboard-api:check-${{ github.run_id }}-${{ github.run_attempt }} cupboard-web:check-${{ github.run_id }}-${{ github.run_attempt }} || true
+
+  # Preserve the existing required check name and include both parallel jobs.
+  check:
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: [verify, images]
+    runs-on: [self-hosted, Linux, X64, ve-runner]
+    timeout-minutes: 5
+    steps:
+      - name: Require checks and release smoke to pass
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          IMAGES_RESULT: ${{ needs.images.result }}
+        run: test "$VERIFY_RESULT" = success && test "$IMAGES_RESULT" = success
 
   publish:
     needs: check
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -79,6 +125,12 @@ jobs:
           docker load --input "$RUNNER_TEMP/cupboard-images.tar.gz"
           for runtime in api web; do
             image="ghcr.io/vanguard-enterprise/cupboard-${runtime}:sha-${{ github.sha }}"
-            docker tag "cupboard-${runtime}:check-${{ github.run_id }}" "$image"
+            docker tag "cupboard-${runtime}:check-${{ github.run_id }}-${{ github.run_attempt }}" "$image"
             docker push "$image"
+          done
+      - name: Remove published images
+        if: always()
+        run: |
+          for runtime in api web; do
+            docker image rm "cupboard-${runtime}:check-${{ github.run_id }}-${{ github.run_attempt }}" "ghcr.io/vanguard-enterprise/cupboard-${runtime}:sha-${{ github.sha }}" || true
           done

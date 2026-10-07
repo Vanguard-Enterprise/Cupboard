@@ -36,6 +36,8 @@ async function eventually(check) {
   throw new Error("Container readiness timed out");
 }
 let networkCreated = false;
+const runnerContainer = process.env.CUPBOARD_CHECK_CONTAINER;
+let attachedRunner = false;
 try {
   const reservation = createServer();
   await new Promise((resolve, reject) => {
@@ -48,6 +50,10 @@ try {
   );
   docker(["network", "create", prefix]);
   networkCreated = true;
+  if (runnerContainer) {
+    docker(["network", "connect", prefix, runnerContainer]);
+    attachedRunner = true;
+  }
   docker(
     [
       "run",
@@ -84,7 +90,11 @@ try {
     webImage,
   ]);
   const port = docker(["port", web, "3000/tcp"]).split(":").at(-1);
-  const origin = `http://127.0.0.1:${port}`;
+  const webAddress = runnerContainer
+    ? JSON.parse(docker(["inspect", web]))[0].NetworkSettings.Networks[prefix]
+        .IPAddress
+    : "127.0.0.1";
+  const origin = `http://${webAddress}:${runnerContainer ? 3000 : port}`;
   docker(
     [
       "run",
@@ -228,6 +238,14 @@ try {
   );
   process.exitCode = 1;
 } finally {
+  if (attachedRunner) {
+    try {
+      docker(["network", "disconnect", prefix, runnerContainer]);
+    } catch {
+      console.error("Could not detach the runner from the smoke network.");
+      process.exitCode = 1;
+    }
+  }
   for (const name of names.reverse()) {
     try {
       docker(["rm", "-f", "-v", name]);
