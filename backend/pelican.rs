@@ -366,25 +366,44 @@ async fn check(
 /// prevents replicas from selecting the same connection during network I/O.
 pub async fn monitor(pool: PgPool, key: SecretKey, policy: PanelPolicy) {
     loop {
-        if poll_due(&pool, &key, &policy).await.is_err() {
-            eprintln!("Pelican inventory refresh failed; retrying shortly.");
+        loop {
+            match poll_due_batch(&pool, &key, &policy).await {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(_) => {
+                    eprintln!("Pelican inventory refresh failed; retrying shortly.");
+                    break;
+                }
+            }
         }
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
+}
+pub(crate) async fn poll_due_batch(
+    pool: &PgPool,
+    key: &SecretKey,
+    policy: &PanelPolicy,
+) -> ApiResult<bool> {
+    let results = futures_util::future::join_all((0..4).map(|_| poll_due(pool, key, policy))).await;
+    let mut claimed = false;
+    for result in results {
+        claimed |= result?;
+    }
+    Ok(claimed)
 }
 pub(crate) async fn poll_due(
     pool: &PgPool,
     key: &SecretKey,
     policy: &PanelPolicy,
-) -> ApiResult<()> {
+) -> ApiResult<bool> {
     let Ok(_permit) = CHECKS.try_acquire() else {
-        return Ok(());
+        return Ok(false);
     };
     let claimed: Option<(String, String, i64, String, Vec<u8>, i64)> = sqlx::query_as(
         "UPDATE pelican_connections SET next_check_at=$1+300000 WHERE organization_id=(SELECT organization_id FROM pelican_connections WHERE next_check_at <= $1 AND checked_at <= $1-300000 ORDER BY next_check_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING organization_id,id,revision,panel_url,api_key_encrypted,checked_at"
     ).bind(now()).fetch_optional(pool).await?;
     let Some((org, id, revision, panel_url, encrypted, previous_check)) = claimed else {
-        return Ok(());
+        return Ok(false);
     };
     let result = match key
         .decrypt(&encrypted, &org, &id, "pelican")
@@ -409,7 +428,7 @@ pub(crate) async fn poll_due(
     // match. A manual check, edit, or disconnect wins over the scheduled result.
     sqlx::query("UPDATE pelican_connections SET checked_at=$4,next_check_at=$4+300000,last_success_at=CASE WHEN $5::jsonb IS NOT NULL THEN $4 ELSE last_success_at END,servers=COALESCE($5,servers),error=$6 WHERE organization_id=$1 AND id=$2 AND revision=$3 AND checked_at=$7")
         .bind(org).bind(id).bind(revision).bind(checked).bind(servers).bind(error).bind(previous_check).execute(pool).await?;
-    Ok(())
+    Ok(true)
 }
 async fn remove(
     State(pool): State<PgPool>,

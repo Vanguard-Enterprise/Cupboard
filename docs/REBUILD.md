@@ -365,3 +365,8 @@ Imported server identity includes the panel origin as well as the organization
 and upstream UUID. After disconnect, controls stay disabled. Explicitly importing
 from a reconnected same-origin panel restores the original Cupboard server record
 without duplicates; different panel origins remain separate.
+
+Pelican scheduling drains due work in batches of four before sleeping when idle.
+Inventory resources also refresh with four workers, so one slow server does not
+block later rows. Candidate imported-state lookup uses one scoped database query
+for the complete bounded candidate set.

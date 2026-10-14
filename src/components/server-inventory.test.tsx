@@ -350,3 +350,91 @@ it("retains stale resources on refresh failure and clears the error after recove
   ).not.toBeNull();
   interval.mockRestore();
 });
+it("refreshes later servers while an earlier panel request is slow with at most four requests", async () => {
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let active = 0;
+  let peak = 0;
+  let observedLater = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = String(input);
+    if (!path.endsWith("/resources"))
+      return Response.json(
+        Array.from({ length: 6 }, (_, index) => ({
+          ...server,
+          id: `server-${index}`,
+          name: `Rust ${index}`,
+          panelServerUuid: `panel-${index}`,
+        })),
+      );
+    active++;
+    peak = Math.max(peak, active);
+    if (path.includes("server-0/")) await slow;
+    else if (path.includes("server-5/")) observedLater = true;
+    active--;
+    return Response.json({
+      state: "running",
+      resources: {
+        cpu_absolute: path.includes("server-0/") ? 11 : 22,
+        memory_bytes: 1024,
+        disk_bytes: 1024,
+        network_rx_bytes: 0,
+        network_tx_bytes: 0,
+      },
+    });
+  });
+  render(<ServerInventory identity={identity} />);
+  try {
+    await waitFor(() => expect(observedLater).toBe(true));
+    expect(screen.queryByText("11.0%")).toBeNull();
+    expect(screen.getAllByText("22.0%").length).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(4);
+  } finally {
+    await act(async () => release());
+  }
+  expect(await screen.findByText("11.0%")).not.toBeNull();
+});
+it("keeps an in-flight resource pass when server metadata updates with unchanged panel IDs", async () => {
+  let release!: () => void;
+  const slow = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const imported = { ...server, panelServerUuid: "panel" };
+  let resourceRequests = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = String(input);
+    if (path.endsWith("/check"))
+      return Response.json({
+        ...imported,
+        checkedAt: Date.now(),
+        rconStatus: "connected",
+        a2sStatus: "connected",
+      });
+    if (!path.endsWith("/resources")) return Response.json([imported]);
+    resourceRequests++;
+    await slow;
+    return Response.json({
+      state: "running",
+      resources: {
+        cpu_absolute: 14.5,
+        memory_bytes: 1024,
+        disk_bytes: 1024,
+        network_rx_bytes: 0,
+        network_tx_bytes: 0,
+      },
+    });
+  });
+  const user = userEvent.setup();
+  render(<ServerInventory identity={identity} />);
+  await waitFor(() => expect(resourceRequests).toBe(1));
+  try {
+    await user.click(await checkAction(user));
+    await screen.findByText(/Last checked/);
+  } finally {
+    await act(async () => release());
+  }
+  expect(await screen.findByText("14.5%")).not.toBeNull();
+  expect(resourceRequests).toBe(1);
+});

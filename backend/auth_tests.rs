@@ -4392,6 +4392,10 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         .await
         .1;
     assert_eq!(repeated, imported);
+    let (_, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(candidates["servers"][0]["imported"], true);
     let (status, rejected) = owner
         .request(
             "POST",
@@ -4823,4 +4827,92 @@ async fn machine_tags_are_persistent_scoped_authorized_and_revision_checked() {
         owner.request("GET", "machines/tags", json!(null)).await.0,
         StatusCode::FORBIDDEN
     );
+}
+
+#[tokio::test]
+async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
+    use axum::{Json, extract::State, http::HeaderMap, routing::get};
+    use std::sync::Arc;
+    #[derive(Clone)]
+    struct Panel {
+        entered: tokio::sync::mpsc::Sender<()>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+    async fn inventory(State(panel): State<Panel>, headers: HeaderMap) -> Json<Value> {
+        if headers["authorization"] == "Bearer slow-test-key" {
+            panel.entered.send(()).await.unwrap();
+            panel.release.acquire().await.unwrap().forget();
+        }
+        Json(json!({"data":[],"meta":{"pagination":{"current_page":1,"total_pages":1}}}))
+    }
+    let (entered, mut receive) = tokio::sync::mpsc::channel(1);
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let panel = Router::new()
+        .route("/api/client", get(inventory))
+        .with_state(Panel {
+            entered,
+            release: release.clone(),
+        });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, panel).await.unwrap();
+    });
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let key = crate::secrets::SecretKey::parse(&"bc".repeat(32)).unwrap();
+    let mut policy = crate::pelican::PanelPolicy::default();
+    policy.test_origin = Some(url.clone());
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut orgs = Vec::new();
+    for index in 0..3 {
+        let mut owner = Client::new(&app);
+        owner
+            .signup(&format!(
+                "batch-{}-{index}@example.test",
+                uuid::Uuid::new_v4()
+            ))
+            .await;
+        owner.create_organization().await;
+        let org = owner.organization;
+        let id = uuid::Uuid::new_v4().to_string();
+        let secret = if index == 0 {
+            "slow-test-key"
+        } else {
+            "fast-test-key"
+        };
+        let encrypted = key.encrypt(secret, &org, &id, "pelican").unwrap();
+        sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,next_check_at,servers) VALUES($1,$2,1,$3,$4,0,-100,'[]'::jsonb)").bind(&org).bind(id).bind(&url).bind(encrypted).execute(&pool).await.unwrap();
+        orgs.push(org);
+    }
+    let (batch_pool, batch_key, batch_policy) = (pool.clone(), key.clone(), policy.clone());
+    let batch = tokio::spawn(async move {
+        crate::pelican::poll_due_batch(&batch_pool, &batch_key, &batch_policy)
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pelican_connections WHERE organization_id=ANY($1) AND checked_at>0").bind(&orgs[1..]).fetch_one(&pool).await.unwrap();
+            if count == 2 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    assert!(!batch.is_finished());
+    release.add_permits(1);
+    assert!(batch.await.unwrap());
+    let count:i64 = sqlx::query_scalar("SELECT count(*) FROM pelican_connections WHERE organization_id=ANY($1) AND checked_at>0 AND error IS NULL").bind(&orgs).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 3);
+    server.abort();
 }

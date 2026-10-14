@@ -263,12 +263,12 @@ async fn candidates(
                     !s.is_empty() && s.chars().count() <= 80 && !s.chars().any(char::is_control)
                 })
                 .ok_or_else(upstream)?;
-            let imported:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM servers WHERE organization_id=$1 AND panel_connection_id=$2 AND panel_server_uuid=$3 AND panel_origin=$4)").bind(&a.org).bind(&a.connection).bind(uuid).bind(a.url.as_str()).fetch_one(&pool).await?;
+
             result.push(Candidate {
                 uuid: uuid.into(),
                 name: name.into(),
                 node: s["node"].as_str().unwrap_or("").chars().take(100).collect(),
-                imported,
+                imported: false,
             });
         }
         let pages = data["meta"]["pagination"]["total_pages"]
@@ -278,6 +278,16 @@ async fn candidates(
         if page >= pages {
             break;
         }
+    }
+    let uuids: Vec<_> = result
+        .iter()
+        .map(|candidate| candidate.uuid.clone())
+        .collect();
+    let imported: Vec<String> = sqlx::query_scalar("SELECT panel_server_uuid FROM servers WHERE organization_id=$1 AND panel_connection_id=$2 AND panel_origin=$3 AND panel_server_uuid=ANY($4)")
+        .bind(&a.org).bind(&a.connection).bind(a.url.as_str()).bind(&uuids).fetch_all(&pool).await?;
+    let imported: std::collections::HashSet<_> = imported.into_iter().collect();
+    for candidate in &mut result {
+        candidate.imported = imported.contains(&candidate.uuid);
     }
     reauthorize(
         &pool,

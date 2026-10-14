@@ -148,43 +148,55 @@ export function ServerInventory({ identity }: { identity: Identity }) {
       (provider === "all" ||
         (provider === "pelican") === !!server.panelServerUuid),
   );
+  const panelIds = JSON.stringify(
+    (servers ?? [])
+      .filter((server) => server.panelServerUuid)
+      .map((server) => server.id),
+  );
   useEffect(() => {
-    if (!servers || !organization) return;
+    const pending: string[] = JSON.parse(panelIds);
+    if (!pending.length || !organization) return;
     let disposed = false;
     let running = false;
     async function refresh() {
       if (running) return;
       running = true;
-      for (const server of servers ?? []) {
-        if (disposed) break;
-        if (!server.panelServerUuid) continue;
-        try {
-          const data = await apiRequest<{
-            state: string;
-            resources: Record<string, number>;
-          }>(`servers/${server.id}/panel/resources`, undefined, organization);
-          if (!disposed) {
-            setResourceErrors((previous) => {
-              const next = { ...previous };
-              delete next[server.id];
-              return next;
-            });
-            setReadings((previous) => ({
-              ...previous,
-              [server.id]: { ...data, at: Date.now() },
-            }));
+      let cursor = 0;
+      async function worker() {
+        while (!disposed && cursor < pending.length) {
+          const serverId = pending[cursor++];
+          try {
+            const data = await apiRequest<{
+              state: string;
+              resources: Record<string, number>;
+            }>(`servers/${serverId}/panel/resources`, undefined, organization);
+            if (!disposed) {
+              setResourceErrors((previous) => {
+                const next = { ...previous };
+                delete next[serverId];
+                return next;
+              });
+              setReadings((previous) => ({
+                ...previous,
+                [serverId]: { ...data, at: Date.now() },
+              }));
+            }
+          } catch (cause) {
+            if (!disposed)
+              setResourceErrors((previous) => ({
+                ...previous,
+                [serverId]:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Resources could not be refreshed.",
+              }));
           }
-        } catch (cause) {
-          if (!disposed)
-            setResourceErrors((previous) => ({
-              ...previous,
-              [server.id]:
-                cause instanceof Error
-                  ? cause.message
-                  : "Resources could not be refreshed.",
-            }));
         }
       }
+      // Match the panel API's four-operation limit without serial head-of-line blocking.
+      await Promise.all(
+        Array.from({ length: Math.min(4, pending.length) }, worker),
+      );
       running = false;
     }
     const initial = window.setTimeout(() => void refresh(), 0);
@@ -194,7 +206,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
       window.clearTimeout(initial);
       window.clearInterval(timer);
     };
-  }, [servers, organization]);
+  }, [panelIds, organization]);
   async function load() {
     setRefreshing(true);
     try {
