@@ -218,6 +218,12 @@ async function start() {
       ].join(","),
     };
     rust = startRustDev({ env });
+    if (!process.env.DATABASE_URL)
+      void processes
+        .run(process.execPath, ["scripts/dev-machines.mjs"])
+        .catch(() => {
+          if (!stopping) console.error("Development machine reporter stopped.");
+        });
     await Promise.race([
       rust.done,
       processes.run(process.execPath, createNextDevArgs(config), env),

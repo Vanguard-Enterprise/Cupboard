@@ -380,3 +380,32 @@ uses organization links. Upload uses a dialog with browsing and drag/drop. Keep 
 least 44 pixels and allow filenames to be read in the details dialog.
 
 Reference: [Google Drive file list on Mobbin](https://mobbin.com/screens/4e58234e-a5d7-4119-8ab6-f4d7dbc4f20d).
+
+## Connections
+
+Use [Apollo's compact integrations list](https://mobbin.com/screens/4d8f6c81-5562-4a49-ae10-49f830806ee7)
+for connected services above available services, divided rows, and right-aligned
+actions. Keep the page heading free of a generic subtitle. Put connection status
+beside the service name, following [Vanta's integrations](https://mobbin.com/screens/0bfbcb9b-e013-4fc0-b8f1-ec17b1f70996).
+Use short Refresh, Edit, and Disconnect labels with action icons in the shared
+overflow menu. Browse connections opens the catalog in a searchable dialog, keeping the search
+field above a scrolling list. Use locally served provider logos for connected
+services and catalog entries. Catalog rows use logo/name/description, with actions
+below the text on narrow screens. Server inventory shows names, nodes, and panel
+states; omit provider identifiers from the visible rows.
+
+Pelican imports use a searchable Rust-only picker from the Servers header. The server inventory follows the Machines page layout, with search, status and
+provider filters, compact resource columns, and a three-dot action menu. Clicking
+a server opens its monitoring view with a Back to servers action. Imported
+servers have Resources and Console tabs. Keep power controls in monitoring, require confirmation for stop and restart, and hide
+mutating controls from viewers. Resource observations show their update time;
+console refreshes only while visible. Connection failures stay inside the affected
+view with a useful recovery action.
+
+Machine network sparklines fit recent samples within a one-to-five-minute window.
+Ignore older points when scaling, and preserve gaps longer than 90 seconds.
+Place the provider before the IP on the identity's second line. Show compact
+rounded role tags beside the name. Tags describe an operator-assigned role, not
+confirmed running software. The row's Tags action assigns tags and opens
+organization-wide create, rename, and confirmed deletion controls. Provide Wings,
+Game server, Database, Backups, and Bot server as editable recommended defaults.

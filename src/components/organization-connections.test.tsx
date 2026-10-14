@@ -1,171 +1,335 @@
+import { TooltipProvider } from "@/components/ui/tooltip";
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OrganizationConnections } from "./organization-connections";
-import { TooltipProvider } from "./ui/tooltip";
+import { apiRequest, type Identity } from "@/lib/api-client";
+import type { PelicanConnection } from "@/lib/pelican";
 
+vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn() } }));
+const identity: Identity = {
+  user: { id: "operator", name: "Operator", email: "operator@example.com" },
+  organization: { id: "org-one", name: "Organization" },
+  organizations: [],
+  membershipId: "member",
+  permissions: ["integrations.manage"],
+};
+const connected: PelicanConnection = {
+  id: "connection-id",
+  revision: 1,
+  panelUrl: "https://panel.example.com/",
+  checkedAt: Date.now(),
+  lastSuccessAt: Date.now(),
+  error: null,
+  servers: [
+    {
+      uuid: "server-uuid",
+      identifier: "rust-one",
+      name: "Rust One",
+      node: "USE1",
+      suspended: false,
+      installing: false,
+      transferring: false,
+    },
+  ],
+};
+beforeEach(() => {
+  vi.mocked(apiRequest).mockReset();
+  vi.mocked(apiRequest).mockResolvedValue(null);
+});
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
-
-function mount() {
-  return render(
+const mount = (who = identity) =>
+  render(
     <TooltipProvider>
-      <OrganizationConnections />
+      <OrganizationConnections identity={who} />
     </TooltipProvider>,
+  );
+async function ready() {
+  await waitFor(() =>
+    expect(screen.queryByLabelText("Loading connections")).toBeNull(),
   );
 }
 
 describe("Organization connections", () => {
-  it("filters available connections", async () => {
+  it("loads tenant-scoped data and shows a real empty state with searchable catalog", async () => {
     const user = userEvent.setup();
     mount();
-
-    expect(screen.queryByText("Preview only")).toBeNull();
-    expect(screen.getByText("Needs attention")).toBeTruthy();
-    expect(screen.queryByRole("tab")).toBeNull();
-    expect(screen.getByText("Pterodactyl")).toBeTruthy();
-    expect(screen.getByText("Cloudflare")).toBeTruthy();
-
-    expect(screen.queryByText(/sample data/i)).toBeNull();
-    for (const category of [
-      "Server management",
-      "Player activity",
-      "Network",
-      "Source control",
-    ]) {
-      const categoryBadge = screen.getByText(category);
-      expect(categoryBadge.className).toContain("text-text-muted");
-      expect(categoryBadge.className).not.toContain("text-text-muted/80");
-    }
-
-    const connected = screen.getByRole("region", {
-      name: "Connected services",
-    });
-    expect(within(connected).getAllByRole("listitem")[0].textContent).toContain(
-      "Pelican Panel",
+    await ready();
+    expect(apiRequest).toHaveBeenCalledWith(
+      "integrations/pelican",
+      undefined,
+      "org-one",
     );
-    expect(within(connected).getAllByRole("listitem")).toHaveLength(2);
-
+    expect(screen.getByText("No connected services")).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Connect services and verify access for your organization.",
+      ),
+    ).toBeNull();
+    expect(screen.queryByText("Available connections")).toBeNull();
+    expect(screen.queryByText("Discord", { exact: true })).toBeNull();
+    expect(screen.queryByText("Northstar Rust")).toBeNull();
+    expect(screen.queryByText("API key rejected")).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Browse connections" }),
+    );
     const search = screen.getByRole("searchbox", {
       name: "Search available connections",
     });
-    expect(screen.queryByText("Search available connections")).toBeNull();
+    expect(document.activeElement).toBe(search);
     await user.type(search, "network");
-
     expect(screen.getByText("Cloudflare")).toBeTruthy();
     expect(screen.queryByText("Pterodactyl")).toBeNull();
-
     await user.clear(search);
     await user.type(search, "missing");
     expect(screen.getByText("No connections found")).toBeTruthy();
-    const clearSearch = screen.getByRole("button", { name: "Clear search" });
-    expect(clearSearch.getAttribute("data-variant")).toBe("secondary");
-    expect(clearSearch.closest("div")?.className).not.toContain(
-      "border-dashed",
-    );
-    await user.click(clearSearch);
-    expect(screen.getByText("Pterodactyl")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
     expect(document.activeElement).toBe(search);
-    expect(screen.getByText("Pelican Panel")).toBeTruthy();
   });
-
-  it("moves focus to catalog search from Browse connections", async () => {
+  it("saves and verifies a connection without storing its key in the browser", async () => {
     const user = userEvent.setup();
+    const storage = vi.spyOn(Storage.prototype, "setItem");
     mount();
-    const browse = screen.getByRole("button", { name: "Browse connections" });
-    browse.focus();
-    await user.keyboard("{Enter}");
-    expect(document.activeElement).toBe(
-      screen.getByRole("searchbox", { name: "Search available connections" }),
+    await ready();
+    await user.click(
+      screen.getByRole("button", { name: "Browse connections" }),
     );
-  });
-
-  it("filters connections independently of the browser locale", async () => {
-    const localeLowerCase = String.prototype.toLocaleLowerCase;
-    vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(
-      function (this: string) {
-        return localeLowerCase.call(this, "tr-TR");
-      },
+    await user.click(
+      screen.getByRole("button", { name: "Connect Pelican Panel" }),
     );
-    const user = userEvent.setup();
-    mount();
-
+    await user.click(screen.getByRole("button", { name: "Save and verify" }));
+    expect(document.activeElement).toBe(screen.getByLabelText("Panel URL"));
     await user.type(
-      screen.getByRole("searchbox", {
-        name: "Search available connections",
-      }),
-      "BATTLEMETRICS",
+      screen.getByLabelText("Panel URL"),
+      "https://panel.example.com",
     );
-
-    expect(screen.getByText("BattleMetrics")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Save and verify" }));
+    expect(document.activeElement).toBe(
+      screen.getByLabelText("Client API key"),
+    );
+    await user.type(
+      screen.getByLabelText("Client API key"),
+      "pelican-secret-for-testing",
+    );
+    vi.mocked(apiRequest).mockResolvedValueOnce(connected);
+    await user.click(screen.getByRole("button", { name: "Save and verify" }));
+    await screen.findByText("Rust One");
+    expect(screen.getByText("Connected")).toBeTruthy();
+    expect(screen.getByText("Available", { exact: true })).toBeTruthy();
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      "integrations/pelican",
+      {
+        panelUrl: "https://panel.example.com/",
+        apiKey: "pelican-secret-for-testing",
+        id: null,
+        revision: null,
+      },
+      "org-one",
+    );
+    expect(storage).not.toHaveBeenCalled();
+    expect(screen.queryByDisplayValue("pelican-secret-for-testing")).toBeNull();
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Pelican connection actions" }),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect(
+      (screen.getByLabelText("Client API key") as HTMLInputElement).value,
+    ).toBe("");
+    vi.mocked(apiRequest).mockResolvedValueOnce({ ...connected, revision: 2 });
+    await user.click(screen.getByRole("button", { name: "Save and verify" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      "integrations/pelican",
+      {
+        panelUrl: connected.panelUrl,
+        apiKey: null,
+        id: connected.id,
+        revision: 1,
+      },
+      "org-one",
+    );
   });
-
-  it("opens concise setup and connected-service details", async () => {
+  it("preserves verified inventory after a failed check and requires confirmation to disconnect", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(connected);
+    mount();
+    await ready();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...connected,
+      revision: 2,
+      error: "Pelican rejected the Client API key. Replace it and try again.",
+    });
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Pelican connection actions" }),
+      { button: 0, ctrlKey: false },
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Refresh" }));
+    await screen.findByText("Needs attention");
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      "integrations/pelican/check",
+      { id: connected.id, revision: 1 },
+      "org-one",
+    );
+    expect(screen.getByText("Rust One")).toBeTruthy();
+    expect(screen.queryByText("rust-one", { exact: true })).toBeNull();
+    expect(screen.queryByText(/Inventory from/)).toBeNull();
+    expect(screen.queryByText(/Checked /)).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Pelican connection actions" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    await user.click(
+      screen.getByRole("button", { name: "Pelican connection actions" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    vi.mocked(apiRequest).mockResolvedValueOnce({ removed: true });
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect Pelican" }),
+    );
+    await screen.findByText("No connected services");
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      "integrations/pelican/remove",
+      { id: connected.id, revision: 2 },
+      "org-one",
+    );
+    expect(screen.queryByText("Rust One")).toBeNull();
+  });
+  it("does not fetch or show credentials without integration management permission", () => {
+    mount({ ...identity, permissions: ["servers.view"] });
+    expect(apiRequest).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/need integration management permission/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+  it("shows load failures and retries without implying an empty successful result", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockRejectedValueOnce(new Error("Unavailable"));
+    mount();
+    await screen.findByText("Unavailable");
+    expect(screen.queryByText("No connected services")).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Browse connections" }),
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Connect Pelican Panel",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    vi.mocked(apiRequest).mockResolvedValueOnce(null);
+    await user.click(
+      screen.getByRole("button", { name: "Reload connections" }),
+    );
+    await screen.findByText("No connected services");
+  });
+  it("keeps entered fields after save errors and clears secrets on cancel", async () => {
     const user = userEvent.setup();
     mount();
-
-    const setupCloudflare = screen.getByRole("button", {
+    await ready();
+    await user.click(
+      screen.getByRole("button", { name: "Browse connections" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Connect Pelican Panel" }),
+    );
+    await user.type(
+      screen.getByLabelText("Panel URL"),
+      "https://panel.example.com",
+    );
+    await user.type(
+      screen.getByLabelText("Client API key"),
+      "test-secret-not-persisted",
+    );
+    vi.mocked(apiRequest).mockRejectedValueOnce(
+      new Error(
+        "This connection changed. Reload connections before trying again.",
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Save and verify" }));
+    await screen.findByText(/This connection changed/);
+    expect(screen.getByDisplayValue("test-secret-not-persisted")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(
+      screen.getByRole("button", { name: "Browse connections" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Connect Pelican Panel" }),
+    );
+    expect(
+      (screen.getByLabelText("Client API key") as HTMLInputElement).value,
+    ).toBe("");
+  });
+  it("disables duplicate checks while pending and shows empty verified inventory", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(connected);
+    mount();
+    await ready();
+    let finish!: (value: PelicanConnection) => void;
+    vi.mocked(apiRequest).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Pelican connection actions" }),
+      { button: 0, ctrlKey: false },
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Refresh" }));
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Checking Pelican...",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    finish({ ...connected, revision: 2, servers: [] });
+    await screen.findByText(/No servers are assigned/);
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+  });
+  it("marks old checks stale and explains unsupported connections in the action dialog", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...connected,
+      lastSuccessAt: Date.now() - 600_000,
+    });
+    mount();
+    await ready();
+    expect(screen.getByText("Check overdue")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Browse connections" }),
+    );
+    const trigger = screen.getByRole("button", {
       name: "View Cloudflare requirements",
     });
-    setupCloudflare.focus();
+    trigger.focus();
     await user.keyboard("{Enter}");
-    const setupDialog = screen.getByRole("dialog");
-    expect(setupDialog).toBeTruthy();
-    const describedBy = setupDialog.getAttribute("aria-describedby");
-    expect(describedBy).toBeTruthy();
-    expect(document.getElementById(describedBy!)?.textContent).toContain(
-      "sample data",
-    );
-    const dialogTitle = screen.getByText("Cloudflare requirements");
-    expect(document.activeElement).toBe(dialogTitle);
-    expect(dialogTitle.className).toContain("focus-visible:ring-2");
-    expect(dialogTitle.className).toContain("focus-visible:ring-ring/50");
-    expect(screen.getByText("Requirements")).toBeTruthy();
-    expect(screen.getByText("Scoped API token")).toBeTruthy();
-    expect(screen.getByText("Selected zone access")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "These requirements are sample data. Cupboard will not request credentials or connect this account.",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText("Preview data")).toBeNull();
-    expect(screen.queryByText(/preview/i)).toBeNull();
-    const close = screen.getByRole("button", { name: "Close" });
-    expect(close.getAttribute("data-variant")).toBe("secondary");
-    await user.click(close);
-
-    expect(document.activeElement).toBe(setupCloudflare);
-    await user.click(
-      screen.getByRole("button", { name: "View Discord details" }),
-    );
-    expect(screen.getByText("Discord connection")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "This status is sample data. Cupboard has not checked or changed this account.",
-      ),
-    ).toBeTruthy();
-    expect(screen.getByText("Access")).toBeTruthy();
-    expect(
-      within(screen.getByRole("dialog")).getByText("Northstar Rust"),
-    ).toBeTruthy();
-    expect(screen.queryByLabelText(/API key|password|token/i)).toBeNull();
-    expect(screen.getAllByText("Sync healthy")).toHaveLength(2);
-    expect(screen.getByText("Read server and role details")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "Close" }));
-    await user.click(
-      screen.getByRole("button", { name: "View Pelican Panel details" }),
-    );
-    expect(screen.getByText("Pelican Panel connection")).toBeTruthy();
-    expect(screen.getAllByText("API key rejected")).toHaveLength(2);
-    expect(screen.getByText("Send approved power actions")).toBeTruthy();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).toBeNull();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/cannot be connected yet/)).toBeTruthy();
     expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "View Pelican Panel details" }),
+      within(dialog).getByText("Cloudflare requirements"),
     );
+    expect(within(dialog).getByText("Scoped API token")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(document.activeElement).toBe(trigger);
   });
 });

@@ -1,10 +1,15 @@
 pub mod auth;
+#[cfg(any(debug_assertions, test))]
+pub mod dev_seed;
 mod files;
 mod logos;
 pub mod storage;
 pub use files::cleanup as cleanup_files;
 mod connectivity;
 mod machines;
+mod panel_servers;
+pub mod pelican;
+pub mod secrets;
 pub mod servers;
 mod team;
 use axum::{Router, extract::State, http::StatusCode, routing::get};

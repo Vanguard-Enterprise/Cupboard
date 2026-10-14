@@ -14,12 +14,14 @@ export type MachineHealth = {
   diskAvailableBytes: number;
   uptimeSeconds: number;
 };
+export type MachineTag = { id: string; name: string };
 export type Machine = {
   id: string;
   name: string;
   address: string;
   provider: string;
   notes: string;
+  tags?: string[];
   revision: number;
   enrolled: boolean;
   enrolledAt: number | null;

@@ -10,8 +10,14 @@ const paths = new Set([
   "auth/me",
   "auth/organization",
   "team",
+  "integrations/pelican",
+  "integrations/pelican/check",
+  "integrations/pelican/remove",
   "servers",
+  "servers/pelican/candidates",
+  "servers/pelican/import",
   "machines",
+  "machines/tags",
   "files",
   "organization-logo",
   "organization-logo/remove",
@@ -45,8 +51,10 @@ export async function proxyApi(
   if (
     !paths.has(path) &&
     !logoDownload &&
-    !/^servers\/[0-9a-f-]{36}\/check$/.test(path) &&
-    !/^machines\/[0-9a-f-]{36}(?:\/(?:enrollment|disconnect|history|remove))?$/.test(
+    !/^servers\/[0-9a-f-]{36}\/(?:check|panel\/(?:resources|console|power|command))$/.test(
+      path,
+    ) &&
+    !/^machines\/[0-9a-f-]{36}(?:\/(?:enrollment|disconnect|history|remove|tags))?$/.test(
       path,
     ) &&
     !/^files\/[0-9a-f-]{36}(?:\/(?:delete|rename|move|copy|share|share\/revoke))?$/.test(
@@ -67,11 +75,14 @@ export async function proxyApi(
       `${backendSessionCookieName}=${cookie.slice(browserCookiePrefix.length)}`,
     );
   if (
+    path === "servers" ||
+    path.startsWith("servers/") ||
     path === "files" ||
     path.startsWith("files/") ||
     path === "machines" ||
     path.startsWith("machines/") ||
-    path.startsWith("organization-logo")
+    path.startsWith("organization-logo") ||
+    path.startsWith("integrations/")
   ) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);
@@ -152,7 +163,11 @@ export async function proxyApi(
       signal: AbortSignal.timeout(
         fileUpload || fileDownload || logoDownload || path.startsWith("files/")
           ? 60000
-          : 15000,
+          : path.startsWith("integrations/pelican") ||
+              path.startsWith("servers/pelican/") ||
+              path.includes("/panel/")
+            ? 25000
+            : 15000,
       ),
     });
     const resultHeaders = new Headers({
