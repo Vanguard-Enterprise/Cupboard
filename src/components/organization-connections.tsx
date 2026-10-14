@@ -641,8 +641,12 @@ export function OrganizationConnections({ identity }: { identity: Identity }) {
             <DialogDescription>
               Use a dedicated Pelican account assigned only to the servers this
               organization should see. Create its key under Account → API
-              credentials. Cupboard reads server inventory and does not send
-              power actions.
+              credentials. Cupboard reads server inventory, live resources, and
+              console output. Authorized operators can send console commands and
+              start, stop, or restart imported servers. Grant only the server
+              permissions you need: startup read for Rust connection discovery,
+              resource and console read for monitoring, console write for
+              commands, and start, stop, and restart for power controls.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={save} className="space-y-5" noValidate>

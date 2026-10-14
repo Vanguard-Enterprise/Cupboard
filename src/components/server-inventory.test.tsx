@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ServerInventory } from "./server-inventory";
@@ -300,4 +300,53 @@ it("shows Pelican readings in the machines-style inventory and opens monitoring 
   expect(screen.queryByRole("dialog")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Back to servers" }));
   expect(screen.getByRole("table", { name: "Game servers" })).not.toBeNull();
+});
+it("retains stale resources on refresh failure and clears the error after recovery", async () => {
+  let refresh: (() => void) | undefined;
+  const originalInterval = globalThis.setInterval.bind(globalThis);
+  const interval = vi
+    .spyOn(window, "setInterval")
+    .mockImplementation((callback, delay) => {
+      if (delay === 30_000) refresh = callback as () => void;
+      const handle = originalInterval(() => {}, 30_000);
+      window.clearInterval(handle);
+      return handle;
+    });
+  let fail = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (!String(input).endsWith("/resources"))
+      return Response.json([{ ...server, panelServerUuid: "panel" }]);
+    if (fail) throw new Error("Panel temporarily unavailable");
+    return Response.json({
+      state: "running",
+      resources: {
+        cpu_absolute: 14.5,
+        memory_bytes: 1048576,
+        disk_bytes: 2097152,
+        network_rx_bytes: 100,
+        network_tx_bytes: 50,
+      },
+    });
+  });
+  render(<ServerInventory identity={identity} />);
+  await screen.findByText("14.5%");
+  fail = true;
+  await act(async () => refresh?.());
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Panel temporarily unavailable",
+  );
+  expect(screen.getByRole("alert").textContent).toContain(
+    "Stale resources · Last observed",
+  );
+  expect(screen.getByText("14.5%")).not.toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Main Rust: Stale" }),
+  ).not.toBeNull();
+  fail = false;
+  await act(async () => refresh?.());
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(
+    screen.getByRole("button", { name: "Main Rust: Running" }),
+  ).not.toBeNull();
+  interval.mockRestore();
 });

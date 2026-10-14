@@ -117,6 +117,9 @@ export function ServerInventory({ identity }: { identity: Identity }) {
   const [draft, setDraft] = useState(empty);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState("");
+  const [resourceErrors, setResourceErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState<Record<string, boolean>>({});
   const [checkErrors, setCheckErrors] = useState<Record<string, string>>({});
@@ -127,6 +130,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
   const organization = identity.organization?.id;
   const status = (server: Server) => {
     const reading = readings[server.id];
+    if (reading && resourceErrors[server.id]) return "Stale";
     if (reading && Date.now() - reading.at < 90_000)
       return reading.state === "running"
         ? "Running"
@@ -159,18 +163,26 @@ export function ServerInventory({ identity }: { identity: Identity }) {
             state: string;
             resources: Record<string, number>;
           }>(`servers/${server.id}/panel/resources`, undefined, organization);
-          if (!disposed)
-            setReadings((previous) => ({
-              ...previous,
-              [server.id]: { ...data, at: Date.now() },
-            }));
-        } catch {
-          if (!disposed)
-            setReadings((previous) => {
+          if (!disposed) {
+            setResourceErrors((previous) => {
               const next = { ...previous };
               delete next[server.id];
               return next;
             });
+            setReadings((previous) => ({
+              ...previous,
+              [server.id]: { ...data, at: Date.now() },
+            }));
+          }
+        } catch (cause) {
+          if (!disposed)
+            setResourceErrors((previous) => ({
+              ...previous,
+              [server.id]:
+                cause instanceof Error
+                  ? cause.message
+                  : "Resources could not be refreshed.",
+            }));
         }
       }
       running = false;
@@ -712,6 +724,17 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                                     ),
                                 )}
                               </div>
+                              {resourceErrors[server.id] && (
+                                <p
+                                  role="alert"
+                                  className="mt-2 text-xs text-destructive"
+                                >
+                                  {resourceErrors[server.id]}{" "}
+                                  {reading
+                                    ? `Stale resources · Last observed ${new Date(reading.at).toLocaleTimeString()}.`
+                                    : "No resource report received."}
+                                </p>
+                              )}
                               {checkErrors[server.id] && (
                                 <p
                                   role="alert"

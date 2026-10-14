@@ -74,7 +74,7 @@ async fn access(
     }
     type ConnectionRow = (String, i64, String, Vec<u8>, Option<String>);
     let row: Option<ConnectionRow> = if let Some(id) = id {
-        sqlx::query_as("SELECT c.id,c.revision,c.panel_url,c.api_key_encrypted,s.panel_server_uuid FROM servers s JOIN pelican_connections c ON c.organization_id=s.organization_id AND c.id=s.panel_connection_id WHERE s.organization_id=$1 AND s.id=$2")
+        sqlx::query_as("SELECT c.id,c.revision,c.panel_url,c.api_key_encrypted,s.panel_server_uuid FROM servers s JOIN pelican_connections c ON c.organization_id=s.organization_id AND c.id=s.panel_connection_id AND c.panel_url=s.panel_origin WHERE s.organization_id=$1 AND s.id=$2")
         .bind(&org).bind(id).fetch_optional(&mut *tx).await?
     } else {
         sqlx::query_as("SELECT id,revision,panel_url,api_key_encrypted,NULL::text FROM pelican_connections WHERE organization_id=$1").bind(&org).fetch_optional(&mut *tx).await?
@@ -263,7 +263,7 @@ async fn candidates(
                     !s.is_empty() && s.chars().count() <= 80 && !s.chars().any(char::is_control)
                 })
                 .ok_or_else(upstream)?;
-            let imported:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM servers WHERE organization_id=$1 AND panel_connection_id=$2 AND panel_server_uuid=$3)").bind(&a.org).bind(&a.connection).bind(uuid).fetch_one(&pool).await?;
+            let imported:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM servers WHERE organization_id=$1 AND panel_connection_id=$2 AND panel_server_uuid=$3 AND panel_origin=$4)").bind(&a.org).bind(&a.connection).bind(uuid).bind(a.url.as_str()).fetch_one(&pool).await?;
             result.push(Candidate {
                 uuid: uuid.into(),
                 name: name.into(),
@@ -382,8 +382,8 @@ async fn import(
     let encrypted = password
         .map(|p| key.encrypt(&p, &a.org, &id, "rcon"))
         .transpose()?;
-    let saved:String=sqlx::query_scalar("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port,panel_connection_id,panel_server_uuid,panel_server_identifier) VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10) ON CONFLICT(organization_id,panel_connection_id,panel_server_uuid) DO UPDATE SET panel_server_identifier=EXCLUDED.panel_server_identifier RETURNING id")
-        .bind(id).bind(&a.org).bind(name).bind(host).bind(rcon_port).bind(encrypted).bind(a2s_port).bind(&a.connection).bind(&input.uuid).bind(identifier).fetch_one(&mut *tx).await?;
+    let saved:String=sqlx::query_scalar("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port,panel_connection_id,panel_server_uuid,panel_server_identifier,panel_origin) VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10,$11) ON CONFLICT(organization_id,panel_origin,panel_server_uuid) DO UPDATE SET panel_connection_id=EXCLUDED.panel_connection_id,panel_server_identifier=EXCLUDED.panel_server_identifier RETURNING id")
+        .bind(id).bind(&a.org).bind(name).bind(host).bind(rcon_port).bind(encrypted).bind(a2s_port).bind(&a.connection).bind(&input.uuid).bind(identifier).bind(a.url.as_str()).fetch_one(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":saved})))
 }

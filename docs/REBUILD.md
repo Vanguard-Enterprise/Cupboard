@@ -360,3 +360,8 @@ rename, delete, and assign them. Catalog writes serialize within each organizati
 assignment writes check the machine revision. Deletion removes assignments in the
 same transaction. Tags describe operator-assigned roles rather than software
 detection. Inventory network graphs now show at most five minutes of real samples.
+
+Imported server identity includes the panel origin as well as the organization
+and upstream UUID. After disconnect, controls stay disabled. Explicitly importing
+from a reconnected same-origin panel restores the original Cupboard server record
+without duplicates; different panel origins remain separate.

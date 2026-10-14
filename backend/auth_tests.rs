@@ -4552,6 +4552,88 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         StatusCode::CONFLICT
     );
     assert_eq!(panel.power.load(Ordering::SeqCst), 3);
+    panel.delay.store(0, Ordering::SeqCst);
+    let (status, reconnected) = owner
+        .request(
+            "POST",
+            "integrations/pelican",
+            json!({"panelUrl":url,"apiKey":"panel-import-secret"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(reconnected["id"], connection["id"]);
+    let (_, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(candidates["servers"][0]["imported"], false);
+    let (status, rebound) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{rebound}");
+    assert_eq!(rebound, imported);
+    assert_eq!(
+        owner
+            .request("GET", "servers", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        owner
+            .request("GET", &format!("{path}/resources"), json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_url = format!("http://{}/", second_listener.local_addr().unwrap());
+    let second_app = Router::new()
+        .route("/api/client", get(inventory))
+        .route("/api/client/servers/{uuid}", get(server));
+    let second_task = tokio::spawn(async move {
+        axum::serve(second_listener, second_app).await.unwrap();
+    });
+    let mut second_policy = crate::pelican::PanelPolicy::default();
+    second_policy.test_origin = Some(second_url.clone());
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::secrets::SecretKey::parse(&"48".repeat(32)).unwrap(),
+    ))
+    .layer(axum::Extension(second_policy));
+    let (status, changed_origin) = owner.request("POST", "integrations/pelican", json!({"id":reconnected["id"],"revision":reconnected["revision"],"panelUrl":second_url,"apiKey":"panel-import-secret"})).await;
+    assert_eq!(status, StatusCode::OK, "{changed_origin}");
+    assert_eq!(
+        owner
+            .request("GET", &format!("{path}/resources"), json!(null))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (_, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(candidates["servers"][0]["imported"], false);
+    let (status, separate) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":changed_origin["id"],"revision":changed_origin["revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{separate}");
+    assert_ne!(separate["id"], imported["id"]);
+    assert_eq!(
+        owner
+            .request("GET", "servers", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    second_task.abort();
     task.abort();
 }
 

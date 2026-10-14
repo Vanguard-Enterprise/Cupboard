@@ -109,6 +109,13 @@ describe("Organization connections", () => {
     await user.click(
       screen.getByRole("button", { name: "Connect Pelican Panel" }),
     );
+    expect(
+      screen.getByText(/Authorized operators can send console commands/),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/startup read for Rust connection discovery/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/does not send power actions/)).toBeNull();
     await user.click(screen.getByRole("button", { name: "Save and verify" }));
     expect(document.activeElement).toBe(screen.getByLabelText("Panel URL"));
     await user.type(
