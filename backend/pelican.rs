@@ -299,13 +299,20 @@ async fn save(
     {
         return Err(conflict());
     }
-    let (servers, error) = match result {
-        Ok(servers) => (servers, None),
-        Err(error) => (Vec::new(), Some(error)),
-    };
     let now = now();
+    let (servers, error, last_success) = match result {
+        Ok(servers) => (
+            serde_json::to_value(servers).map_err(|_| internal())?,
+            None,
+            Some(now),
+        ),
+        Err(error) => match current.filter(|saved| saved.panel_url == url.as_str()) {
+            Some(saved) => (saved.servers, Some(error), saved.last_success_at),
+            None => (serde_json::json!([]), Some(error), None),
+        },
+    };
     sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,last_success_at,error,servers) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(organization_id) DO UPDATE SET revision=EXCLUDED.revision,panel_url=EXCLUDED.panel_url,api_key_encrypted=EXCLUDED.api_key_encrypted,checked_at=EXCLUDED.checked_at,last_success_at=EXCLUDED.last_success_at,error=EXCLUDED.error,servers=EXCLUDED.servers")
-        .bind(&org).bind(&id).bind(input.revision.unwrap_or(0)+1).bind(url.as_str()).bind(encrypted).bind(now).bind(error.is_none().then_some(now)).bind(error).bind(serde_json::to_value(servers).map_err(|_|internal())?).execute(&mut *tx).await?;
+        .bind(&org).bind(&id).bind(input.revision.unwrap_or(0)+1).bind(url.as_str()).bind(encrypted).bind(now).bind(last_success).bind(error).bind(servers).execute(&mut *tx).await?;
     let response = stored(&mut tx, &org)
         .await?
         .ok_or_else(internal)?

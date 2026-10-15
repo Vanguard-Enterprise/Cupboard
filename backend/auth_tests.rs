@@ -3888,6 +3888,18 @@ async fn pelican_inventory_is_tenant_authorized_encrypted_and_persistent() {
             .0,
         StatusCode::CONFLICT
     );
+    // A failed edit at the same origin keeps the last successful inventory.
+    panel.mode.store(1, Ordering::SeqCst);
+    let (status, edited) = owner.request("POST", "integrations/pelican", json!({"id":connection["id"],"revision":connection["revision"],"panelUrl":url,"apiKey":null})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(edited["error"].as_str().unwrap().contains("rejected"));
+    assert_eq!(edited["servers"], connection["servers"]);
+    assert_eq!(edited["lastSuccessAt"], connection["lastSuccessAt"]);
+    assert_eq!(
+        edited["revision"].as_i64().unwrap(),
+        connection["revision"].as_i64().unwrap() + 1
+    );
+    connection = edited;
     // Scheduled checks use only persisted scoped credentials, skip fresh records,
     // retain inventory on failure, and recover without a browser session.
     let calls = panel.calls.load(Ordering::SeqCst);
@@ -3944,7 +3956,7 @@ async fn pelican_inventory_is_tenant_authorized_encrypted_and_persistent() {
             ..Default::default()
         },
     )
-    .layer(axum::Extension(key))
+    .layer(axum::Extension(key.clone()))
     .layer(axum::Extension(policy));
     let mut resumed = Client {
         app: restarted,
@@ -4143,6 +4155,40 @@ async fn pelican_inventory_is_tenant_authorized_encrypted_and_persistent() {
             .1,
         failed
     );
+    // A different origin must not inherit inventory from the previous panel.
+    panel.mode.store(0, Ordering::SeqCst);
+    let (_, recovered) = owner
+        .request(
+            "POST",
+            "integrations/pelican/check",
+            json!({"id":failed["id"],"revision":failed["revision"]}),
+        )
+        .await;
+    assert!(!recovered["servers"].as_array().unwrap().is_empty());
+    let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_url = format!("http://{}/", second_listener.local_addr().unwrap());
+    let failing_panel =
+        Router::new().route("/api/client", get(|| async { StatusCode::UNAUTHORIZED }));
+    let second_task = tokio::spawn(async move {
+        axum::serve(second_listener, failing_panel).await.unwrap();
+    });
+    let mut second_policy = crate::pelican::PanelPolicy::default();
+    second_policy.test_origin = Some(second_url.clone());
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(second_policy));
+    let (status, replaced) = owner.request("POST", "integrations/pelican", json!({"id":recovered["id"],"revision":recovered["revision"],"panelUrl":second_url,"apiKey":"pelican-test-secret-never-returned"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(replaced["error"].is_string());
+    assert_eq!(replaced["servers"], json!([]));
+    assert!(replaced["lastSuccessAt"].is_null());
+    second_task.abort();
     panel_task.abort();
 }
 
