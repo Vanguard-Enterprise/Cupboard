@@ -4839,7 +4839,7 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
         release: Arc<tokio::sync::Semaphore>,
     }
     async fn inventory(State(panel): State<Panel>, headers: HeaderMap) -> Json<Value> {
-        if headers["authorization"] == "Bearer slow-test-key" {
+        if headers["authorization"] == "Bearer slow-test-client-key" {
             panel.entered.send(()).await.unwrap();
             panel.release.acquire().await.unwrap().forget();
         }
@@ -4888,9 +4888,9 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
         let org = owner.organization.clone();
         let id = uuid::Uuid::new_v4().to_string();
         let secret = if index == 0 {
-            "slow-test-key"
+            "slow-test-client-key"
         } else {
-            "fast-test-key"
+            "fast-test-client-key"
         };
         let encrypted = key.encrypt(secret, &org, &id, "pelican").unwrap();
         sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,next_check_at,servers) VALUES($1,$2,1,$3,$4,0,-100,'[]'::jsonb)").bind(&org).bind(&id).bind(&url).bind(encrypted).execute(&pool).await.unwrap();
@@ -4923,7 +4923,9 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
     // Even four independently invoked scheduled checks cannot consume all four
     // shared permits. A save and manual check must still work while three block.
     for (org, id) in orgs.iter().zip(&ids) {
-        let encrypted = key.encrypt("slow-test-key", org, id, "pelican").unwrap();
+        let encrypted = key
+            .encrypt("slow-test-client-key", org, id, "pelican")
+            .unwrap();
         sqlx::query("UPDATE pelican_connections SET api_key_encrypted=$2,checked_at=0,next_check_at=-100 WHERE organization_id=$1").bind(org).bind(encrypted).execute(&pool).await.unwrap();
     }
     let (batch_pool, batch_key, batch_policy) = (pool.clone(), key.clone(), policy.clone());
@@ -4944,7 +4946,7 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
         .request(
             "POST",
             "integrations/pelican",
-            json!({"id":ids[0],"revision":1,"panelUrl":url,"apiKey":"fast-test-key"}),
+            json!({"id":ids[0],"revision":1,"panelUrl":url,"apiKey":"fast-test-client-key"}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{saved}");
