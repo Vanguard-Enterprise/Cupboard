@@ -385,9 +385,14 @@ async fn import(
             "The panel connection changed. Reload panel servers.",
         ));
     }
-    let existing: Option<String> = sqlx::query_scalar("SELECT id FROM servers WHERE organization_id=$1 AND panel_origin=$2 AND panel_server_uuid=$3 FOR UPDATE")
+    let existing: Option<String> = sqlx::query_scalar("SELECT id FROM servers WHERE organization_id=$1 AND panel_origin=$2 AND panel_server_uuid=$3")
         .bind(&a.org).bind(a.url.as_str()).bind(&input.uuid).fetch_optional(&mut *tx).await?;
     let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    // Match health probes before replacing endpoints or clearing their observations.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 6))")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
     let inferred = infer_connections(s);
     let (host, rcon_port, a2s_port, password) = match inferred {
         Some((host, rcon, a2s, password)) => (Some(host), Some(rcon), Some(a2s), Some(password)),

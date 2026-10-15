@@ -4660,7 +4660,36 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         .request("GET", "servers/pelican/candidates", json!(null))
         .await;
     assert_eq!(candidates["servers"][0]["imported"], false);
-    let (status, rebound) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]})).await;
+    let id = imported["id"].as_str().unwrap();
+    let mut old_probe = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,6))")
+        .bind(id)
+        .execute(&mut *old_probe)
+        .await
+        .unwrap();
+    let probe_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *old_probe)
+        .await
+        .unwrap();
+    let reimport = owner.request(
+        "POST",
+        "servers/pelican/import",
+        json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]}),
+    );
+    let finish_old_probe = async {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)) AND wait_event='advisory')")
+                    .bind(probe_pid).fetch_one(&pool).await.unwrap();
+                if waiting { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.expect("reimport must wait for the existing per-server health probe lock");
+        sqlx::query("UPDATE servers SET checked_at=2,rcon_status='connected',a2s_status='connected',players=99,players_at=2,players_source='rcon' WHERE id=$1")
+            .bind(id).execute(&mut *old_probe).await.unwrap();
+        old_probe.commit().await.unwrap();
+    };
+    let ((status, rebound), ()) = tokio::join!(reimport, finish_old_probe);
     assert_eq!(status, StatusCode::OK, "{rebound}");
     assert_eq!(rebound, imported);
     let id = imported["id"].as_str().unwrap();
