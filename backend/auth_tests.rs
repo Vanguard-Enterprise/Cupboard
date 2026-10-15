@@ -4527,7 +4527,8 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         );
     }
     // Independent inventory clients share a global background cap. Three
-    // observations leave the fourth slot available for foreground resources.
+    // observations leave the fourth slot available for foreground resources,
+    // while a fourth observation waits fairly until a slot is released.
     panel.delay.store(1, Ordering::SeqCst);
     let mut observations = Vec::new();
     for _ in 0..3 {
@@ -4551,13 +4552,18 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
     })
     .await
     .unwrap();
-    assert_eq!(
-        owner
-            .request("GET", &format!("{path}/observation"), json!(null))
+    let mut queued_client = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    let queued_path = format!("{path}/observation");
+    let queued = tokio::spawn(async move {
+        queued_client
+            .request("GET", &queued_path, json!(null))
             .await
-            .0,
-        StatusCode::TOO_MANY_REQUESTS
-    );
+            .0
+    });
     let mut foreground = Client {
         app: app.clone(),
         cookie: owner.cookie.clone(),
@@ -4577,12 +4583,17 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
     })
     .await
     .unwrap();
+    assert!(
+        !queued.is_finished(),
+        "Contending observations wait instead of failing immediately"
+    );
     panel.delay.store(0, Ordering::SeqCst);
     panel.release.add_permits(4);
     for observation in observations {
         assert_eq!(observation.await.unwrap(), StatusCode::OK);
     }
     assert_eq!(foreground.await.unwrap(), StatusCode::OK);
+    assert_eq!(queued.await.unwrap(), StatusCode::OK);
     // Clear the stored notification before the disconnect race below.
     panel.entered.notified().await;
     panel.delay.store(1, Ordering::SeqCst);

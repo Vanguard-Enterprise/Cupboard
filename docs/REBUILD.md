@@ -370,5 +370,7 @@ Pelican scheduling drains due work in batches of three before sleeping when idle
 Inventory resources also refresh with three workers, so one slow server does not
 block later rows. Background work reserves one shared slot for interactive
 requests. The inventory observation endpoint enforces its cap globally in the API
-so multiple clients share the same reservation. Candidate imported-state lookup uses one scoped database query
+so multiple clients share the same reservation. Contended observations wait in
+FIFO order for at most eight seconds before a bounded jittered client retry.
+Waiting observations do not hold shared operation permits. Candidate imported-state lookup uses one scoped database query
 for the complete bounded candidate set.

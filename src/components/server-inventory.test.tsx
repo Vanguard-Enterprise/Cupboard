@@ -499,3 +499,79 @@ it("reserves a panel slot for foreground monitoring while background requests ar
   }
   expect(await screen.findByText("14.5%")).not.toBeNull();
 });
+it("requeues busy observations with bounded jittered retries", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  let requests = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (!String(input).endsWith("/observation"))
+      return Response.json([{ ...server, panelServerUuid: "panel" }]);
+    requests++;
+    return Response.json(
+      { error: "Background panel refreshes are busy." },
+      { status: 429 },
+    );
+  });
+  try {
+    await act(async () => {
+      render(<ServerInventory identity={identity} />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(requests).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(499);
+    });
+    expect(requests).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(requests).toBe(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(requests).toBe(3);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Background panel refreshes are busy.",
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(requests).toBe(3);
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
+});
+it("cancels a queued observation retry on unmount", async () => {
+  vi.useFakeTimers();
+  let requests = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (!String(input).endsWith("/observation"))
+      return Response.json([{ ...server, panelServerUuid: "panel" }]);
+    requests++;
+    return Response.json(
+      { error: "Background panel refreshes are busy." },
+      { status: 429 },
+    );
+  });
+  try {
+    let unmount!: () => void;
+    await act(async () => {
+      ({ unmount } = render(<ServerInventory identity={identity} />));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(requests).toBe(1);
+    await act(async () => unmount());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(requests).toBe(1);
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
+});

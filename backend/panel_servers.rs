@@ -454,12 +454,17 @@ async fn resources(
     )
     .await?;
     let _background = if uri.path().ends_with("/observation") {
-        Some(BACKGROUND_OPERATIONS.try_acquire().map_err(|_| {
-            ApiError(
-                StatusCode::TOO_MANY_REQUESTS,
-                "Background panel refreshes are busy. Retrying shortly.",
-            )
-        })?)
+        Some(
+            tokio::time::timeout(Duration::from_secs(8), BACKGROUND_OPERATIONS.acquire())
+                .await
+                .map_err(|_| {
+                    ApiError(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "Background panel refreshes are busy.",
+                    )
+                })?
+                .map_err(|_| internal())?,
+        )
     } else {
         None
     };

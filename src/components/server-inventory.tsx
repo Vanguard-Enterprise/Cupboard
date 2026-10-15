@@ -158,6 +158,18 @@ export function ServerInventory({ identity }: { identity: Identity }) {
     if (!pending.length || !organization) return;
     let disposed = false;
     let running = false;
+    const retryTimers = new Set<() => void>();
+    function retryDelay() {
+      return new Promise<void>((resolve) => {
+        const cancel = () => {
+          window.clearTimeout(timer);
+          retryTimers.delete(cancel);
+          resolve();
+        };
+        const timer = window.setTimeout(cancel, 500 + Math.random() * 1000);
+        retryTimers.add(cancel);
+      });
+    }
     async function refresh() {
       if (running) return;
       running = true;
@@ -165,35 +177,48 @@ export function ServerInventory({ identity }: { identity: Identity }) {
       async function worker() {
         while (!disposed && cursor < pending.length) {
           const serverId = pending[cursor++];
-          try {
-            const data = await apiRequest<{
-              state: string;
-              resources: Record<string, number>;
-            }>(
-              `servers/${serverId}/panel/observation`,
-              undefined,
-              organization,
-            );
-            if (!disposed) {
-              setResourceErrors((previous) => {
-                const next = { ...previous };
-                delete next[serverId];
-                return next;
-              });
-              setReadings((previous) => ({
-                ...previous,
-                [serverId]: { ...data, at: Date.now() },
-              }));
+          for (let attempt = 0; attempt < 3 && !disposed; attempt++) {
+            try {
+              const data = await apiRequest<{
+                state: string;
+                resources: Record<string, number>;
+              }>(
+                `servers/${serverId}/panel/observation`,
+                undefined,
+                organization,
+              );
+              if (!disposed) {
+                setResourceErrors((previous) => {
+                  const next = { ...previous };
+                  delete next[serverId];
+                  return next;
+                });
+                setReadings((previous) => ({
+                  ...previous,
+                  [serverId]: { ...data, at: Date.now() },
+                }));
+              }
+              break;
+            } catch (cause) {
+              if (
+                cause instanceof Error &&
+                cause.message === "Background panel refreshes are busy." &&
+                attempt < 2 &&
+                !disposed
+              ) {
+                await retryDelay();
+                continue;
+              }
+              if (!disposed)
+                setResourceErrors((previous) => ({
+                  ...previous,
+                  [serverId]:
+                    cause instanceof Error
+                      ? cause.message
+                      : "Resources could not be refreshed.",
+                }));
+              break;
             }
-          } catch (cause) {
-            if (!disposed)
-              setResourceErrors((previous) => ({
-                ...previous,
-                [serverId]:
-                  cause instanceof Error
-                    ? cause.message
-                    : "Resources could not be refreshed.",
-              }));
           }
         }
       }
@@ -207,6 +232,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
     const timer = window.setInterval(() => void refresh(), 30_000);
     return () => {
       disposed = true;
+      for (const cancel of retryTimers) cancel();
       window.clearTimeout(initial);
       window.clearInterval(timer);
     };
