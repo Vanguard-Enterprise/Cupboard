@@ -130,13 +130,19 @@ export function ServerInventory({ identity }: { identity: Identity }) {
   const organization = identity.organization?.id;
   const status = (server: Server) => {
     const reading = readings[server.id];
-    if (reading && resourceErrors[server.id]) return "Stale";
+    if (
+      reading &&
+      (resourceErrors[server.id] || Date.now() - reading.at >= 90_000)
+    )
+      return "Stale";
     if (reading && Date.now() - reading.at < 90_000)
       return reading.state === "running"
         ? "Running"
         : reading.state === "offline" || reading.state === "stopped"
           ? "Offline"
-          : "Starting";
+          : reading.state === "stopping"
+            ? "Stopping"
+            : "Starting";
     return server.panelServerUuid ? "Awaiting report" : "Manual";
   };
   const visible = servers?.filter(
@@ -617,6 +623,8 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                       "Running",
                       "Offline",
                       "Starting",
+                      "Stopping",
+                      "Stale",
                       "Awaiting report",
                       "Manual",
                     ].map((value) => (

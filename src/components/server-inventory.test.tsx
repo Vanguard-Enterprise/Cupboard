@@ -575,3 +575,76 @@ it("cancels a queued observation retry on unmount", async () => {
     vi.useRealTimers();
   }
 });
+it("shows stopping separately and filters stopping and stale observations", async () => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", {
+    configurable: true,
+    value: () => false,
+  });
+  Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  let refresh!: () => void;
+  const originalInterval = globalThis.setInterval.bind(globalThis);
+  vi.spyOn(window, "setInterval").mockImplementation((callback) => {
+    refresh = callback as () => void;
+    const handle = originalInterval(() => {}, 30_000);
+    window.clearInterval(handle);
+    return handle;
+  });
+  let fail = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const path = String(input);
+    if (!path.endsWith("/observation"))
+      return Response.json([
+        {
+          ...server,
+          id: "stopping",
+          name: "Stopping Rust",
+          panelServerUuid: "one",
+        },
+        {
+          ...server,
+          id: "running",
+          name: "Running Rust",
+          panelServerUuid: "two",
+        },
+      ]);
+    const stopping = path.includes("/stopping/");
+    if (stopping && fail) throw new Error("Wings unreachable");
+    return Response.json({
+      state: stopping ? "stopping" : "running",
+      resources: {
+        cpu_absolute: 14.5,
+        memory_bytes: 1024,
+        disk_bytes: 1024,
+        network_rx_bytes: 0,
+        network_tx_bytes: 0,
+      },
+    });
+  });
+  const user = userEvent.setup();
+  render(<ServerInventory identity={identity} />);
+  expect(
+    await screen.findByRole("button", { name: "Stopping Rust: Stopping" }),
+  ).not.toBeNull();
+  screen.getByRole("combobox", { name: "Server status" }).focus();
+  await user.keyboard("{Enter}");
+  await user.click(screen.getByRole("option", { name: "Stopping" }));
+  expect(screen.getByRole("button", { name: "Stopping Rust" })).not.toBeNull();
+  expect(screen.queryByRole("button", { name: "Running Rust" })).toBeNull();
+  fail = true;
+  await act(async () => refresh());
+  screen.getByRole("combobox", { name: "Server status" }).focus();
+  await user.keyboard("{Enter}");
+  await user.click(screen.getByRole("option", { name: "Stale" }));
+  expect(
+    screen.getByRole("button", { name: "Stopping Rust: Stale" }),
+  ).not.toBeNull();
+  expect(screen.queryByRole("button", { name: "Running Rust" })).toBeNull();
+  expect(screen.getByRole("alert").textContent).toContain("Wings unreachable");
+});
