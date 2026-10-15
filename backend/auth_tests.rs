@@ -4870,8 +4870,12 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
             secure_cookies: false,
             ..Default::default()
         },
-    );
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(policy.clone()));
     let mut orgs = Vec::new();
+    let mut owners = Vec::new();
+    let mut ids = Vec::new();
     for index in 0..3 {
         let mut owner = Client::new(&app);
         owner
@@ -4881,7 +4885,7 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
             ))
             .await;
         owner.create_organization().await;
-        let org = owner.organization;
+        let org = owner.organization.clone();
         let id = uuid::Uuid::new_v4().to_string();
         let secret = if index == 0 {
             "slow-test-key"
@@ -4889,8 +4893,10 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
             "fast-test-key"
         };
         let encrypted = key.encrypt(secret, &org, &id, "pelican").unwrap();
-        sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,next_check_at,servers) VALUES($1,$2,1,$3,$4,0,-100,'[]'::jsonb)").bind(&org).bind(id).bind(&url).bind(encrypted).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,next_check_at,servers) VALUES($1,$2,1,$3,$4,0,-100,'[]'::jsonb)").bind(&org).bind(&id).bind(&url).bind(encrypted).execute(&pool).await.unwrap();
         orgs.push(org);
+        ids.push(id);
+        owners.push(owner);
     }
     let (batch_pool, batch_key, batch_policy) = (pool.clone(), key.clone(), policy.clone());
     let batch = tokio::spawn(async move {
@@ -4914,5 +4920,54 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
     assert!(batch.await.unwrap());
     let count:i64 = sqlx::query_scalar("SELECT count(*) FROM pelican_connections WHERE organization_id=ANY($1) AND checked_at>0 AND error IS NULL").bind(&orgs).fetch_one(&pool).await.unwrap();
     assert_eq!(count, 3);
+    // Even four independently invoked scheduled checks cannot consume all four
+    // shared permits. A save and manual check must still work while three block.
+    for (org, id) in orgs.iter().zip(&ids) {
+        let encrypted = key.encrypt("slow-test-key", org, id, "pelican").unwrap();
+        sqlx::query("UPDATE pelican_connections SET api_key_encrypted=$2,checked_at=0,next_check_at=-100 WHERE organization_id=$1").bind(org).bind(encrypted).execute(&pool).await.unwrap();
+    }
+    let (batch_pool, batch_key, batch_policy) = (pool.clone(), key.clone(), policy.clone());
+    let pending = tokio::spawn(async move {
+        futures_util::future::join_all(
+            (0..4).map(|_| crate::pelican::poll_due(&batch_pool, &batch_key, &batch_policy)),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        for _ in 0..3 {
+            receive.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let (status, saved) = owners[0]
+        .request(
+            "POST",
+            "integrations/pelican",
+            json!({"id":ids[0],"revision":1,"panelUrl":url,"apiKey":"fast-test-key"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        owners[0]
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":saved["id"],"revision":saved["revision"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(!pending.is_finished());
+    release.add_permits(3);
+    let results = pending.await.unwrap();
+    assert_eq!(
+        results
+            .into_iter()
+            .filter(|result| matches!(result, Ok(true)))
+            .count(),
+        3
+    );
     server.abort();
 }

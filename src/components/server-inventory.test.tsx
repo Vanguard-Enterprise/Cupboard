@@ -350,7 +350,7 @@ it("retains stale resources on refresh failure and clears the error after recove
   ).not.toBeNull();
   interval.mockRestore();
 });
-it("refreshes later servers while an earlier panel request is slow with at most four requests", async () => {
+it("refreshes later servers while an earlier panel request is slow with at most three background requests", async () => {
   let release!: () => void;
   const slow = new Promise<void>((resolve) => {
     release = resolve;
@@ -390,7 +390,7 @@ it("refreshes later servers while an earlier panel request is slow with at most 
     await waitFor(() => expect(observedLater).toBe(true));
     expect(screen.queryByText("11.0%")).toBeNull();
     expect(screen.getAllByText("22.0%").length).toBeGreaterThan(0);
-    expect(peak).toBeLessThanOrEqual(4);
+    expect(peak).toBeLessThanOrEqual(3);
   } finally {
     await act(async () => release());
   }
@@ -437,4 +437,58 @@ it("keeps an in-flight resource pass when server metadata updates with unchanged
   }
   expect(await screen.findByText("14.5%")).not.toBeNull();
   expect(resourceRequests).toBe(1);
+});
+it("reserves a panel slot for foreground monitoring while background requests are pending", async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let active = 0;
+  let requests = 0;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (!String(input).endsWith("/resources"))
+      return Response.json(
+        Array.from({ length: 5 }, (_, index) => ({
+          ...server,
+          id: `server-${index}`,
+          name: `Rust ${index}`,
+          panelServerUuid: `panel-${index}`,
+        })),
+      );
+    requests++;
+    active++;
+    if (active > 4)
+      return Response.json(
+        { error: "Panel operations are busy." },
+        { status: 429 },
+      );
+    await pending;
+    active--;
+    return Response.json({
+      state: "running",
+      resources: {
+        cpu_absolute: 14.5,
+        memory_bytes: 1024,
+        disk_bytes: 1024,
+        network_rx_bytes: 0,
+        network_tx_bytes: 0,
+        uptime: 1000,
+      },
+    });
+  });
+  const user = userEvent.setup();
+  render(<ServerInventory identity={identity} />);
+  try {
+    await waitFor(() => expect(requests).toBe(3));
+    expect(active).toBe(3);
+    await user.click(
+      screen.getByRole("button", { name: "Rust 0" }),
+    );
+    await waitFor(() => expect(requests).toBe(4));
+    expect(active).toBe(4);
+    expect(screen.queryByText("Panel operations are busy.")).toBeNull();
+  } finally {
+    await act(async () => release());
+  }
+  expect(await screen.findByText("14.5%")).not.toBeNull();
 });

@@ -193,9 +193,9 @@ export function ServerInventory({ identity }: { identity: Identity }) {
           }
         }
       }
-      // Match the panel API's four-operation limit without serial head-of-line blocking.
+      // Reserve one of the panel API's four slots for interactive controls.
       await Promise.all(
-        Array.from({ length: Math.min(4, pending.length) }, worker),
+        Array.from({ length: Math.min(3, pending.length) }, worker),
       );
       running = false;
     }

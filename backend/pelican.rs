@@ -22,6 +22,8 @@ use tower_sessions::Session;
 const MAX_SERVERS: usize = 1000;
 const MAX_BODY: usize = 2 * 1024 * 1024;
 static CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+// Scheduled work cannot occupy the slot reserved for foreground saves/checks.
+static BACKGROUND_CHECKS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
 /// Only deployment operators can allow private panel origins. Never accept this from a request.
 #[derive(Clone, Default)]
@@ -384,7 +386,7 @@ pub(crate) async fn poll_due_batch(
     key: &SecretKey,
     policy: &PanelPolicy,
 ) -> ApiResult<bool> {
-    let results = futures_util::future::join_all((0..4).map(|_| poll_due(pool, key, policy))).await;
+    let results = futures_util::future::join_all((0..3).map(|_| poll_due(pool, key, policy))).await;
     let mut claimed = false;
     for result in results {
         claimed |= result?;
@@ -396,6 +398,9 @@ pub(crate) async fn poll_due(
     key: &SecretKey,
     policy: &PanelPolicy,
 ) -> ApiResult<bool> {
+    let Ok(_background) = BACKGROUND_CHECKS.try_acquire() else {
+        return Ok(false);
+    };
     let Ok(_permit) = CHECKS.try_acquire() else {
         return Ok(false);
     };
