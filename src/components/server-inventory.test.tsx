@@ -481,9 +481,7 @@ it("reserves a panel slot for foreground monitoring while background requests ar
   try {
     await waitFor(() => expect(requests).toBe(3));
     expect(active).toBe(3);
-    await user.click(
-      screen.getByRole("button", { name: "Rust 0" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Rust 0" }));
     await waitFor(() => expect(requests).toBe(4));
     expect(active).toBe(4);
     expect(screen.queryByText("Panel operations are busy.")).toBeNull();
