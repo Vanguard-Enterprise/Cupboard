@@ -4268,6 +4268,7 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         power: Arc<AtomicU16>,
         commands: Arc<AtomicU16>,
         delay: Arc<AtomicU16>,
+        startup_read: Arc<AtomicU16>,
         active_resources: Arc<AtomicU16>,
         entered: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Semaphore>,
@@ -4281,8 +4282,19 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
             json!({"data":[{"attributes":detail(RUST)},{"attributes":detail(OTHER)}],"meta":{"pagination":{"current_page":1,"total_pages":1}}}),
         )
     }
-    async fn server(Path(uuid): Path<String>) -> Json<Value> {
-        Json(json!({"attributes":detail(&uuid)}))
+    async fn server(State(panel): State<Panel>, Path(uuid): Path<String>) -> Json<Value> {
+        let mut server = detail(&uuid);
+        if panel.startup_read.load(Ordering::SeqCst) == 1 {
+            server["relationships"] = json!({
+                "variables":{"data":[
+                    {"attributes":{"env_variable":"RCON_PORT","server_value":"28016"}},
+                    {"attributes":{"env_variable":"QUERY_PORT","server_value":"28017"}},
+                    {"attributes":{"env_variable":"RCON_PASSWORD","server_value":"new-inferred-rcon-secret"}}
+                ]},
+                "allocations":{"data":[{"attributes":{"is_default":true,"ip":"192.0.2.44"}}]}
+            });
+        }
+        Json(json!({"attributes":server}))
     }
     async fn resources(State(panel): State<Panel>) -> Json<Value> {
         if panel.delay.load(Ordering::SeqCst) == 1 {
@@ -4333,6 +4345,7 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         power: Arc::new(AtomicU16::new(0)),
         commands: Arc::new(AtomicU16::new(0)),
         delay: Arc::new(AtomicU16::new(0)),
+        startup_read: Arc::new(AtomicU16::new(0)),
         active_resources: Arc::new(AtomicU16::new(0)),
         entered: Arc::new(tokio::sync::Notify::new()),
         release: Arc::new(tokio::sync::Semaphore::new(0)),
@@ -4631,6 +4644,9 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
     );
     assert_eq!(panel.power.load(Ordering::SeqCst), 3);
     panel.delay.store(0, Ordering::SeqCst);
+    sqlx::query("UPDATE servers SET checked_at=1,rcon_status='connected',a2s_status='connected',players=42,players_at=1,players_source='rcon' WHERE id=$1")
+        .bind(imported["id"].as_str().unwrap()).execute(&pool).await.unwrap();
+    panel.startup_read.store(1, Ordering::SeqCst);
     let (status, reconnected) = owner
         .request(
             "POST",
@@ -4647,6 +4663,42 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
     let (status, rebound) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]})).await;
     assert_eq!(status, StatusCode::OK, "{rebound}");
     assert_eq!(rebound, imported);
+    let id = imported["id"].as_str().unwrap();
+    type InferredDetails = (
+        Option<String>,
+        Option<i32>,
+        Option<Vec<u8>>,
+        Option<String>,
+        Option<i32>,
+    );
+    let details: InferredDetails = sqlx::query_as("SELECT rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port FROM servers WHERE id=$1")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(details.0.as_deref(), Some("192.0.2.44"));
+    assert_eq!(details.1, Some(28016));
+    assert_eq!(details.3.as_deref(), Some("192.0.2.44"));
+    assert_eq!(details.4, Some(28017));
+    let org: String = sqlx::query_scalar("SELECT organization_id FROM servers WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let decrypt_key = crate::secrets::SecretKey::parse(&"48".repeat(32)).unwrap();
+    let encrypted = details.2.as_ref().unwrap();
+    assert_ne!(encrypted.as_slice(), b"new-inferred-rcon-secret");
+    assert_eq!(
+        decrypt_key.decrypt(encrypted, &org, id, "rcon").unwrap(),
+        b"new-inferred-rcon-secret"
+    );
+    let reset: bool = sqlx::query_scalar("SELECT checked_at IS NULL AND rcon_status IS NULL AND a2s_status IS NULL AND players IS NULL AND players_at IS NULL AND players_source IS NULL FROM servers WHERE id=$1").bind(id).fetch_one(&pool).await.unwrap();
+    assert!(reset);
+    panel.startup_read.store(0, Ordering::SeqCst);
+    let (status, preserved) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{preserved}");
+    assert_eq!(preserved, imported);
+    let after: InferredDetails = sqlx::query_as("SELECT rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port FROM servers WHERE id=$1")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(after, details);
+
     assert_eq!(
         owner
             .request("GET", "servers", json!(null))
@@ -4668,7 +4720,8 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
     let second_url = format!("http://{}/", second_listener.local_addr().unwrap());
     let second_app = Router::new()
         .route("/api/client", get(inventory))
-        .route("/api/client/servers/{uuid}", get(server));
+        .route("/api/client/servers/{uuid}", get(server))
+        .with_state(panel.clone());
     let second_task = tokio::spawn(async move {
         axum::serve(second_listener, second_app).await.unwrap();
     });

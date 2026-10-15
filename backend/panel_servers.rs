@@ -385,7 +385,9 @@ async fn import(
             "The panel connection changed. Reload panel servers.",
         ));
     }
-    let id = uuid::Uuid::new_v4().to_string();
+    let existing: Option<String> = sqlx::query_scalar("SELECT id FROM servers WHERE organization_id=$1 AND panel_origin=$2 AND panel_server_uuid=$3 FOR UPDATE")
+        .bind(&a.org).bind(a.url.as_str()).bind(&input.uuid).fetch_optional(&mut *tx).await?;
+    let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let inferred = infer_connections(s);
     let (host, rcon_port, a2s_port, password) = match inferred {
         Some((host, rcon, a2s, password)) => (Some(host), Some(rcon), Some(a2s), Some(password)),
@@ -394,7 +396,7 @@ async fn import(
     let encrypted = password
         .map(|p| key.encrypt(&p, &a.org, &id, "rcon"))
         .transpose()?;
-    let saved:String=sqlx::query_scalar("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port,panel_connection_id,panel_server_uuid,panel_server_identifier,panel_origin) VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10,$11) ON CONFLICT(organization_id,panel_origin,panel_server_uuid) DO UPDATE SET panel_connection_id=EXCLUDED.panel_connection_id,panel_server_identifier=EXCLUDED.panel_server_identifier RETURNING id")
+    let saved:String=sqlx::query_scalar("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port,panel_connection_id,panel_server_uuid,panel_server_identifier,panel_origin) VALUES($1,$2,$3,$4,$5,$6,$4,$7,$8,$9,$10,$11) ON CONFLICT(organization_id,panel_origin,panel_server_uuid) DO UPDATE SET panel_connection_id=EXCLUDED.panel_connection_id,panel_server_identifier=EXCLUDED.panel_server_identifier,rcon_host=COALESCE(EXCLUDED.rcon_host,servers.rcon_host),rcon_port=COALESCE(EXCLUDED.rcon_port,servers.rcon_port),rcon_password_encrypted=COALESCE(EXCLUDED.rcon_password_encrypted,servers.rcon_password_encrypted),a2s_host=COALESCE(EXCLUDED.a2s_host,servers.a2s_host),a2s_port=COALESCE(EXCLUDED.a2s_port,servers.a2s_port),checked_at=CASE WHEN EXCLUDED.rcon_host IS NOT NULL THEN NULL ELSE servers.checked_at END,rcon_status=CASE WHEN EXCLUDED.rcon_host IS NOT NULL THEN NULL ELSE servers.rcon_status END,a2s_status=CASE WHEN EXCLUDED.rcon_host IS NOT NULL THEN NULL ELSE servers.a2s_status END,players=CASE WHEN EXCLUDED.rcon_host IS NOT NULL THEN NULL ELSE servers.players END,players_at=CASE WHEN EXCLUDED.rcon_host IS NOT NULL THEN NULL ELSE servers.players_at END,players_source=CASE WHEN EXCLUDED.rcon_host IS NOT NULL THEN NULL ELSE servers.players_source END RETURNING id")
         .bind(id).bind(&a.org).bind(name).bind(host).bind(rcon_port).bind(encrypted).bind(a2s_port).bind(&a.connection).bind(&input.uuid).bind(identifier).bind(a.url.as_str()).fetch_one(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(json!({"id":saved})))
