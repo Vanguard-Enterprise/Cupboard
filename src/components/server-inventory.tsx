@@ -169,7 +169,11 @@ export function ServerInventory({ identity }: { identity: Identity }) {
             const data = await apiRequest<{
               state: string;
               resources: Record<string, number>;
-            }>(`servers/${serverId}/panel/resources`, undefined, organization);
+            }>(
+              `servers/${serverId}/panel/observation`,
+              undefined,
+              organization,
+            );
             if (!disposed) {
               setResourceErrors((previous) => {
                 const next = { ...previous };
@@ -193,7 +197,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
           }
         }
       }
-      // Reserve one of the panel API's four slots for interactive controls.
+      // Use the server-reserved observation capacity for background polling.
       await Promise.all(
         Array.from({ length: Math.min(3, pending.length) }, worker),
       );

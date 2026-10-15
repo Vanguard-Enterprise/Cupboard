@@ -51,7 +51,7 @@ export async function proxyApi(
   if (
     !paths.has(path) &&
     !logoDownload &&
-    !/^servers\/[0-9a-f-]{36}\/(?:check|panel\/(?:resources|console|power|command))$/.test(
+    !/^servers\/[0-9a-f-]{36}\/(?:check|panel\/(?:resources|observation|console|power|command))$/.test(
       path,
     ) &&
     !/^machines\/[0-9a-f-]{36}(?:\/(?:enrollment|disconnect|history|remove|tags))?$/.test(

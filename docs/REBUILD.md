@@ -369,5 +369,6 @@ without duplicates; different panel origins remain separate.
 Pelican scheduling drains due work in batches of three before sleeping when idle.
 Inventory resources also refresh with three workers, so one slow server does not
 block later rows. Background work reserves one shared slot for interactive
-requests. Candidate imported-state lookup uses one scoped database query
+requests. The inventory observation endpoint enforces its cap globally in the API
+so multiple clients share the same reservation. Candidate imported-state lookup uses one scoped database query
 for the complete bounded candidate set.

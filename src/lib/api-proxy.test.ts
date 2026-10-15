@@ -330,6 +330,7 @@ it("forwards the expected organization for scoped reads and mutations", async ()
     "integrations/pelican",
     "integrations/pelican/check",
     "integrations/pelican/remove",
+    "servers/00000000-0000-0000-0000-000000000000/panel/observation",
     "machines",
     "machines/00000000-0000-0000-0000-000000000000/history",
     "machines/00000000-0000-0000-0000-000000000000/remove",

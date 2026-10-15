@@ -6,7 +6,7 @@ use crate::{
 };
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{OriginalUri, Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
@@ -17,12 +17,14 @@ use sqlx::PgPool;
 use std::time::Duration;
 use tower_sessions::Session;
 static OPERATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static BACKGROUND_OPERATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 
 pub fn routes() -> Router<PgPool> {
     Router::new()
         .route("/app-api/servers/pelican/candidates", get(candidates))
         .route("/app-api/servers/pelican/import", post(import))
         .route("/app-api/servers/{id}/panel/resources", get(resources))
+        .route("/app-api/servers/{id}/panel/observation", get(resources))
         .route("/app-api/servers/{id}/panel/console", get(console))
         .route("/app-api/servers/{id}/panel/power", post(power))
         .route("/app-api/servers/{id}/panel/command", post(command))
@@ -440,7 +442,7 @@ async fn resources(
     auth: AuthSession,
     session: Session,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    (Path(id), OriginalUri(uri)): (Path<String>, OriginalUri),
 ) -> ApiResult<Json<Value>> {
     let a = access(
         &pool,
@@ -451,6 +453,16 @@ async fn resources(
         false,
     )
     .await?;
+    let _background = if uri.path().ends_with("/observation") {
+        Some(BACKGROUND_OPERATIONS.try_acquire().map_err(|_| {
+            ApiError(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Background panel refreshes are busy. Retrying shortly.",
+            )
+        })?)
+    } else {
+        None
+    };
     let value = call(&a, &policy, &server_path(&a, "resources")?, None).await?;
     let s = attributes(&value);
     let r = &s["resources"];

@@ -4268,8 +4268,9 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         power: Arc<AtomicU16>,
         commands: Arc<AtomicU16>,
         delay: Arc<AtomicU16>,
+        active_resources: Arc<AtomicU16>,
         entered: Arc<tokio::sync::Notify>,
-        release: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Semaphore>,
     }
     fn detail(uuid: &str) -> Value {
         json!({"uuid":uuid,"identifier":uuid[..8],"name":if uuid==RUST{"Rust test"}else{"Minecraft test"},"node":"Node 1","is_suspended":false,"is_installing":false,"is_transferring":false,"invocation":if uuid==RUST{"./RustDedicated +rcon.web 1"}else{"java -jar server.jar"}})
@@ -4285,8 +4286,10 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
     }
     async fn resources(State(panel): State<Panel>) -> Json<Value> {
         if panel.delay.load(Ordering::SeqCst) == 1 {
+            panel.active_resources.fetch_add(1, Ordering::SeqCst);
             panel.entered.notify_one();
-            panel.release.notified().await;
+            panel.release.acquire().await.unwrap().forget();
+            panel.active_resources.fetch_sub(1, Ordering::SeqCst);
         }
         Json(
             json!({"attributes":{"current_state":"running","resources":{"cpu_absolute":12.5,"memory_bytes":1048576,"disk_bytes":2097152,"network_rx_bytes":100,"network_tx_bytes":50,"uptime":1000}}}),
@@ -4330,8 +4333,9 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
         power: Arc::new(AtomicU16::new(0)),
         commands: Arc::new(AtomicU16::new(0)),
         delay: Arc::new(AtomicU16::new(0)),
+        active_resources: Arc::new(AtomicU16::new(0)),
         entered: Arc::new(tokio::sync::Notify::new()),
-        release: Arc::new(tokio::sync::Notify::new()),
+        release: Arc::new(tokio::sync::Semaphore::new(0)),
     };
     let fixture = axum::Router::new()
         .route("/api/client", get(inventory))
@@ -4522,6 +4526,65 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
             StatusCode::FORBIDDEN
         );
     }
+    // Independent inventory clients share a global background cap. Three
+    // observations leave the fourth slot available for foreground resources.
+    panel.delay.store(1, Ordering::SeqCst);
+    let mut observations = Vec::new();
+    for _ in 0..3 {
+        let mut client = Client {
+            app: app.clone(),
+            cookie: owner.cookie.clone(),
+            organization: owner.organization.clone(),
+        };
+        let observation_path = format!("{path}/observation");
+        observations.push(tokio::spawn(async move {
+            client
+                .request("GET", &observation_path, json!(null))
+                .await
+                .0
+        }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while panel.active_resources.load(Ordering::SeqCst) != 3 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        owner
+            .request("GET", &format!("{path}/observation"), json!(null))
+            .await
+            .0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let mut foreground = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    let foreground_path = format!("{path}/resources");
+    let foreground = tokio::spawn(async move {
+        foreground
+            .request("GET", &foreground_path, json!(null))
+            .await
+            .0
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while panel.active_resources.load(Ordering::SeqCst) != 4 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    panel.delay.store(0, Ordering::SeqCst);
+    panel.release.add_permits(4);
+    for observation in observations {
+        assert_eq!(observation.await.unwrap(), StatusCode::OK);
+    }
+    assert_eq!(foreground.await.unwrap(), StatusCode::OK);
+    // Clear the stored notification before the disconnect race below.
+    panel.entered.notified().await;
     panel.delay.store(1, Ordering::SeqCst);
     let mut pending_client = Client {
         app: app.clone(),
@@ -4546,7 +4609,7 @@ async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
             .0,
         StatusCode::OK
     );
-    panel.release.notify_one();
+    panel.release.add_permits(1);
     assert_eq!(pending.await.unwrap().0, StatusCode::CONFLICT);
     assert_eq!(
         owner

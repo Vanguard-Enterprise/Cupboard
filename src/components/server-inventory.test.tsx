@@ -270,7 +270,7 @@ it("keeps the last saved result after an unsuccessful check request and allows r
 
 it("shows Pelican readings in the machines-style inventory and opens monitoring from the server name", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-    String(input).endsWith("/resources")
+    /\/(?:resources|observation)$/.test(String(input))
       ? Response.json({
           state: "running",
           resources: {
@@ -314,7 +314,7 @@ it("retains stale resources on refresh failure and clears the error after recove
     });
   let fail = false;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    if (!String(input).endsWith("/resources"))
+    if (!/\/(?:resources|observation)$/.test(String(input)))
       return Response.json([{ ...server, panelServerUuid: "panel" }]);
     if (fail) throw new Error("Panel temporarily unavailable");
     return Response.json({
@@ -360,7 +360,7 @@ it("refreshes later servers while an earlier panel request is slow with at most 
   let observedLater = false;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const path = String(input);
-    if (!path.endsWith("/resources"))
+    if (!/\/(?:resources|observation)$/.test(path))
       return Response.json(
         Array.from({ length: 6 }, (_, index) => ({
           ...server,
@@ -412,7 +412,8 @@ it("keeps an in-flight resource pass when server metadata updates with unchanged
         rconStatus: "connected",
         a2sStatus: "connected",
       });
-    if (!path.endsWith("/resources")) return Response.json([imported]);
+    if (!/\/(?:resources|observation)$/.test(path))
+      return Response.json([imported]);
     resourceRequests++;
     await slow;
     return Response.json({
@@ -445,8 +446,10 @@ it("reserves a panel slot for foreground monitoring while background requests ar
   });
   let active = 0;
   let requests = 0;
+  let observations = 0;
+  let foreground = 0;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    if (!String(input).endsWith("/resources"))
+    if (!/\/(?:resources|observation)$/.test(String(input)))
       return Response.json(
         Array.from({ length: 5 }, (_, index) => ({
           ...server,
@@ -456,6 +459,8 @@ it("reserves a panel slot for foreground monitoring while background requests ar
         })),
       );
     requests++;
+    if (String(input).endsWith("/observation")) observations++;
+    else foreground++;
     active++;
     if (active > 4)
       return Response.json(
@@ -481,9 +486,13 @@ it("reserves a panel slot for foreground monitoring while background requests ar
   try {
     await waitFor(() => expect(requests).toBe(3));
     expect(active).toBe(3);
+    expect(observations).toBe(3);
+    expect(foreground).toBe(0);
     await user.click(screen.getByRole("button", { name: "Rust 0" }));
     await waitFor(() => expect(requests).toBe(4));
     expect(active).toBe(4);
+    expect(observations).toBe(3);
+    expect(foreground).toBe(1);
     expect(screen.queryByText("Panel operations are busy.")).toBeNull();
   } finally {
     await act(async () => release());
