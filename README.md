@@ -188,10 +188,10 @@ are available at
 acknowledgements. The organization audit log at
 `/dashboard/organization/security/audit-log` has searchable sample events and
 redacted event details until server-side audit storage exists. Organization
-connections are previewed at
-`/dashboard/organization/integrations/connections`; the page shows connected services above a searchable catalog, with attention-needed
-connections first and dialogs for account details and setup requirements. It uses
-sample states and does not connect external accounts. Organization notification and
+connections are available at
+`/dashboard/organization/integrations/connections`. Pelican Panel connections
+persist securely and display verified server inventory. Other services show
+setup requirements without connecting accounts. Organization notification and
 browser-data settings live at
 `/dashboard/organization/settings/notifications-data`. Organization users and
 roles are managed from `/dashboard/organization/team/users` and
@@ -536,3 +536,107 @@ persistence and tenant isolation against S3, and removes only its test resources
 Docker is required even with `CUPBOARD_TEST_DATABASE_URL`. Direct Rust test runs
 also need `CUPBOARD_TEST_S3_ENDPOINT` for an isolated SeaweedFS service using the
 `storage-test` configuration. Quick checks do not start either service.
+
+## Pelican Panel connections
+
+Open Organization > Integrations > Connections and choose Connect Pelican Panel.
+You need `integrations.manage`. Enter the panel's HTTPS origin and a Client API key
+from a dedicated non-admin Pelican account assigned only to this organization's
+servers. Create the key under the panel's Account > API credentials. Use Pelican
+`v1.0.0-beta35` or later before delegating subuser access. Do not use an Application
+API key or a Wings token.
+
+Save and verify stores the encrypted key and checks `/api/client`. A rejected key
+or unreachable panel saves an actionable failed result so you can edit or retry.
+The list contains all servers assigned to that account, up to 1,000, with panel
+lifecycle flags. It does not import them into Cupboard or report live server power
+state. Check connection refreshes the inventory; failed refreshes retain the last
+verified records. Checks older than five minutes show Check overdue. Blank keys
+in Edit connection preserve the saved key only when the panel origin is unchanged.
+Disconnect removes Cupboard's saved key and inventory, without changing Pelican
+servers or revoking the key in Pelican. Revoke the key there when no longer needed.
+
+Public panel origins on HTTPS port 443 work by default. For private panels,
+including NetBird addresses, or nonstandard HTTPS ports, the deployment operator
+must set a comma-separated list of exact panel origins before starting the API:
+
+```bash
+export CUPBOARD_PELICAN_PRIVATE_ORIGINS=https://panel.internal.example,https://panel.example.com:8443
+npm run dev
+```
+
+This approves outbound access to those origins and should contain only trusted
+Pelican panels. HTTP, invalid certificates, redirects, loopback, and link-local
+addresses remain blocked. DNS is revalidated and pinned for every check. The
+existing `CUPBOARD_SECRET_KEY` encrypts the Client API key; preserve it with the
+database. API keys and raw upstream error responses are never returned to the UI.
+
+Pelican inventory checks run in the API every five minutes, including while the
+Connections page is closed. PostgreSQL stores the schedule and claims each due
+connection across replicas. Failed checks retain the last verified inventory;
+concurrent edits and disconnects take precedence over scheduled results. The page
+refreshes saved results every 30 seconds and keeps a manual check action.
+
+## Development seed account
+
+After `npm run dev` starts the managed database, run `npm run dev:seed`.
+The command creates a separate Northstar Games organization with a Dev Operator
+owner, a Moderator role, and two fictional invited team members. It does not seed
+live network addresses or integration credentials. Existing user data is preserved.
+
+Login details and stable account/organization IDs live in the gitignored
+`.dev-stack/dev-account.json`, with owner-only file permissions. Future coding
+chats read that file according to `AGENTS.md`. The password is generated once and
+never printed by the command. Repeat runs reuse the same identity and leave its
+password hash unchanged when the password still matches. Edit the local password
+and rerun to change only this dev account's password.
+
+The launcher rejects `NODE_ENV=production`, `DATABASE_URL`, and
+`CUPBOARD_TEST_DATABASE_URL`, verifies Compose ownership and loopback binding,
+and derives the database URL itself. Seed code is excluded from release builds
+and exposes no HTTP endpoint. Update fixtures in `backend/dev_seed.rs` as needed
+and rerun. The command does not start containers, clear data, or seed production.
+
+## Import Rust servers from Pelican
+
+In Servers, choose From Pelican, then Add beside an assigned Rust server. Import
+requires `servers.manage` and `integrations.manage`. The picker recognizes
+`RustDedicated` startup invocations or the Rust egg and rejects other games.
+Repeated imports return the existing server. RCON and A2S details are filled only
+when Pelican provides the required structured egg variables and allocation.
+
+Click an imported server name, or choose Monitor in its action menu, to see CPU, memory, disk, network counters,
+uptime, and recent console output. Resources refresh every 30 seconds and console
+snapshots every eight seconds while open. Members with `servers.manage` can send
+commands or start, stop, and restart; stopping and restarting require confirmation.
+Pelican must grant the account the corresponding resource, startup, WebSocket,
+console, and power permissions. Panel and console tokens never reach the browser.
+
+Wings must use valid HTTPS/WSS certificates. Public Wings destinations on port 443
+work by default. Add exact private or alternate-port Wings HTTPS origins to
+`CUPBOARD_PELICAN_PRIVATE_ORIGINS`, alongside any approved panel origins. Disconnecting
+Pelican disables panel controls without deleting imported Cupboard server records.
+
+## Shared Wings machine in local development
+
+`npm run dev:seed` enrolls `use1-wings-01` at `10.1.70.10` in the worktree's
+Northstar Games organization. Each worktree stores a separate machine ID and
+credential in its private `.dev-stack/dev-account.json`; PostgreSQL stores only
+the credential hash. Repeating the seed preserves the ID, credential, and readings.
+
+`npm run dev` starts a development reporter. One reporter per repository collects
+real host measurements over SSH as `frank`, using `~/.ssh/id_ed25519` and a verified
+known-host entry. It installs the source-owned collector under
+`~/.local/lib/cupboard-dev-agent` on Wings without root access. Measurements refresh
+every 30 seconds and are forwarded only to each owned development API on loopback.
+Organization credentials never leave the development host. The production agent
+continues to require HTTPS. If SSH is unavailable, reporting retries and the
+machine remains enrolled without fabricated readings.
+
+Use `npm run dev:seed -- --all` to prepare every saved worktree environment. This
+starts any stopped managed PostgreSQL container on a dynamic loopback port, seeds
+its separate development organization, and preserves other accounts and data.
+Already-running databases and applications are left running. Applications that
+are stopped receive fresh reports after they start. Newly created worktrees join
+when their development seed is run. Use `npm run dev:machines` to run the shared
+reporter separately; its repository-wide lock prevents duplicate collectors.

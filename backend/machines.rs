@@ -22,6 +22,7 @@ struct Machine {
     address: String,
     provider: String,
     notes: String,
+    tags: serde_json::Value,
     revision: i64,
     enrolled: bool,
     enrolled_at: Option<i64>,
@@ -117,6 +118,8 @@ pub fn routes() -> Router<PgPool> {
         .route("/app-api/machines", get(list).post(create))
         .route("/app-api/machines/{id}", post(update))
         .route("/app-api/machines/{id}/history", get(history))
+        .route("/app-api/machines/tags", get(tag_list).post(tag_change))
+        .route("/app-api/machines/{id}/tags", post(assign_tags))
         .route("/app-api/machines/{id}/enrollment", post(enrollment))
         .route("/app-api/machines/{id}/disconnect", post(disconnect))
         .route("/app-api/machines/{id}/remove", post(remove))
@@ -128,7 +131,7 @@ async fn list(
     headers: HeaderMap,
 ) -> ApiResult<Json<Vec<Machine>>> {
     let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.view").await?;
-    let records = sqlx::query_as("SELECT id,name,address,provider,notes,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health FROM machines WHERE organization_id=$1 ORDER BY lower(name),id").bind(org).fetch_all(&mut *tx).await?;
+    let records = sqlx::query_as("SELECT id,name,address,provider,notes,tags,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health FROM machines WHERE organization_id=$1 ORDER BY lower(name),id").bind(org).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(records))
 }
@@ -182,10 +185,10 @@ async fn save(
         if input.revision != Some(revision) {
             return Err(ApiError(StatusCode::CONFLICT, "This machine changed while you were editing. Cancel and refresh before trying again.").into_response());
         }
-        sqlx::query_as("UPDATE machines SET name=$3,address=$4,provider=$5,notes=$6,revision=revision+1 WHERE organization_id=$1 AND id=$2 RETURNING id,name,address,provider,notes,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health")
+        sqlx::query_as("UPDATE machines SET name=$3,address=$4,provider=$5,notes=$6,revision=revision+1 WHERE organization_id=$1 AND id=$2 RETURNING id,name,address,provider,notes,tags,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health")
             .bind(&org).bind(id).bind(input.name).bind(input.address).bind(input.provider).bind(input.notes).fetch_one(&mut *tx).await
     } else {
-        sqlx::query_as("INSERT INTO machines(organization_id,id,name,address,provider,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,address,provider,notes,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health")
+        sqlx::query_as("INSERT INTO machines(organization_id,id,name,address,provider,notes) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,name,address,provider,notes,tags,revision,agent_hash IS NOT NULL AS enrolled,enrolled_at,enrollment_expires_at,last_seen_at,health")
             .bind(&org).bind(uuid::Uuid::new_v4().to_string()).bind(input.name).bind(input.address).bind(input.provider).bind(input.notes).fetch_one(&mut *tx).await
     }.map_err(|_| internal().into_response())?;
     tx.commit().await.map_err(|_| internal().into_response())?;
@@ -573,4 +576,167 @@ mod tests {
             .valid()
         );
     }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct MachineTag {
+    id: String,
+    name: String,
+}
+async fn catalog(tx: &mut Transaction<'_, Postgres>, org: &str) -> ApiResult<Vec<MachineTag>> {
+    sqlx::query(
+        "INSERT INTO machine_tag_catalogs(organization_id) VALUES($1) ON CONFLICT DO NOTHING",
+    )
+    .bind(org)
+    .execute(&mut **tx)
+    .await?;
+    let value: serde_json::Value = sqlx::query_scalar(
+        "SELECT tags FROM machine_tag_catalogs WHERE organization_id=$1 FOR UPDATE",
+    )
+    .bind(org)
+    .fetch_one(&mut **tx)
+    .await?;
+    serde_json::from_value(value).map_err(|_| internal())
+}
+async fn tag_list(
+    State(pool): State<PgPool>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<MachineTag>>> {
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.view").await?;
+    let tags = catalog(&mut tx, &org).await?;
+    tx.commit().await?;
+    Ok(Json(tags))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TagChange {
+    kind: String,
+    id: Option<String>,
+    name: Option<String>,
+}
+async fn tag_change(
+    State(pool): State<PgPool>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Json(input): Json<TagChange>,
+) -> ApiResult<Json<Vec<MachineTag>>> {
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.manage").await?;
+    let mut tags = catalog(&mut tx, &org).await?;
+    if input.kind == "delete" {
+        let id = input
+            .id
+            .ok_or(ApiError(StatusCode::UNPROCESSABLE_ENTITY, "Choose a tag."))?;
+        if !tags.iter().any(|tag| tag.id == id) {
+            return Err(ApiError(StatusCode::NOT_FOUND, "Tag not found."));
+        }
+        tags.retain(|tag| tag.id != id);
+        sqlx::query("UPDATE machines SET tags=tags-$2,revision=revision+1 WHERE organization_id=$1 AND tags ? $2").bind(&org).bind(&id).execute(&mut *tx).await?;
+    } else if input.kind == "save" {
+        let name = input.name.unwrap_or_default().trim().to_owned();
+        if name.is_empty() || name.chars().count() > 32 || name.chars().any(char::is_control) {
+            return Err(ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Enter a tag name of 1 to 32 characters.",
+            ));
+        }
+        if tags.iter().any(|tag| {
+            tag.name.to_lowercase() == name.to_lowercase() && Some(&tag.id) != input.id.as_ref()
+        }) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                "A tag with this name already exists.",
+            ));
+        }
+        if let Some(id) = input.id {
+            let tag = tags
+                .iter_mut()
+                .find(|tag| tag.id == id)
+                .ok_or(ApiError(StatusCode::NOT_FOUND, "Tag not found."))?;
+            tag.name = name;
+        } else {
+            if tags.len() >= 50 {
+                return Err(ApiError(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "An organization can have up to 50 machine tags.",
+                ));
+            }
+            tags.push(MachineTag {
+                id: uuid::Uuid::new_v4().to_string(),
+                name,
+            });
+        }
+    } else {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Choose a valid tag action.",
+        ));
+    }
+    sqlx::query("UPDATE machine_tag_catalogs SET tags=$2 WHERE organization_id=$1")
+        .bind(&org)
+        .bind(serde_json::to_value(&tags).map_err(|_| internal())?)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Json(tags))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TagAssignment {
+    tags: Vec<String>,
+    revision: i64,
+}
+async fn assign_tags(
+    State(pool): State<PgPool>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<TagAssignment>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.manage").await?;
+    let catalog = catalog(&mut tx, &org).await?;
+    if input.tags.len() > 10
+        || input
+            .tags
+            .iter()
+            .any(|id| !catalog.iter().any(|tag| &tag.id == id))
+        || input
+            .tags
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != input.tags.len()
+    {
+        return Err(ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Choose up to 10 tags from this organization.",
+        ));
+    }
+    let revision: Option<i64> = sqlx::query_scalar(
+        "SELECT revision FROM machines WHERE organization_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(&org)
+    .bind(&id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let revision = revision.ok_or(ApiError(StatusCode::NOT_FOUND, "Machine not found."))?;
+    if revision != input.revision {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "This machine changed. Close and reopen tags before trying again.",
+        ));
+    }
+    sqlx::query(
+        "UPDATE machines SET tags=$3,revision=revision+1 WHERE organization_id=$1 AND id=$2",
+    )
+    .bind(&org)
+    .bind(&id)
+    .bind(serde_json::json!(input.tags))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(serde_json::json!({"saved":true})))
 }

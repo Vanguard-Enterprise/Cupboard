@@ -155,3 +155,27 @@ it("ages readings even while the next request is pending", async () => {
   expect(screen.getByText("Stale")).not.toBeNull();
   expect(screen.getByText("Last known players")).not.toBeNull();
 });
+it("represents panel-only servers without promising a future game health check", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    response([
+      server({
+        panelServerUuid: "panel",
+        rconHost: null,
+        a2sHost: null,
+        checkedAt: null,
+        players: null,
+        playersAt: null,
+        rconStatus: null,
+        a2sStatus: null,
+      }),
+    ]),
+  );
+  render(<ServerHealth identity={identity} />);
+  expect(await screen.findByText("Panel managed")).not.toBeNull();
+  expect(screen.getByText(/Game health not configured/)).not.toBeNull();
+  expect(
+    screen.getByRole("link", { name: "Manage server" }).getAttribute("href"),
+  ).toBe("/dashboard/servers");
+  expect(screen.queryByText("Awaiting first check")).toBeNull();
+  expect(screen.queryByText("Not checked")).toBeNull();
+});

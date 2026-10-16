@@ -110,9 +110,9 @@ The organization audit log at
 `/dashboard/organization/security/audit-log` previews search, filtering, and event
 details with labeled sample data. It does not record user or server activity. The
 organization connections page at
-`/dashboard/organization/integrations/connections` previews connection health and
-setup requirements with sample data. It does not request credentials, connect an
-external account, or persist connection settings. The organization notifications
+`/dashboard/organization/integrations/connections` supports a PostgreSQL-backed
+Pelican Client API connection, verified server inventory, and secure disconnect.
+Other catalog services show requirements without connecting external accounts. The organization notifications
 and data page at
 `/dashboard/organization/settings/notifications-data` stores notification choices
 in the current browser. Browser-data clearing was removed from this page.
@@ -297,3 +297,80 @@ selections. The organization switcher shows the saved logo and refreshes on upda
 Manual logo URLs are removed; other profile fields remain browser-local.
 Replacement cleanup and abandoned uploads use the existing storage cleanup loop.
 No additional runtime, worker, bucket, or credentials are introduced.
+
+CUP-47 makes Pelican connections functional inside the existing Rust runtime. One
+connection per organization stores its HTTPS origin, AES-256-GCM encrypted Client
+API key, last check outcome, and a bounded server inventory in PostgreSQL. Only
+active members with `integrations.manage` can read or change it. Every request
+includes the page organization; connection IDs and revisions reject stale edits
+and checks. Network I/O runs outside database transactions, with membership and
+revision checks repeated before publication. Secrets share the existing master
+key while using a separate authenticated-data purpose from RCON.
+
+Checks read `/api/client` with at most ten pages and 1,000 servers, a 15-second
+overall deadline, and a 2 MiB response limit per page. They retain only identifiers,
+names, nodes, and panel lifecycle flags, never startup commands or variables.
+Redirects, environment proxies, untrusted TLS, and unsafe destination addresses
+are rejected. DNS results are validated and pinned for each check. Operators may
+approve exact private HTTPS panel origins with `CUPBOARD_PELICAN_PRIVATE_ORIGINS`;
+loopback and link-local destinations remain blocked. Failed refreshes preserve
+the last verified inventory; checks older than five minutes show overdue status.
+Inventory is not live game-server health. Other providers remain outside this
+slice. No additional application process or worker is introduced.
+
+Pelican inventory checks run in the API every five minutes, including while the
+Connections page is closed. PostgreSQL stores the schedule and claims each due
+connection across replicas. Failed checks retain the last verified inventory;
+concurrent edits and disconnects take precedence over scheduled results. The page
+refreshes saved results every 30 seconds and keeps a manual check action.
+
+Local development has an explicit `npm run dev:seed` fixture command. Each
+worktree owns a gitignored account file and a separate fake organization, with
+stable IDs and repeatable team fixtures. Seeding verifies the worktree's managed
+Compose database, rejects external database overrides, and preserves other data.
+The fixture module is excluded from release builds; there is no seed endpoint.
+
+CUP-49 adds Rust-only imports from Pelican into the existing Servers inventory.
+Imports verify the current startup invocation or Rust egg, retain a scoped panel
+link, and deduplicate by organization, connection, and upstream UUID. Structured
+egg variables can supply encrypted RCON and A2S settings; missing settings do not
+prevent panel management. Manual servers keep their existing behavior.
+
+Imported servers expose live resource observations, recent console output, console
+commands, and start, stop, and restart. Viewers need `servers.view`; mutations
+need `servers.manage`, and importing also needs `integrations.manage`. Every
+request checks the page organization and reauthorizes after upstream I/O. Removing
+a connection disables its imported servers' panel controls. WebSocket credentials
+stay in the API, which validates and pins Wings destinations and redacts known
+secrets from console output. Resources refresh every 30 seconds; console snapshots
+refresh every eight seconds while their tab is open. No worker is added.
+
+CUP-52 seeds a scoped infrastructure machine for the real development Wings host.
+Each managed worktree owns its machine credential and database record. A single
+repository-wide development reporter collects measurements from the source-owned
+agent over verified SSH and sends them to the prepared local APIs. The reporter
+runs with the development stack and uses no application or production credentials
+on Wings. Offline development applications receive measurements when restarted.
+All-worktree seeding preserves existing data and running applications; production
+builds still exclude the seed module and retain the agent's HTTPS requirement.
+
+CUP-53 adds organization-owned infrastructure tags and per-machine assignments.
+Infrastructure viewers can read labels; infrastructure managers can create,
+rename, delete, and assign them. Catalog writes serialize within each organization;
+assignment writes check the machine revision. Deletion removes assignments in the
+same transaction. Tags describe operator-assigned roles rather than software
+detection. Inventory network graphs now show at most five minutes of real samples.
+
+Imported server identity includes the panel origin as well as the organization
+and upstream UUID. After disconnect, controls stay disabled. Explicitly importing
+from a reconnected same-origin panel restores the original Cupboard server record
+without duplicates; different panel origins remain separate.
+
+Pelican scheduling drains due work in batches of three before sleeping when idle.
+Inventory resources also refresh with three workers, so one slow server does not
+block later rows. Background work reserves one shared slot for interactive
+requests. The inventory observation endpoint enforces its cap globally in the API
+so multiple clients share the same reservation. Contended observations wait in
+FIFO order for at most eight seconds before a bounded jittered client retry.
+Waiting observations do not hold shared operation permits. Candidate imported-state lookup uses one scoped database query
+for the complete bounded candidate set.

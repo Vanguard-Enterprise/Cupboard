@@ -125,3 +125,26 @@ through the full review cycle:
 - Use maintained authentication and cryptography libraries. Do not invent either.
 - Keep migrations forward-only once a migration has been used outside local
   development.
+
+## Development seed account
+
+- After starting this worktree with `npm run dev`, run `npm run dev:seed` to
+  create or refresh its fake development organization and team fixtures.
+- Read `.dev-stack/dev-account.json` locally for the development email, password,
+  and organization ID when signing into the local preview. Never print the
+  password, paste it into chat, or commit this file. Do not use these credentials
+  on staging, production, or another worktree.
+- This gitignored file is stable across seed runs. The command only accepts this
+  worktree's managed Compose PostgreSQL and refuses production or external
+  database overrides. Do not bypass its checks to seed another database.
+- Maintain fake fixtures in `backend/dev_seed.rs` as development needs change.
+  Run the command again after updating them. Keep existing user accounts,
+  organizations, uploaded data, and real integration credentials untouched.
+
+- Development seeding enrolls `use1-wings-01` as the shared real infrastructure
+  source. The dev stack reports its health over SSH using the local key and a
+  verified known-host entry. Each worktree keeps a separate machine credential.
+  Do not copy a credential between organizations or weaken production HTTPS.
+- Use `npm run dev:seed -- --all` when asked to refresh all saved development
+  environments. It seeds their managed databases without editing other worktrees'
+  source files. Stopped applications begin receiving reports when started.

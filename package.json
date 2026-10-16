@@ -21,7 +21,9 @@
     "dev:stop-storage": "node scripts/workflow.mjs stop-storage",
     "dev:stop-db": "node scripts/workflow.mjs stop-db",
     "check:quick": "node scripts/check.mjs --quick",
-    "review": "node scripts/workflow.mjs review"
+    "review": "node scripts/workflow.mjs review",
+    "dev:seed": "node scripts/dev-seed.mjs",
+    "dev:machines": "node scripts/dev-machines.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

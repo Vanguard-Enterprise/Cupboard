@@ -236,6 +236,8 @@ pub fn routes(pool: PgPool, config: AuthConfig) -> Router {
         .merge(crate::machines::routes())
         .merge(crate::files::routes())
         .merge(crate::logos::routes())
+        .merge(crate::pelican::routes())
+        .merge(crate::panel_servers::routes())
         .with_state(pool)
         .layer(AuthManagerLayerBuilder::new(backend, sessions).build())
         .layer(middleware::from_fn_with_state(

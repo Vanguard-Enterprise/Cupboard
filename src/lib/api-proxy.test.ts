@@ -323,15 +323,20 @@ describe("worktree session isolation", () => {
   });
 });
 
-it("forwards the expected organization for machine reads and mutations", async () => {
+it("forwards the expected organization for scoped reads and mutations", async () => {
   const fetcher = vi.fn<typeof fetch>(async () => Response.json([]));
   vi.stubGlobal("fetch", fetcher);
   for (const path of [
+    "integrations/pelican",
+    "integrations/pelican/check",
+    "integrations/pelican/remove",
+    "servers/00000000-0000-0000-0000-000000000000/panel/observation",
     "machines",
     "machines/00000000-0000-0000-0000-000000000000/history",
     "machines/00000000-0000-0000-0000-000000000000/remove",
   ]) {
-    const method = path.endsWith("remove") ? "POST" : "GET";
+    const method =
+      path.endsWith("remove") || path.endsWith("check") ? "POST" : "GET";
     await proxyApi(
       new Request(`http://localhost:5173/app-api/${path}`, {
         method,
