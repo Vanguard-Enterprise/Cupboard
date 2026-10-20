@@ -42,6 +42,11 @@ it("plots recorded in/out rates, leaves report gaps, and hides them when unreach
       windowEnd: now,
       samples: [
         {
+          at: now - 3600000,
+          networkReceiveBytesPerSecond: 99999999,
+          networkSendBytesPerSecond: 99999999,
+        },
+        {
           at: now - 180000,
           networkReceiveBytesPerSecond: 1024,
           networkSendBytesPerSecond: 512,
@@ -65,6 +70,9 @@ it("plots recorded in/out rates, leaves report gaps, and hides them when unreach
   const graph = await screen.findByRole("img");
   const paths = graph.querySelectorAll("path");
   expect(paths).toHaveLength(2);
+  expect(graph.getAttribute("aria-label")).toContain("last 3 minutes");
+  expect(paths[0].getAttribute("d")).toMatch(/^M0,/);
+  expect(paths[0].getAttribute("d")).toContain("M180,");
   expect(paths[0].getAttribute("d")?.match(/M/g)).toHaveLength(2);
   expect(screen.getByText("↓ In 2.0 KiB/s")).not.toBeNull();
   view.rerender(

@@ -61,7 +61,7 @@ export function Workspace({
         : pathname === connectionsPath
           ? {
               activeSection: "connections",
-              crumbs: ["Organization", "Integrations", "Connections"],
+              crumbs: ["Connections"],
             }
           : pathname === credentialsPath
             ? {

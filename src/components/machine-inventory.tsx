@@ -23,6 +23,7 @@ import {
   SearchIcon,
   CheckIcon,
   CircleDotIcon,
+  TagsIcon,
 } from "lucide-react";
 import { apiRequest, type Identity } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,7 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { MachineCountry, MachineReadings } from "@/components/machine-readings";
+import { MachineTagBadges, MachineTagsDialog } from "@/components/machine-tags";
 import { MachineNetwork } from "@/components/machine-network";
 import { MachineMonitoring } from "@/components/machine-monitoring";
 import {
@@ -67,6 +69,7 @@ import {
   machineStatus,
   observed,
   type Machine,
+  type MachineTag,
 } from "@/lib/machines";
 import { toast } from "sonner";
 
@@ -91,6 +94,8 @@ export function MachineInventory({ identity }: { identity: Identity }) {
   const [now, setNow] = useState(() => Date.now());
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
+  const [tagMachine, setTagMachine] = useState<Machine | null>(null);
+  const [tagCatalog, setTagCatalog] = useState<MachineTag[]>([]);
   const [editor, setEditor] = useState<Machine | null>(null);
   const [draft, setDraft] = useState(empty);
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -124,6 +129,19 @@ export function MachineInventory({ identity }: { identity: Identity }) {
       );
       if (mounted.current && current === generation.current) {
         setMachines(records);
+        if (records.some((machine) => machine.tags?.length)) {
+          try {
+            const tags = await apiRequest<MachineTag[]>(
+              "machines/tags",
+              undefined,
+              organization!,
+            );
+            if (mounted.current && current === generation.current)
+              setTagCatalog(tags);
+          } catch {
+            /* Preserve last known tag labels during a refresh failure. */
+          }
+        }
         setError("");
         refreshFailed.current = false;
         setNow(Date.now());
@@ -281,7 +299,14 @@ export function MachineInventory({ identity }: { identity: Identity }) {
   }
   const visible = machines?.filter(
     (machine) =>
-      [machine.name, machine.address, machine.provider].some((value) =>
+      [
+        machine.name,
+        machine.address,
+        machine.provider,
+        ...tagCatalog
+          .filter((tag) => machine.tags?.includes(tag.id))
+          .map((tag) => tag.name),
+      ].some((value) =>
         value.toLowerCase().includes(query.trim().toLowerCase()),
       ) &&
       (filter === "all" || machineStatus(machine, now) === filter) &&
@@ -508,14 +533,16 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                                           <span className="font-medium underline-offset-4 group-hover:underline break-words">
                                             {machine.name}
                                           </span>
-                                          {machine.provider && (
-                                            <span className="text-xs text-muted-foreground">
-                                              {machine.provider}
-                                            </span>
-                                          )}
+                                          <MachineTagBadges
+                                            machine={machine}
+                                            catalog={tagCatalog}
+                                          />
                                         </span>
 
                                         <span className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+                                          {machine.provider && (
+                                            <span>{machine.provider}</span>
+                                          )}
                                           <span className="break-all font-mono">
                                             {machine.address}
                                           </span>
@@ -624,6 +651,14 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                                               <PencilIcon aria-hidden="true" />
                                               Edit
                                             </DropdownMenuItem>
+                                            <DropdownMenuItem
+                                              onSelect={() =>
+                                                setTagMachine(machine)
+                                              }
+                                            >
+                                              <TagsIcon aria-hidden="true" />
+                                              Tags
+                                            </DropdownMenuItem>
                                             {machine.enrolled && (
                                               <DropdownMenuItem
                                                 onSelect={() =>
@@ -708,6 +743,18 @@ export function MachineInventory({ identity }: { identity: Identity }) {
             </div>
           )}
         </>
+      )}
+      {tagMachine && organization && (
+        <MachineTagsDialog
+          key={tagMachine.id}
+          machine={tagMachine}
+          organization={organization}
+          onClose={() => setTagMachine(null)}
+          onSaved={(tags) => {
+            setTagCatalog(tags);
+            void load();
+          }}
+        />
       )}
       <Dialog
         open={editor !== null}

@@ -27,7 +27,11 @@ impl Client {
             .header("origin", "http://localhost:5173")
             .header("x-cupboard-request", "1")
             .header("content-type", "application/json");
-        if path == "machines" || path.starts_with("machines/") {
+        if path == "machines"
+            || path.starts_with("machines/")
+            || path.starts_with("integrations/")
+            || path.starts_with("servers/")
+        {
             request = request.header("x-cupboard-organization", &self.organization);
         }
         if !self.cookie.is_empty() {
@@ -1131,7 +1135,7 @@ async fn server_inventory_permissions_isolation_and_secret_storage() {
         },
     )
     .layer(axum::Extension(
-        crate::servers::SecretKey::parse(&"ab".repeat(32)).unwrap(),
+        crate::secrets::SecretKey::parse(&"ab".repeat(32)).unwrap(),
     ));
     let mut owner = Client::new(&app);
     let mut other = Client::new(&app);
@@ -1250,7 +1254,7 @@ async fn connection_checks_are_authorized_scoped_persisted_and_redacted() {
         },
     )
     .layer(axum::Extension(
-        crate::servers::SecretKey::parse(&"cd".repeat(32)).unwrap(),
+        crate::secrets::SecretKey::parse(&"cd".repeat(32)).unwrap(),
     ));
     let mut owner = Client::new(&app);
     let mut other = Client::new(&app);
@@ -1370,7 +1374,7 @@ async fn connection_checks_are_authorized_scoped_persisted_and_redacted() {
 async fn health_monitor_persists_observations_and_respects_freshness_and_tenant_scope() {
     let url = std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap();
     let pool = connect(&url).await.unwrap();
-    let key = crate::servers::SecretKey::parse(&"ef".repeat(32)).unwrap();
+    let key = crate::secrets::SecretKey::parse(&"ef".repeat(32)).unwrap();
     let app = router_with_auth(
         pool.clone(),
         AuthConfig {
@@ -3671,5 +3675,1503 @@ async fn logo_uploads_reauthorize_after_storage_io_and_redact_storage_errors() {
             .await
             .unwrap();
     assert_eq!(count, 2, "Failed deletions retain retry records");
+    server.abort();
+}
+
+#[tokio::test]
+async fn pelican_inventory_is_tenant_authorized_encrypted_and_persistent() {
+    use axum::{
+        extract::{Query, State},
+        response::IntoResponse,
+        routing::get,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    };
+    #[derive(Clone)]
+    struct Panel {
+        mode: Arc<AtomicU16>,
+        calls: Arc<AtomicU16>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+    async fn inventory(
+        State(panel): State<Panel>,
+        headers: axum::http::HeaderMap,
+        Query(query): Query<std::collections::HashMap<String, String>>,
+    ) -> axum::response::Response {
+        assert_eq!(
+            headers["authorization"],
+            "Bearer pelican-test-secret-never-returned"
+        );
+        assert_eq!(headers["accept"], "application/json");
+        assert_eq!(query["per_page"], "100");
+        panel.calls.fetch_add(1, Ordering::SeqCst);
+        match panel.mode.load(Ordering::SeqCst) {
+            1 => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    "pelican-test-secret-never-returned upstream credentials",
+                )
+                    .into_response();
+            }
+            2 => return axum::Json(json!({"data":[]})).into_response(),
+            3 => {
+                return (StatusCode::FOUND, [("location", "http://127.0.0.1/secret")])
+                    .into_response();
+            }
+            4 => return "x".repeat(2 * 1024 * 1024 + 1).into_response(),
+            5 => {
+                panel.entered.notify_one();
+                panel.release.notified().await;
+            }
+            6 => {
+                return axum::Json(
+                    json!({"data":[],"meta":{"pagination":{"current_page":1,"total_pages":1}}}),
+                )
+                .into_response();
+            }
+            7 => {
+                return axum::Json(
+                    json!({"data":[],"meta":{"pagination":{"current_page":1,"total_pages":11}}}),
+                )
+                .into_response();
+            }
+            _ => {}
+        }
+        let page = query["page"].parse::<u32>().unwrap();
+        let id = if page == 1 {
+            "11111111-1111-4111-8111-111111111111"
+        } else {
+            "22222222-2222-4222-8222-222222222222"
+        };
+        axum::Json(json!({"data":[{"object":"server","attributes":{"uuid":id,"identifier":format!("server-{page}"),"name":format!("Rust {page}"),"node":"USE1","is_suspended":false,"is_installing":false,"is_transferring":false,"invocation":"rcon.password private-secret","relationships":{"variables":{"data":[{"secret":"hidden"}]}}}}],"meta":{"pagination":{"current_page":page,"total_pages":2}}})).into_response()
+    }
+    let panel = Panel {
+        mode: Arc::new(AtomicU16::new(0)),
+        calls: Arc::new(AtomicU16::new(0)),
+        entered: Arc::new(tokio::sync::Notify::new()),
+        release: Arc::new(tokio::sync::Notify::new()),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let panel_app = Router::new()
+        .route("/api/client", get(inventory))
+        .with_state(panel.clone());
+    let panel_task = tokio::spawn(async move {
+        axum::serve(listener, panel_app).await.unwrap();
+    });
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let key = crate::secrets::SecretKey::parse(&"ab".repeat(32)).unwrap();
+    let mut policy = crate::pelican::PanelPolicy::default();
+    policy.test_origin = Some(url.clone());
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(policy.clone()));
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    assert_eq!(
+        anonymous
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let suffix = uuid::Uuid::new_v4();
+    owner
+        .signup(&format!("pelican-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("pelican-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    assert_eq!(
+        owner
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .1,
+        json!(null)
+    );
+    let input = json!({"panelUrl":url,"apiKey":"pelican-test-secret-never-returned","id":null,"revision":null});
+    let (status, mut connection) = owner
+        .request("POST", "integrations/pelican", input.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{connection}");
+    assert_eq!(connection["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(connection["servers"][1]["name"], "Rust 2");
+    assert_eq!(connection["error"], json!(null));
+    assert_eq!(connection["revision"], 1);
+    for secret in [
+        "pelican-test-secret",
+        "rcon.password",
+        "private-secret",
+        "variables",
+        "apiKey",
+    ] {
+        assert!(!connection.to_string().contains(secret));
+    }
+    let (id, encrypted): (String, Vec<u8>) = sqlx::query_as(
+        "SELECT id,api_key_encrypted FROM pelican_connections WHERE organization_id=$1",
+    )
+    .bind(&owner.organization)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!encrypted.windows(19).any(|w| w == b"pelican-test-secret"));
+    assert_eq!(
+        key.decrypt(&encrypted, &owner.organization, &id, "pelican")
+            .unwrap(),
+        b"pelican-test-secret-never-returned"
+    );
+    assert!(
+        key.decrypt(&encrypted, &other.organization, &id, "pelican")
+            .is_err()
+    );
+    assert!(
+        key.decrypt(&encrypted, &owner.organization, &id, "rcon")
+            .is_err()
+    );
+    assert_eq!(
+        other
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .1,
+        json!(null)
+    );
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":"not-owned","revision":1})
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                "integrations/pelican/remove",
+                json!({"id":"not-owned","revision":1})
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let own_org = owner.organization.clone();
+    owner.organization = other.organization.clone();
+    assert_eq!(
+        owner
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    owner.organization = own_org;
+    assert_eq!(
+        owner
+            .request("POST", "integrations/pelican", input.clone())
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    // A failed edit at the same origin keeps the last successful inventory.
+    panel.mode.store(1, Ordering::SeqCst);
+    let (status, edited) = owner.request("POST", "integrations/pelican", json!({"id":connection["id"],"revision":connection["revision"],"panelUrl":url,"apiKey":null})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(edited["error"].as_str().unwrap().contains("rejected"));
+    assert_eq!(edited["servers"], connection["servers"]);
+    assert_eq!(edited["lastSuccessAt"], connection["lastSuccessAt"]);
+    assert_eq!(
+        edited["revision"].as_i64().unwrap(),
+        connection["revision"].as_i64().unwrap() + 1
+    );
+    connection = edited;
+    // Scheduled checks use only persisted scoped credentials, skip fresh records,
+    // retain inventory on failure, and recover without a browser session.
+    let calls = panel.calls.load(Ordering::SeqCst);
+    crate::pelican::poll_due(&pool, &key, &policy)
+        .await
+        .unwrap();
+    assert_eq!(panel.calls.load(Ordering::SeqCst), calls);
+    sqlx::query(
+        "UPDATE pelican_connections SET checked_at=0,next_check_at=0 WHERE organization_id=$1",
+    )
+    .bind(&owner.organization)
+    .execute(&pool)
+    .await
+    .unwrap();
+    panel.mode.store(1, Ordering::SeqCst);
+    crate::pelican::poll_due(&pool, &key, &policy)
+        .await
+        .unwrap();
+    let failed = owner
+        .request("GET", "integrations/pelican", json!(null))
+        .await
+        .1;
+    assert!(failed["error"].as_str().unwrap().contains("rejected"));
+    assert_eq!(failed["servers"], connection["servers"]);
+    assert_eq!(failed["lastSuccessAt"], connection["lastSuccessAt"]);
+    assert!(!failed.to_string().contains("pelican-test-secret"));
+    let calls = panel.calls.load(Ordering::SeqCst);
+    crate::pelican::poll_due(&pool, &key, &policy)
+        .await
+        .unwrap();
+    assert_eq!(panel.calls.load(Ordering::SeqCst), calls);
+    sqlx::query(
+        "UPDATE pelican_connections SET checked_at=0,next_check_at=0 WHERE organization_id=$1",
+    )
+    .bind(&owner.organization)
+    .execute(&pool)
+    .await
+    .unwrap();
+    panel.mode.store(0, Ordering::SeqCst);
+    crate::pelican::poll_due(&pool, &key, &policy)
+        .await
+        .unwrap();
+    connection = owner
+        .request("GET", "integrations/pelican", json!(null))
+        .await
+        .1;
+    assert!(connection["error"].is_null());
+    assert!(connection["checkedAt"].as_i64().unwrap() > 0);
+    // Rebuilding the router reads the same database records and never returns a stored key.
+    let restarted = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(policy));
+    let mut resumed = Client {
+        app: restarted,
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    assert_eq!(
+        resumed
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .1,
+        connection
+    );
+    // Empty key keeps the saved credential for the same panel, and re-encrypts it.
+    let (status, updated) = owner
+        .request(
+            "POST",
+            "integrations/pelican",
+            json!({"panelUrl":url,"apiKey":null,"id":connection["id"],"revision":connection["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    connection = updated;
+    let verified = connection["servers"].clone();
+    let last_success = connection["lastSuccessAt"].clone();
+    for (mode, fragment) in [
+        (1, "rejected"),
+        (2, "unsupported"),
+        (3, "redirected"),
+        (4, "oversized"),
+        (7, "limit"),
+    ] {
+        panel.mode.store(mode, Ordering::SeqCst);
+        let (status, updated) = owner
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":connection["id"],"revision":connection["revision"]}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{updated}");
+        assert!(
+            updated["error"].as_str().unwrap().contains(fragment),
+            "{updated}"
+        );
+        assert_eq!(updated["servers"], verified);
+        assert_eq!(updated["lastSuccessAt"], last_success);
+        assert!(!updated.to_string().contains("pelican-test-secret"));
+        connection = updated;
+    }
+    panel.mode.store(6, Ordering::SeqCst);
+    connection = owner
+        .request(
+            "POST",
+            "integrations/pelican/check",
+            json!({"id":connection["id"],"revision":connection["revision"]}),
+        )
+        .await
+        .1;
+    assert_eq!(connection["servers"], json!([]));
+    assert!(connection["error"].is_null());
+    // A check holds no database transaction during I/O and cannot resurrect a disconnect.
+    panel.mode.store(5, Ordering::SeqCst);
+    let mut concurrent = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    let revision = connection["revision"].clone();
+    let connection_id = connection["id"].clone();
+    let pending = tokio::spawn(async move {
+        concurrent
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":connection_id,"revision":revision}),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), panel.entered.notified())
+        .await
+        .unwrap();
+    let (status, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        owner.request(
+            "POST",
+            "integrations/pelican/remove",
+            json!({"id":connection["id"],"revision":connection["revision"]}),
+        ),
+    )
+    .await
+    .expect("panel checks must not hold organization locks");
+    assert_eq!(status, StatusCode::OK);
+    panel.mode.store(0, Ordering::SeqCst);
+    panel.release.notify_one();
+    assert_eq!(pending.await.unwrap().0, StatusCode::CONFLICT);
+    assert!(
+        owner
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .1
+            .is_null()
+    );
+    // Active membership alone does not grant integration access.
+    let viewer = owner
+        .create_role("Integration viewer", &["servers.view"])
+        .await;
+    let email = format!("pelican-member-{suffix}@example.com");
+    let mut member = Client::new(&app);
+    member.signup(&email).await;
+    let invitation=owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Member","email":email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await.1;
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    member.request("GET", "auth/me", json!(null)).await;
+    let calls = panel.calls.load(Ordering::SeqCst);
+    for (method, path, body) in [
+        ("GET", "integrations/pelican", json!(null)),
+        ("POST", "integrations/pelican", input.clone()),
+        (
+            "POST",
+            "integrations/pelican/check",
+            json!({"id":"not-owned","revision":1}),
+        ),
+        (
+            "POST",
+            "integrations/pelican/remove",
+            json!({"id":"not-owned","revision":1}),
+        ),
+    ] {
+        assert_eq!(
+            member.request(method, path, body).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(panel.calls.load(Ordering::SeqCst), calls);
+    // A new connection may be saved with an actionable failed check, without raw upstream data.
+    panel.mode.store(1, Ordering::SeqCst);
+    let (status, failed) = owner.request("POST", "integrations/pelican", input).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(failed["lastSuccessAt"].is_null());
+    assert_eq!(failed["servers"], json!([]));
+    assert!(failed["error"].as_str().unwrap().contains("rejected"));
+    assert!(!failed.to_string().contains("upstream credentials"));
+    // Reconnecting starts a new record even when the numeric revision starts at one.
+    assert_ne!(failed["id"], connection["id"]);
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":connection["id"],"revision":failed["revision"]})
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(owner.request("POST", "integrations/pelican", json!({"id":connection["id"],"revision":failed["revision"],"panelUrl":url,"apiKey":null})).await.0, StatusCode::CONFLICT);
+    // Permission changes made during a slow check take effect before publication.
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['integrations.manage']::text[] WHERE organization_id=$1 AND id=$2").bind(&owner.organization).bind(viewer["id"].as_str().unwrap()).execute(&pool).await.unwrap();
+    panel.mode.store(5, Ordering::SeqCst);
+    let mut permitted = Client {
+        app: app.clone(),
+        cookie: member.cookie.clone(),
+        organization: member.organization.clone(),
+    };
+    let saved = failed.clone();
+    let pending = tokio::spawn(async move {
+        permitted
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":saved["id"],"revision":saved["revision"]}),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), panel.entered.notified())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY[]::text[] WHERE organization_id=$1 AND id=$2").bind(&owner.organization).bind(viewer["id"].as_str().unwrap()).execute(&pool).await.unwrap();
+    panel.mode.store(0, Ordering::SeqCst);
+    panel.release.notify_one();
+    assert_eq!(pending.await.unwrap().0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        owner
+            .request("GET", "integrations/pelican", json!(null))
+            .await
+            .1,
+        failed
+    );
+    // A different origin must not inherit inventory from the previous panel.
+    panel.mode.store(0, Ordering::SeqCst);
+    let (_, recovered) = owner
+        .request(
+            "POST",
+            "integrations/pelican/check",
+            json!({"id":failed["id"],"revision":failed["revision"]}),
+        )
+        .await;
+    assert!(!recovered["servers"].as_array().unwrap().is_empty());
+    let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_url = format!("http://{}/", second_listener.local_addr().unwrap());
+    let failing_panel =
+        Router::new().route("/api/client", get(|| async { StatusCode::UNAUTHORIZED }));
+    let second_task = tokio::spawn(async move {
+        axum::serve(second_listener, failing_panel).await.unwrap();
+    });
+    let mut second_policy = crate::pelican::PanelPolicy::default();
+    second_policy.test_origin = Some(second_url.clone());
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(second_policy));
+    let (status, replaced) = owner.request("POST", "integrations/pelican", json!({"id":recovered["id"],"revision":recovered["revision"],"panelUrl":second_url,"apiKey":"pelican-test-secret-never-returned"})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(replaced["error"].is_string());
+    assert_eq!(replaced["servers"], json!([]));
+    assert!(replaced["lastSuccessAt"].is_null());
+    second_task.abort();
+    panel_task.abort();
+}
+
+#[tokio::test]
+async fn development_seed_is_repeatable_scoped_and_login_ready() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let account = crate::dev_seed::SeedAccount {
+        account_id: uuid::Uuid::new_v4().to_string(),
+        organization_id: uuid::Uuid::new_v4().to_string(),
+        email: format!("seed-{}@example.test", uuid::Uuid::new_v4()),
+        password: "local-fixture-password-only".into(),
+        dev_machine: Some(crate::dev_seed::SeedMachine {
+            id: uuid::Uuid::new_v4().to_string(),
+            credential: crate::auth::secret(),
+        }),
+    };
+    crate::dev_seed::seed(&pool, &account).await.unwrap();
+    let machine = account.dev_machine.as_ref().unwrap();
+    let stored: String =
+        sqlx::query_scalar("SELECT agent_hash FROM machines WHERE id=$1 AND organization_id=$2")
+            .bind(&machine.id)
+            .bind(&account.organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored, crate::auth::digest(&machine.credential));
+    assert_ne!(stored, machine.credential);
+    let hash: String = sqlx::query_scalar("SELECT password_hash FROM accounts WHERE id=$1")
+        .bind(&account.account_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_ne!(hash, account.password);
+    crate::dev_seed::seed(&pool, &account).await.unwrap();
+    let repeated: String = sqlx::query_scalar("SELECT password_hash FROM accounts WHERE id=$1")
+        .bind(&account.account_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(hash, repeated);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM organization_members WHERE organization_id=$1")
+            .bind(&account.organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 3);
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut client = Client::new(&app);
+    let (status, response) = client
+        .request(
+            "POST",
+            "auth/login",
+            json!({"email":account.email,"password":account.password}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!response.to_string().contains(&account.password));
+    let (status, _) = client.request("GET", "auth/me", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, machines) = client.request("GET", "machines", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(machines[0]["id"], machine.id);
+    assert_eq!(machines[0]["enrolled"], true);
+    assert!(!machines.to_string().contains(&machine.credential));
+    let team = client.team().await;
+    assert_eq!(team["users"].as_array().unwrap().len(), 3);
+    let wrong = crate::dev_seed::SeedAccount {
+        account_id: uuid::Uuid::new_v4().to_string(),
+        organization_id: account.organization_id.clone(),
+        email: format!("seed-{}@example.test", uuid::Uuid::new_v4()),
+        password: account.password.clone(),
+        dev_machine: account.dev_machine.clone(),
+    };
+    assert!(crate::dev_seed::seed(&pool, &wrong).await.is_err());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts WHERE id=$1")
+        .bind(&wrong.account_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    let mut other = Client::new(&app);
+    other
+        .signup(&format!("seed-other-{}@example.com", uuid::Uuid::new_v4()))
+        .await;
+    other.create_organization().await;
+    let other_team = other.team().await;
+    assert!(!other_team.to_string().contains("Alex Morgan"));
+    let (status, other_machines) = other.request("GET", "machines", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(other_machines, json!([]));
+}
+
+#[tokio::test]
+async fn pelican_import_resources_console_power_are_scoped_and_redacted() {
+    use axum::{
+        Json,
+        extract::{
+            Path, State,
+            ws::{Message, WebSocketUpgrade},
+        },
+        http::HeaderMap,
+        response::IntoResponse,
+        routing::{get, post},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU16, Ordering},
+    };
+    const RUST: &str = "9ad962e8-23d8-4780-a62c-8fa1dfbd8051";
+    const OTHER: &str = "2b028522-0f9e-4527-9c63-4dcbef1db41b";
+    #[derive(Clone)]
+    struct Panel {
+        url: String,
+        power: Arc<AtomicU16>,
+        commands: Arc<AtomicU16>,
+        delay: Arc<AtomicU16>,
+        startup_read: Arc<AtomicU16>,
+        active_resources: Arc<AtomicU16>,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+    fn detail(uuid: &str) -> Value {
+        json!({"uuid":uuid,"identifier":uuid[..8],"name":if uuid==RUST{"Rust test"}else{"Minecraft test"},"node":"Node 1","is_suspended":false,"is_installing":false,"is_transferring":false,"invocation":if uuid==RUST{"./RustDedicated +rcon.web 1"}else{"java -jar server.jar"}})
+    }
+    async fn inventory(headers: HeaderMap) -> Json<Value> {
+        assert_eq!(headers["authorization"], "Bearer panel-import-secret");
+        Json(
+            json!({"data":[{"attributes":detail(RUST)},{"attributes":detail(OTHER)}],"meta":{"pagination":{"current_page":1,"total_pages":1}}}),
+        )
+    }
+    async fn server(State(panel): State<Panel>, Path(uuid): Path<String>) -> Json<Value> {
+        let mut server = detail(&uuid);
+        if panel.startup_read.load(Ordering::SeqCst) == 1 {
+            server["relationships"] = json!({
+                "variables":{"data":[
+                    {"attributes":{"env_variable":"RCON_PORT","server_value":"28016"}},
+                    {"attributes":{"env_variable":"QUERY_PORT","server_value":"28017"}},
+                    {"attributes":{"env_variable":"RCON_PASSWORD","server_value":"new-inferred-rcon-secret"}}
+                ]},
+                "allocations":{"data":[{"attributes":{"is_default":true,"ip":"192.0.2.44"}}]}
+            });
+        }
+        Json(json!({"attributes":server}))
+    }
+    async fn resources(State(panel): State<Panel>) -> Json<Value> {
+        if panel.delay.load(Ordering::SeqCst) == 1 {
+            panel.active_resources.fetch_add(1, Ordering::SeqCst);
+            panel.entered.notify_one();
+            panel.release.acquire().await.unwrap().forget();
+            panel.active_resources.fetch_sub(1, Ordering::SeqCst);
+        }
+        Json(
+            json!({"attributes":{"current_state":"running","resources":{"cpu_absolute":12.5,"memory_bytes":1048576,"disk_bytes":2097152,"network_rx_bytes":100,"network_tx_bytes":50,"uptime":1000}}}),
+        )
+    }
+    async fn power(State(panel): State<Panel>, Json(body): Json<Value>) -> StatusCode {
+        assert!(matches!(
+            body["signal"].as_str(),
+            Some("start" | "stop" | "restart")
+        ));
+        panel.power.fetch_add(1, Ordering::SeqCst);
+        StatusCode::NO_CONTENT
+    }
+    async fn command(State(panel): State<Panel>, Json(body): Json<Value>) -> StatusCode {
+        assert_eq!(body["command"], "status");
+        panel.commands.fetch_add(1, Ordering::SeqCst);
+        StatusCode::NO_CONTENT
+    }
+    async fn credentials(State(panel): State<Panel>) -> Json<Value> {
+        Json(
+            json!({"data":{"token":"short-lived-console-token","socket":format!("{}/api/servers/{RUST}/ws",panel.url.replace("http:","ws:"))}}),
+        )
+    }
+    async fn socket(
+        State(panel): State<Panel>,
+        headers: HeaderMap,
+        upgrade: WebSocketUpgrade,
+    ) -> impl IntoResponse {
+        assert_eq!(headers["origin"], panel.url);
+        upgrade.on_upgrade(|mut socket|async move{
+        let Some(Ok(Message::Text(text)))=socket.recv().await else{return};let auth:Value=serde_json::from_str(&text).unwrap();assert_eq!(auth["args"][0],"short-lived-console-token");
+        socket.send(Message::Text(json!({"event":"auth success","args":[]}).to_string().into())).await.unwrap();let _=socket.recv().await;
+        socket.send(Message::Text(json!({"event":"console output","args":["Rust server ready","panel-import-secret","short-lived-console-token","rcon.password sensitive"]}).to_string().into())).await.unwrap();
+        let _=socket.recv().await;
+    })
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let panel = Panel {
+        url: url.trim_end_matches('/').into(),
+        power: Arc::new(AtomicU16::new(0)),
+        commands: Arc::new(AtomicU16::new(0)),
+        delay: Arc::new(AtomicU16::new(0)),
+        startup_read: Arc::new(AtomicU16::new(0)),
+        active_resources: Arc::new(AtomicU16::new(0)),
+        entered: Arc::new(tokio::sync::Notify::new()),
+        release: Arc::new(tokio::sync::Semaphore::new(0)),
+    };
+    let fixture = axum::Router::new()
+        .route("/api/client", get(inventory))
+        .route("/api/client/servers/{uuid}", get(server))
+        .route("/api/client/servers/{uuid}/resources", get(resources))
+        .route("/api/client/servers/{uuid}/power", post(power))
+        .route("/api/client/servers/{uuid}/command", post(command))
+        .route("/api/client/servers/{uuid}/websocket", get(credentials))
+        .route("/api/servers/{uuid}/ws", get(socket))
+        .with_state(panel.clone());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, fixture).await.unwrap();
+    });
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let key = crate::secrets::SecretKey::parse(&"48".repeat(32)).unwrap();
+    let mut policy = crate::pelican::PanelPolicy::default();
+    policy.test_origin = Some(url.clone());
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key))
+    .layer(axum::Extension(policy));
+    let mut owner = Client::new(&app);
+    owner
+        .signup(&format!(
+            "panel-import-{}@example.com",
+            uuid::Uuid::new_v4()
+        ))
+        .await;
+    owner.create_organization().await;
+    let (status, connection) = owner
+        .request(
+            "POST",
+            "integrations/pelican",
+            json!({"panelUrl":url,"apiKey":"panel-import-secret"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{candidates}");
+    assert_eq!(candidates["servers"].as_array().unwrap().len(), 1);
+    let input =
+        json!({"uuid":RUST,"connectionId":connection["id"],"revision":connection["revision"]});
+    let (status, imported) = owner
+        .request("POST", "servers/pelican/import", input.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    let repeated = owner
+        .request("POST", "servers/pelican/import", input.clone())
+        .await
+        .1;
+    assert_eq!(repeated, imported);
+    let (_, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(candidates["servers"][0]["imported"], true);
+    let (status, rejected) = owner
+        .request(
+            "POST",
+            "servers/pelican/import",
+            json!({"uuid":OTHER,"connectionId":connection["id"],"revision":connection["revision"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+    let id = imported["id"].as_str().unwrap();
+    let path = format!("servers/{id}/panel");
+    let listed = owner.request("GET", "servers", json!(null)).await.1;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["panelServerUuid"], RUST);
+    assert!(listed[0]["rconHost"].is_null());
+    assert!(!listed.to_string().contains("panel-import-secret"));
+    let (status, resources) = owner
+        .request("GET", &format!("{path}/resources"), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{resources}");
+    assert_eq!(resources["state"], "running");
+    assert_eq!(resources["resources"]["cpu_absolute"], 12.5);
+    for signal in ["start", "stop", "restart"] {
+        assert_eq!(
+            owner
+                .request("POST", &format!("{path}/power"), json!({"signal":signal}))
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        owner
+            .request("POST", &format!("{path}/power"), json!({"signal":"kill"}))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(panel.power.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                &format!("{path}/command"),
+                json!({"command":"status"})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(panel.commands.load(Ordering::SeqCst), 1);
+    let (status, console) = owner
+        .request("GET", &format!("{path}/console"), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{console}");
+    assert!(console.to_string().contains("Rust server ready"));
+    for secret in [
+        "panel-import-secret",
+        "short-lived-console-token",
+        "sensitive",
+    ] {
+        assert!(!console.to_string().contains(secret));
+    }
+    let mut other = Client::new(&app);
+    other
+        .signup(&format!("panel-other-{}@example.com", uuid::Uuid::new_v4()))
+        .await;
+    other.create_organization().await;
+    assert_eq!(
+        other
+            .request("GET", &format!("{path}/resources"), json!(null))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let saved_org = owner.organization.clone();
+    owner.organization = other.organization.clone();
+    assert_eq!(
+        owner
+            .request("POST", &format!("{path}/power"), json!({"signal":"start"}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    owner.organization = saved_org;
+    let viewer = owner.create_role("Panel viewer", &["servers.view"]).await;
+    let email = other.request("GET", "auth/me", json!(null)).await.1["user"]["email"].clone();
+    let (status, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Viewer","email":email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    other.request("GET", "auth/me", json!(null)).await;
+    assert_eq!(
+        other
+            .request("GET", &format!("{path}/resources"), json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        other
+            .request("GET", "servers/pelican/candidates", json!(null))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    for (action, body) in [
+        ("power", json!({"signal":"start"})),
+        ("command", json!({"command":"status"})),
+    ] {
+        assert_eq!(
+            other
+                .request("POST", &format!("{path}/{action}"), body)
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    // Independent inventory clients share a global background cap. Three
+    // observations leave the fourth slot available for foreground resources,
+    // while a fourth observation waits fairly until a slot is released.
+    panel.delay.store(1, Ordering::SeqCst);
+    let mut observations = Vec::new();
+    for _ in 0..3 {
+        let mut client = Client {
+            app: app.clone(),
+            cookie: owner.cookie.clone(),
+            organization: owner.organization.clone(),
+        };
+        let observation_path = format!("{path}/observation");
+        observations.push(tokio::spawn(async move {
+            client
+                .request("GET", &observation_path, json!(null))
+                .await
+                .0
+        }));
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while panel.active_resources.load(Ordering::SeqCst) != 3 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut queued_client = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    let queued_path = format!("{path}/observation");
+    let queued = tokio::spawn(async move {
+        queued_client
+            .request("GET", &queued_path, json!(null))
+            .await
+            .0
+    });
+    let mut foreground = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    let foreground_path = format!("{path}/resources");
+    let foreground = tokio::spawn(async move {
+        foreground
+            .request("GET", &foreground_path, json!(null))
+            .await
+            .0
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while panel.active_resources.load(Ordering::SeqCst) != 4 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !queued.is_finished(),
+        "Contending observations wait instead of failing immediately"
+    );
+    panel.delay.store(0, Ordering::SeqCst);
+    panel.release.add_permits(4);
+    for observation in observations {
+        assert_eq!(observation.await.unwrap(), StatusCode::OK);
+    }
+    assert_eq!(foreground.await.unwrap(), StatusCode::OK);
+    assert_eq!(queued.await.unwrap(), StatusCode::OK);
+    // Clear the stored notification before the disconnect race below.
+    panel.entered.notified().await;
+    panel.delay.store(1, Ordering::SeqCst);
+    let mut pending_client = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    let resource_path = format!("{path}/resources");
+    let pending = tokio::spawn(async move {
+        pending_client
+            .request("GET", &resource_path, json!(null))
+            .await
+    });
+    panel.entered.notified().await;
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "integrations/pelican/remove",
+                json!({"id":connection["id"],"revision":connection["revision"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    panel.release.add_permits(1);
+    assert_eq!(pending.await.unwrap().0, StatusCode::CONFLICT);
+    assert_eq!(
+        owner
+            .request("POST", &format!("{path}/power"), json!({"signal":"start"}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(panel.power.load(Ordering::SeqCst), 3);
+    panel.delay.store(0, Ordering::SeqCst);
+    sqlx::query("UPDATE servers SET checked_at=1,rcon_status='connected',a2s_status='connected',players=42,players_at=1,players_source='rcon' WHERE id=$1")
+        .bind(imported["id"].as_str().unwrap()).execute(&pool).await.unwrap();
+    panel.startup_read.store(1, Ordering::SeqCst);
+    let (status, reconnected) = owner
+        .request(
+            "POST",
+            "integrations/pelican",
+            json!({"panelUrl":url,"apiKey":"panel-import-secret"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(reconnected["id"], connection["id"]);
+    let (_, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(candidates["servers"][0]["imported"], false);
+    let id = imported["id"].as_str().unwrap();
+    let mut old_probe = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,6))")
+        .bind(id)
+        .execute(&mut *old_probe)
+        .await
+        .unwrap();
+    let probe_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *old_probe)
+        .await
+        .unwrap();
+    let reimport = owner.request(
+        "POST",
+        "servers/pelican/import",
+        json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]}),
+    );
+    let finish_old_probe = async {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let waiting: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)) AND wait_event='advisory')")
+                    .bind(probe_pid).fetch_one(&pool).await.unwrap();
+                if waiting { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }).await.expect("reimport must wait for the existing per-server health probe lock");
+        sqlx::query("UPDATE servers SET checked_at=2,rcon_status='connected',a2s_status='connected',players=99,players_at=2,players_source='rcon' WHERE id=$1")
+            .bind(id).execute(&mut *old_probe).await.unwrap();
+        old_probe.commit().await.unwrap();
+    };
+    let ((status, rebound), ()) = tokio::join!(reimport, finish_old_probe);
+    assert_eq!(status, StatusCode::OK, "{rebound}");
+    assert_eq!(rebound, imported);
+    let id = imported["id"].as_str().unwrap();
+    type InferredDetails = (
+        Option<String>,
+        Option<i32>,
+        Option<Vec<u8>>,
+        Option<String>,
+        Option<i32>,
+    );
+    let details: InferredDetails = sqlx::query_as("SELECT rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port FROM servers WHERE id=$1")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(details.0.as_deref(), Some("192.0.2.44"));
+    assert_eq!(details.1, Some(28016));
+    assert_eq!(details.3.as_deref(), Some("192.0.2.44"));
+    assert_eq!(details.4, Some(28017));
+    let org: String = sqlx::query_scalar("SELECT organization_id FROM servers WHERE id=$1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let decrypt_key = crate::secrets::SecretKey::parse(&"48".repeat(32)).unwrap();
+    let encrypted = details.2.as_ref().unwrap();
+    assert_ne!(encrypted.as_slice(), b"new-inferred-rcon-secret");
+    assert_eq!(
+        decrypt_key.decrypt(encrypted, &org, id, "rcon").unwrap(),
+        b"new-inferred-rcon-secret"
+    );
+    let reset: bool = sqlx::query_scalar("SELECT checked_at IS NULL AND rcon_status IS NULL AND a2s_status IS NULL AND players IS NULL AND players_at IS NULL AND players_source IS NULL FROM servers WHERE id=$1").bind(id).fetch_one(&pool).await.unwrap();
+    assert!(reset);
+    panel.startup_read.store(0, Ordering::SeqCst);
+    let (status, preserved) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":reconnected["id"],"revision":reconnected["revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{preserved}");
+    assert_eq!(preserved, imported);
+    let after: InferredDetails = sqlx::query_as("SELECT rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port FROM servers WHERE id=$1")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    assert_eq!(after, details);
+
+    assert_eq!(
+        owner
+            .request("GET", "servers", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        owner
+            .request("GET", &format!("{path}/resources"), json!(null))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let second_url = format!("http://{}/", second_listener.local_addr().unwrap());
+    let second_app = Router::new()
+        .route("/api/client", get(inventory))
+        .route("/api/client/servers/{uuid}", get(server))
+        .with_state(panel.clone());
+    let second_task = tokio::spawn(async move {
+        axum::serve(second_listener, second_app).await.unwrap();
+    });
+    let mut second_policy = crate::pelican::PanelPolicy::default();
+    second_policy.test_origin = Some(second_url.clone());
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::secrets::SecretKey::parse(&"48".repeat(32)).unwrap(),
+    ))
+    .layer(axum::Extension(second_policy));
+    let (status, changed_origin) = owner.request("POST", "integrations/pelican", json!({"id":reconnected["id"],"revision":reconnected["revision"],"panelUrl":second_url,"apiKey":"panel-import-secret"})).await;
+    assert_eq!(status, StatusCode::OK, "{changed_origin}");
+    assert_eq!(
+        owner
+            .request("GET", &format!("{path}/resources"), json!(null))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (_, candidates) = owner
+        .request("GET", "servers/pelican/candidates", json!(null))
+        .await;
+    assert_eq!(candidates["servers"][0]["imported"], false);
+    let (status, separate) = owner.request("POST", "servers/pelican/import", json!({"uuid":RUST,"connectionId":changed_origin["id"],"revision":changed_origin["revision"]})).await;
+    assert_eq!(status, StatusCode::OK, "{separate}");
+    assert_ne!(separate["id"], imported["id"]);
+    assert_eq!(
+        owner
+            .request("GET", "servers", json!(null))
+            .await
+            .1
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    second_task.abort();
+    task.abort();
+}
+
+#[tokio::test]
+async fn machine_tags_are_persistent_scoped_authorized_and_revision_checked() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner.signup(&format!("tags-{suffix}@example.com")).await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("other-tags-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    assert_eq!(
+        anonymous
+            .request("GET", "machines/tags", json!(null))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, defaults) = owner.request("GET", "machines/tags", json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(defaults.as_array().unwrap().len(), 5);
+    let (status, tags) = owner
+        .request(
+            "POST",
+            "machines/tags",
+            json!({"kind":"save","name":"  EU primary  "}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let custom = tags.as_array().unwrap().last().unwrap()["id"].clone();
+    assert_eq!(
+        tags.as_array().unwrap().last().unwrap()["name"],
+        "EU primary"
+    );
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "machines/tags",
+                json!({"kind":"save","name":"eu PRIMARY"})
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .request("POST", "machines/tags", json!({"kind":"save","name":" "}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let (_, machine) = owner.request("POST", "machines", machine_input()).await;
+    let path = format!("machines/{}/tags", machine["id"].as_str().unwrap());
+    assert_eq!(
+        owner
+            .request("POST", &path, json!({"tags":[custom,"wings"],"revision":1}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .request("POST", &path, json!({"tags":[],"revision":1}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        owner
+            .request("POST", &path, json!({"tags":["unknown"],"revision":2}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        other
+            .request("POST", &path, json!({"tags":["wings"],"revision":2}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, foreign) = other.request("POST", "machines", machine_input()).await;
+    let foreign_path = format!("machines/{}/tags", foreign["id"].as_str().unwrap());
+    assert_eq!(
+        other
+            .request("POST", &foreign_path, json!({"tags":[custom],"revision":1}))
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    for kind in ["save", "delete"] {
+        assert_eq!(
+            other
+                .request(
+                    "POST",
+                    "machines/tags",
+                    json!({"kind":kind,"id":custom,"name":"Stolen"})
+                )
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "machines/tags",
+                json!({"kind":"save","id":custom,"name":"EU renamed"})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    owner.app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    );
+    let (_, records) = owner.request("GET", "machines", json!(null)).await;
+    assert_eq!(records[0]["tags"], json!([custom, "wings"]));
+    assert!(!records.to_string().contains("agentHash"));
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "machines/tags",
+                json!({"kind":"delete","id":custom})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (_, records) = owner.request("GET", "machines", json!(null)).await;
+    assert_eq!(records[0]["tags"], json!(["wings"]));
+    assert_eq!(records[0]["revision"], 3);
+    let org = owner.organization.clone();
+    sqlx::query("UPDATE organizations SET owner_account_id=(SELECT owner_account_id FROM organizations WHERE id=$2) WHERE id=$1").bind(&org).bind(&other.organization).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE organization_roles SET permissions=ARRAY['infrastructure.view']::text[] WHERE organization_id=$1").bind(&org).execute(&pool).await.unwrap();
+    assert_eq!(
+        owner.request("GET", "machines/tags", json!(null)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "machines/tags",
+                json!({"kind":"save","name":"Denied"})
+            )
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        owner
+            .request("POST", &path, json!({"tags":[],"revision":3}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    sqlx::query(
+        "UPDATE organization_roles SET permissions=ARRAY[]::text[] WHERE organization_id=$1",
+    )
+    .bind(&org)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        owner.request("GET", "machines/tags", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
+    use axum::{Json, extract::State, http::HeaderMap, routing::get};
+    use std::sync::Arc;
+    #[derive(Clone)]
+    struct Panel {
+        entered: tokio::sync::mpsc::Sender<()>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+    async fn inventory(State(panel): State<Panel>, headers: HeaderMap) -> Json<Value> {
+        if headers["authorization"] == "Bearer slow-test-client-key" {
+            panel.entered.send(()).await.unwrap();
+            panel.release.acquire().await.unwrap().forget();
+        }
+        Json(json!({"data":[],"meta":{"pagination":{"current_page":1,"total_pages":1}}}))
+    }
+    let (entered, mut receive) = tokio::sync::mpsc::channel(1);
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let panel = Router::new()
+        .route("/api/client", get(inventory))
+        .with_state(Panel {
+            entered,
+            release: release.clone(),
+        });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, panel).await.unwrap();
+    });
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let key = crate::secrets::SecretKey::parse(&"bc".repeat(32)).unwrap();
+    let mut policy = crate::pelican::PanelPolicy::default();
+    policy.test_origin = Some(url.clone());
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(policy.clone()));
+    let mut orgs = Vec::new();
+    let mut owners = Vec::new();
+    let mut ids = Vec::new();
+    for index in 0..3 {
+        let mut owner = Client::new(&app);
+        owner
+            .signup(&format!(
+                "batch-{}-{index}@example.test",
+                uuid::Uuid::new_v4()
+            ))
+            .await;
+        owner.create_organization().await;
+        let org = owner.organization.clone();
+        let id = uuid::Uuid::new_v4().to_string();
+        let secret = if index == 0 {
+            "slow-test-client-key"
+        } else {
+            "fast-test-client-key"
+        };
+        let encrypted = key.encrypt(secret, &org, &id, "pelican").unwrap();
+        sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,next_check_at,servers) VALUES($1,$2,1,$3,$4,0,-100,'[]'::jsonb)").bind(&org).bind(&id).bind(&url).bind(encrypted).execute(&pool).await.unwrap();
+        orgs.push(org);
+        ids.push(id);
+        owners.push(owner);
+    }
+    let (batch_pool, batch_key, batch_policy) = (pool.clone(), key.clone(), policy.clone());
+    let batch = tokio::spawn(async move {
+        crate::pelican::poll_due_batch(&batch_pool, &batch_key, &batch_policy)
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), receive.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pelican_connections WHERE organization_id=ANY($1) AND checked_at>0").bind(&orgs[1..]).fetch_one(&pool).await.unwrap();
+            if count == 2 { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    assert!(!batch.is_finished());
+    release.add_permits(1);
+    assert!(batch.await.unwrap());
+    let count:i64 = sqlx::query_scalar("SELECT count(*) FROM pelican_connections WHERE organization_id=ANY($1) AND checked_at>0 AND error IS NULL").bind(&orgs).fetch_one(&pool).await.unwrap();
+    assert_eq!(count, 3);
+    // Even four independently invoked scheduled checks cannot consume all four
+    // shared permits. A save and manual check must still work while three block.
+    for (org, id) in orgs.iter().zip(&ids) {
+        let encrypted = key
+            .encrypt("slow-test-client-key", org, id, "pelican")
+            .unwrap();
+        sqlx::query("UPDATE pelican_connections SET api_key_encrypted=$2,checked_at=0,next_check_at=-100 WHERE organization_id=$1").bind(org).bind(encrypted).execute(&pool).await.unwrap();
+    }
+    let (batch_pool, batch_key, batch_policy) = (pool.clone(), key.clone(), policy.clone());
+    let pending = tokio::spawn(async move {
+        futures_util::future::join_all(
+            (0..4).map(|_| crate::pelican::poll_due(&batch_pool, &batch_key, &batch_policy)),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        for _ in 0..3 {
+            receive.recv().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    let (status, saved) = owners[0]
+        .request(
+            "POST",
+            "integrations/pelican",
+            json!({"id":ids[0],"revision":1,"panelUrl":url,"apiKey":"fast-test-client-key"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        owners[0]
+            .request(
+                "POST",
+                "integrations/pelican/check",
+                json!({"id":saved["id"],"revision":saved["revision"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert!(!pending.is_finished());
+    release.add_permits(3);
+    let results = pending.await.unwrap();
+    assert_eq!(
+        results
+            .into_iter()
+            .filter(|result| matches!(result, Ok(true)))
+            .count(),
+        3
+    );
     server.abort();
 }

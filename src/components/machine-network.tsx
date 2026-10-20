@@ -74,9 +74,12 @@ export function MachineNetwork({
       </div>
     );
 
-  const samples = history?.samples ?? [];
   const end = history?.windowEnd ?? now;
-  const start = end - 3600000;
+  const samples = (history?.samples ?? []).filter(
+    (sample) => sample.at >= end - 300000 && sample.at <= end,
+  );
+  const span = Math.min(300000, Math.max(60000, end - (samples[0]?.at ?? end)));
+  const start = end - span;
   const max = Math.max(
     1,
     ...samples.flatMap((s) => [
@@ -98,7 +101,7 @@ export function MachineNetwork({
         const command =
           previous == null || sample.at - previous > 90000 ? "M" : "L";
         previous = sample.at;
-        return `${command}${Math.max(0, Math.min(180, (180 * (sample.at - start)) / 3600000))},${30 - (28 * value) / max}${command === "M" ? "l0,0" : ""}`;
+        return `${command}${Math.max(0, Math.min(180, (180 * (sample.at - start)) / span))},${30 - (28 * value) / max}${command === "M" ? "l0,0" : ""}`;
       })
       .join(" ");
   };
@@ -112,7 +115,7 @@ export function MachineNetwork({
   return (
     <div
       className="space-y-1 py-1"
-      title="Combined network traffic across non-loopback interfaces · Last hour"
+      title={`Combined network traffic across non-loopback interfaces · Last ${Math.ceil(span / 60000)} minutes`}
     >
       <div className="flex flex-wrap gap-x-3 text-[10px] tabular-nums">
         <span className="text-primary">↓ In {receive}</span>
@@ -123,7 +126,7 @@ export function MachineNetwork({
           viewBox="0 0 180 32"
           preserveAspectRatio="none"
           role="img"
-          aria-label={`${machine.name} network over the last hour. In ${receive}, out ${send}.`}
+          aria-label={`${machine.name} network over the last ${Math.ceil(span / 60000)} minutes. In ${receive}, out ${send}.`}
           className="h-8 w-full"
         >
           <path

@@ -15,6 +15,9 @@ export type HealthServer = {
   players: number | null;
   playersAt: number | null;
   playersSource: string | null;
+  rconHost?: string | null;
+  a2sHost?: string | null;
+  panelServerUuid?: string | null;
 };
 const STALE_AFTER = 90_000;
 const outcomes: Record<string, string> = {
@@ -175,8 +178,13 @@ function HealthView({ identity }: { identity: Identity }) {
                     now - server.checkedAt > STALE_AFTER);
                 const rcon = server.rconStatus === "connected";
                 const a2s = server.a2sStatus === "connected";
-                const state =
-                  server.checkedAt === null
+                const panelOnly =
+                  Boolean(server.panelServerUuid) &&
+                  !server.rconHost &&
+                  !server.a2sHost;
+                const state = panelOnly
+                  ? "Panel managed"
+                  : server.checkedAt === null
                     ? "Awaiting first check"
                     : stale
                       ? "Stale"
@@ -206,55 +214,72 @@ function HealthView({ identity }: { identity: Identity }) {
                         {state}
                       </span>
                     </div>
-                    <dl className="grid gap-4 text-sm sm:grid-cols-3">
-                      <div>
-                        <dt className="text-muted-foreground">
-                          {server.players !== null && oldPlayers
-                            ? "Last known players"
-                            : "Players"}
-                        </dt>
-                        <dd className="mt-1 font-mono text-2xl tabular-nums">
-                          {server.players ?? "Unknown"}
-                        </dd>
-                        {server.playersAt !== null && (
-                          <dd className="mt-1 text-xs text-muted-foreground">
-                            {server.playersSource === "rcon" ? "RCON" : "A2S"}{" "}
-                            reading · <Timestamp value={server.playersAt} />
-                          </dd>
-                        )}
-                      </div>
-                      {(
-                        [
-                          ["RCON", server.rconStatus],
-                          ["A2S", server.a2sStatus],
-                        ] as const
-                      ).map(([label, status]) => (
-                        <div key={label}>
-                          <dt className="text-muted-foreground">{label}</dt>
-                          <dd className="mt-1">
-                            {status
-                              ? (outcomes[status] ?? "Unknown")
-                              : "Not checked"}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                    <p className="text-xs text-muted-foreground">
-                      {server.checkedAt === null ? (
-                        "Waiting for the first server response."
-                      ) : (
-                        <>
-                          Last checked <Timestamp value={server.checkedAt} />.{" "}
-                          {stale
-                            ? "Waiting for a fresh reading."
-                            : !rcon && !a2s
-                              ? "Neither connection responded successfully. Check the server and network."
-                              : !rcon || !a2s
-                                ? "One connection needs attention. Player count uses the responding connection."
-                                : "Both connections responded successfully."}
-                        </>
-                      )}
-                    </p>
+                    {panelOnly ? (
+                      <p className="text-sm text-muted-foreground">
+                        Game health not configured.{" "}
+                        <Link
+                          href="/dashboard/servers"
+                          className="underline underline-offset-4"
+                        >
+                          Manage server
+                        </Link>
+                      </p>
+                    ) : (
+                      <>
+                        <dl className="grid gap-4 text-sm sm:grid-cols-3">
+                          <div>
+                            <dt className="text-muted-foreground">
+                              {server.players !== null && oldPlayers
+                                ? "Last known players"
+                                : "Players"}
+                            </dt>
+                            <dd className="mt-1 font-mono text-2xl tabular-nums">
+                              {server.players ?? "Unknown"}
+                            </dd>
+                            {server.playersAt !== null && (
+                              <dd className="mt-1 text-xs text-muted-foreground">
+                                {server.playersSource === "rcon"
+                                  ? "RCON"
+                                  : "A2S"}{" "}
+                                reading · <Timestamp value={server.playersAt} />
+                              </dd>
+                            )}
+                          </div>
+                          {(
+                            [
+                              ["RCON", server.rconStatus],
+                              ["A2S", server.a2sStatus],
+                            ] as const
+                          ).map(([label, status]) => (
+                            <div key={label}>
+                              <dt className="text-muted-foreground">{label}</dt>
+                              <dd className="mt-1">
+                                {status
+                                  ? (outcomes[status] ?? "Unknown")
+                                  : "Not checked"}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+                        <p className="text-xs text-muted-foreground">
+                          {server.checkedAt === null ? (
+                            "Waiting for the first server response."
+                          ) : (
+                            <>
+                              Last checked{" "}
+                              <Timestamp value={server.checkedAt} />.{" "}
+                              {stale
+                                ? "Waiting for a fresh reading."
+                                : !rcon && !a2s
+                                  ? "Neither connection responded successfully. Check the server and network."
+                                  : !rcon || !a2s
+                                    ? "One connection needs attention. Player count uses the responding connection."
+                                    : "Both connections responded successfully."}
+                            </>
+                          )}
+                        </p>
+                      </>
+                    )}
                   </li>
                 );
               })}

@@ -1,10 +1,7 @@
+use crate::secrets::SecretKey;
 use crate::{
     auth::{ApiError, ApiResult, AuthSession, account, forbidden, internal},
     team,
-};
-use aes_gcm::{
-    Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit, Payload},
 };
 use axum::{
     Extension, Json, Router,
@@ -13,57 +10,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use std::collections::BTreeMap;
 use tower_sessions::Session;
 
-#[derive(Clone)]
-pub struct SecretKey([u8; 32]);
-impl SecretKey {
-    pub fn parse(value: &str) -> Result<Self, &'static str> {
-        if value.len() != 64 || !value.is_ascii() {
-            return Err("CUPBOARD_SECRET_KEY must contain 64 hexadecimal characters");
-        }
-        let mut key = [0; 32];
-        for (i, byte) in key.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&value[i * 2..i * 2 + 2], 16)
-                .map_err(|_| "CUPBOARD_SECRET_KEY must contain 64 hexadecimal characters")?;
-        }
-        Ok(Self(key))
-    }
-    fn encrypt(&self, secret: &str, org: &str, id: &str) -> ApiResult<Vec<u8>> {
-        let mut nonce = [0; 12];
-        OsRng.fill_bytes(&mut nonce);
-        let cipher = Aes256Gcm::new_from_slice(&self.0).map_err(|_| internal())?;
-        let aad = format!("cupboard:rcon:v1:{org}:{id}");
-        let encrypted = cipher
-            .encrypt(
-                &Nonce::from(nonce),
-                Payload {
-                    msg: secret.as_bytes(),
-                    aad: aad.as_bytes(),
-                },
-            )
-            .map_err(|_| internal())?;
-        Ok([nonce.to_vec(), encrypted].concat())
-    }
-    fn decrypt(&self, encrypted: &[u8], org: &str, id: &str) -> Result<Vec<u8>, aes_gcm::Error> {
-        if encrypted.len() < 28 {
-            return Err(aes_gcm::Error);
-        }
-        let cipher = Aes256Gcm::new_from_slice(&self.0).map_err(|_| aes_gcm::Error)?;
-        let aad = format!("cupboard:rcon:v1:{org}:{id}");
-        cipher.decrypt(
-            &Nonce::from(<[u8; 12]>::try_from(&encrypted[..12]).unwrap()),
-            Payload {
-                msg: &encrypted[12..],
-                aad: aad.as_bytes(),
-            },
-        )
-    }
-}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NewServer {
@@ -79,16 +30,17 @@ struct NewServer {
 struct Server {
     id: String,
     name: String,
-    rcon_host: String,
-    rcon_port: i32,
-    a2s_host: String,
-    a2s_port: i32,
+    rcon_host: Option<String>,
+    rcon_port: Option<i32>,
+    a2s_host: Option<String>,
+    a2s_port: Option<i32>,
     checked_at: Option<i64>,
     rcon_status: Option<String>,
     a2s_status: Option<String>,
     players: Option<i64>,
     players_at: Option<i64>,
     players_source: Option<String>,
+    panel_server_uuid: Option<String>,
 }
 #[derive(Debug)]
 struct Validation(BTreeMap<&'static str, &'static str>);
@@ -195,7 +147,7 @@ async fn read_servers(
     if !ctx.permissions.iter().any(|p| p == "servers.view") {
         return Err(forbidden());
     }
-    let servers = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source FROM servers WHERE organization_id=$1 ORDER BY created_at,id").bind(&ctx.organization_id).fetch_all(&mut *tx).await?;
+    let servers = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid FROM servers WHERE organization_id=$1 ORDER BY created_at,id").bind(&ctx.organization_id).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     Ok((ctx.organization_id, servers))
 }
@@ -232,9 +184,9 @@ async fn create(
     input.validate().map_err(IntoResponse::into_response)?;
     let id = uuid::Uuid::new_v4().to_string();
     let encrypted = key
-        .encrypt(&input.rcon_password, &ctx.organization_id, &id)
+        .encrypt(&input.rcon_password, &ctx.organization_id, &id, "rcon")
         .map_err(IntoResponse::into_response)?;
-    let result=sqlx::query_as("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source")
+    let result=sqlx::query_as("INSERT INTO servers(id,organization_id,name,rcon_host,rcon_port,rcon_password_encrypted,a2s_host,a2s_port) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid")
         .bind(id).bind(&ctx.organization_id).bind(input.name).bind(input.rcon_host).bind(input.rcon_port).bind(encrypted).bind(input.a2s_host).bind(input.a2s_port).fetch_one(&mut *tx).await.map_err(|_|internal().into_response())?;
     tx.commit().await.map_err(|_| internal().into_response())?;
     Ok(Json(result))
@@ -265,7 +217,7 @@ async fn check(
     if !ctx.permissions.iter().any(|p| p == "servers.manage") {
         return Err(forbidden());
     }
-    let server: Server = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source FROM servers WHERE organization_id=$1 AND id=$2")
+    let server: Server = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid FROM servers WHERE organization_id=$1 AND id=$2")
         .bind(&ctx.organization_id).bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::NOT_FOUND, "Server not found."))?;
     let locked: bool =
         sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 6))")
@@ -289,34 +241,39 @@ async fn probe(
     org: &str,
     server: &Server,
 ) -> ApiResult<Server> {
-    let encrypted: Vec<u8> = sqlx::query_scalar(
+    let encrypted: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT rcon_password_encrypted FROM servers WHERE organization_id=$1 AND id=$2",
     )
     .bind(org)
     .bind(&server.id)
     .fetch_one(&mut **tx)
     .await?;
-    let password = key
-        .decrypt(&encrypted, org, &server.id)
-        .ok()
+    let password = encrypted
+        .as_ref()
+        .and_then(|encrypted| key.decrypt(encrypted, org, &server.id, "rcon").ok())
         .and_then(|p| String::from_utf8(p).ok());
     let (rcon, a2s) = tokio::join!(
         async {
-            match password {
-                Some(password) => {
-                    crate::connectivity::rcon(&server.rcon_host, server.rcon_port, &password).await
+            match (password, server.rcon_host.as_ref(), server.rcon_port) {
+                (Some(password), Some(host), Some(port)) => {
+                    crate::connectivity::rcon(host, port, &password).await
                 }
-                None => crate::connectivity::Outcome::InvalidConfiguration,
+                _ => crate::connectivity::Outcome::InvalidConfiguration,
             }
         },
-        crate::connectivity::a2s(&server.a2s_host, server.a2s_port)
+        async {
+            match (server.a2s_host.as_ref(), server.a2s_port) {
+                (Some(host), Some(port)) => crate::connectivity::a2s(host, port).await,
+                _ => crate::connectivity::Outcome::InvalidConfiguration,
+            }
+        }
     );
     let observation = match (rcon, a2s) {
         (crate::connectivity::Outcome::Connected(n), _) => Some((i64::from(n), "rcon")),
         (_, crate::connectivity::Outcome::Connected(n)) => Some((i64::from(n), "a2s")),
         _ => None,
     };
-    let result = sqlx::query_as("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint,rcon_status=$3,a2s_status=$4,players=COALESCE($5,players),players_at=CASE WHEN $5::bigint IS NOT NULL THEN (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint ELSE players_at END,players_source=COALESCE($6,players_source) WHERE organization_id=$1 AND id=$2 RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source")
+    let result = sqlx::query_as("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint,rcon_status=$3,a2s_status=$4,players=COALESCE($5,players),players_at=CASE WHEN $5::bigint IS NOT NULL THEN (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint ELSE players_at END,players_source=COALESCE($6,players_source) WHERE organization_id=$1 AND id=$2 RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid")
         .bind(org).bind(&server.id).bind(rcon.as_str()).bind(a2s.as_str()).bind(observation.map(|v| v.0)).bind(observation.map(|v| v.1)).fetch_one(&mut **tx).await?;
     Ok(result)
 }
@@ -331,7 +288,7 @@ pub async fn monitor(pool: PgPool, key: SecretKey) {
     }
 }
 async fn poll_due(pool: &PgPool, key: &SecretKey) -> ApiResult<()> {
-    let due: Vec<(String, String)> = sqlx::query_as("SELECT organization_id,id FROM servers WHERE checked_at IS NULL OR checked_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-30000 ORDER BY checked_at NULLS FIRST,id LIMIT 16")
+    let due: Vec<(String, String)> = sqlx::query_as("SELECT organization_id,id FROM servers WHERE rcon_host IS NOT NULL AND a2s_host IS NOT NULL AND (checked_at IS NULL OR checked_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-30000) ORDER BY checked_at NULLS FIRST,id LIMIT 16")
         .fetch_all(pool).await?;
     futures_util::stream::StreamExt::for_each_concurrent(
         futures_util::stream::iter(due),
@@ -363,34 +320,11 @@ pub(crate) async fn poll_server(
     if !locked {
         return Ok(());
     }
-    let server: Option<Server> = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source FROM servers WHERE organization_id=$1 AND id=$2 AND (checked_at IS NULL OR checked_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-30000)")
+    let server: Option<Server> = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid FROM servers WHERE organization_id=$1 AND id=$2 AND (checked_at IS NULL OR checked_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-30000)")
         .bind(org).bind(id).fetch_optional(&mut *tx).await?;
     if let Some(server) = server {
         probe(&mut tx, key, org, &server).await?;
     }
     tx.commit().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn secrets_are_authenticated_randomized_and_bound_to_the_record() {
-        let key = SecretKey::parse(&"ab".repeat(32)).unwrap();
-        let a = key.encrypt("private password", "tenant", "server").unwrap();
-        let b = key.encrypt("private password", "tenant", "server").unwrap();
-        assert_ne!(a, b);
-        assert!(!a.windows(16).any(|w| w == b"private password"));
-        assert_eq!(
-            key.decrypt(&a, "tenant", "server").unwrap(),
-            b"private password"
-        );
-        assert!(key.decrypt(&a, "another", "server").is_err());
-        assert!(key.decrypt(&a, "tenant", "another").is_err());
-        assert!(key.decrypt(&[0], "tenant", "server").is_err());
-        let mut corrupt = a;
-        corrupt[13] ^= 1;
-        assert!(key.decrypt(&corrupt, "tenant", "server").is_err());
-    }
 }

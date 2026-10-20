@@ -17,10 +17,11 @@ async fn run() -> Result<(), &'static str> {
         .unwrap_or_else(|_| "0.0.0.0:8080".into())
         .parse()
         .map_err(|_| "CUPBOARD_API_BIND must be an IP address and port")?;
-    let key = cupboard::servers::SecretKey::parse(
+    let key = cupboard::secrets::SecretKey::parse(
         &env::var("CUPBOARD_SECRET_KEY").map_err(|_| "CUPBOARD_SECRET_KEY is required")?,
     )?;
     let storage = cupboard::storage::FileStore::from_env()?;
+    let panel_policy = cupboard::pelican::PanelPolicy::from_env()?;
     let pool = cupboard::connect(&url).await?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -35,7 +36,14 @@ async fn run() -> Result<(), &'static str> {
         secure_cookies: env::var("CUPBOARD_INSECURE_COOKIES").as_deref() != Ok("1"),
     };
     let monitor = tokio::spawn(cupboard::servers::monitor(pool.clone(), key.clone()));
-    let mut app = cupboard::router_with_auth(pool.clone(), config).layer(axum::Extension(key));
+    let panel_monitor = tokio::spawn(cupboard::pelican::monitor(
+        pool.clone(),
+        key.clone(),
+        panel_policy.clone(),
+    ));
+    let mut app = cupboard::router_with_auth(pool.clone(), config)
+        .layer(axum::Extension(key))
+        .layer(axum::Extension(panel_policy));
     let cleanup = storage.map(|storage| {
         app = app.clone().layer(axum::Extension(storage.clone()));
         tokio::spawn(cupboard::cleanup_files(pool.clone(), storage))
@@ -50,6 +58,8 @@ async fn run() -> Result<(), &'static str> {
     }
     monitor.abort();
     let _ = monitor.await;
+    panel_monitor.abort();
+    let _ = panel_monitor.await;
     pool.close().await;
     result
 }

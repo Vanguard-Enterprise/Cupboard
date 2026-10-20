@@ -1,7 +1,7 @@
 import { ServerInventory } from "@/components/server-inventory";
 import { getIdentity } from "@/lib/auth-server";
 import { redirect } from "next/navigation";
-export const metadata = { title: "Server inventory | Cupboard" };
+export const metadata = { title: "Game Servers | Cupboard" };
 export default async function ServersPage() {
   const identity = await getIdentity();
   if (!identity) redirect("/login");
