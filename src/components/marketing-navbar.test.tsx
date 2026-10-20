@@ -85,9 +85,12 @@ describe("marketing navbar", () => {
       expect(container.innerHTML).toBe("");
     },
   );
-  it.each(["/login", "/signup"])("hides navigation at %s", (pathname) => {
-    route.pathname = pathname;
-    const { container } = render(<MarketingNavbar />);
-    expect(container.innerHTML).toBe("");
-  });
+  it.each(["/join", "/login", "/signup"])(
+    "hides navigation at %s",
+    (pathname) => {
+      route.pathname = pathname;
+      const { container } = render(<MarketingNavbar />);
+      expect(container.innerHTML).toBe("");
+    },
+  );
 });

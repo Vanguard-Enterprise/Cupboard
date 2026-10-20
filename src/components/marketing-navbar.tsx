@@ -94,6 +94,7 @@ export function MarketingNavbar() {
   const pathname = usePathname();
   const [announcementOpen, setAnnouncementOpen] = useState(true);
   if (
+    pathname === "/join" ||
     pathname === "/login" ||
     pathname === "/signup" ||
     pathname === "/dashboard" ||

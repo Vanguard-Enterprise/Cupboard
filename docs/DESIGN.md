@@ -412,8 +412,8 @@ Game server, Database, Backups, and Bot server as editable recommended defaults.
 
 ## Marketing navigation
 
-Marketing pages share a dark-only header. Sign-in, signup, and dashboard pages
-retain their existing layouts without this header. Follow the linked Giga capture's
+Marketing pages share a dark-only header. Sign-in, signup, invitation acceptance,
+and dashboard pages retain their existing layouts without this header. Follow the linked Giga capture's
 single integrated navigation row, with the logo alone at the left, Product, Docs,
 and Resources centered, and Pricing, Sign in, and a pale pill Get started action
 at the right. Put a slim dismissible announcement above the row. The user requested
