@@ -22,6 +22,7 @@ describe("marketing performance showcase", () => {
   it("changes the illustrated report when a time range is selected", async () => {
     const user = userEvent.setup();
     render(<MarketingShowcase />);
+    expect(screen.queryByText(/15\.8%/)).toBeNull();
     expect(
       screen.getByRole("button", { name: "1W" }).getAttribute("aria-pressed"),
     ).toBe("true");

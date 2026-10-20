@@ -206,9 +206,6 @@ export function MarketingShowcase() {
                       {values.at(-1)}
                       <small> FPS</small>
                     </strong>
-                    <em>
-                      <ArrowUpRight /> 15.8%
-                    </em>
                   </div>
                   <div>
                     <span>TARGET</span>
