@@ -297,3 +297,14 @@ selections. The organization switcher shows the saved logo and refreshes on upda
 Manual logo URLs are removed; other profile fields remain browser-local.
 Replacement cleanup and abandoned uploads use the existing storage cleanup loop.
 No additional runtime, worker, bucket, or credentials are introduced.
+
+## Marketing homepage
+
+CUP-51 adds a public marketing homepage using Giga's dark landing-page composition,
+adapted to Cupboard. This extends the navbar-only work in CUP-50 at the user's
+explicit request. It describes implemented server, machine, file, and organization
+capabilities, uses decorative product illustrations, and links signup actions to
+the existing account flow. Interactive setup steps, product tabs, and FAQ answers
+are public presentation state only. The page reads no private organization data,
+collects no lead information, and introduces no API, persistence, or service.
+Documentation and resource destinations remain the requested placeholder links.

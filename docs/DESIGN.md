@@ -380,3 +380,77 @@ uses organization links. Upload uses a dialog with browsing and drag/drop. Keep 
 least 44 pixels and allow filenames to be read in the details dialog.
 
 Reference: [Google Drive file list on Mobbin](https://mobbin.com/screens/4e58234e-a5d7-4119-8ab6-f4d7dbc4f20d).
+
+## Marketing navigation
+
+Marketing pages share a dark-only header. Sign-in, signup, and dashboard pages
+retain their existing layouts without this header. Follow the linked Giga capture's
+single integrated navigation row, with the logo alone at the left, Product, Docs,
+and Resources centered, and Pricing, Sign in, and a pale pill Get started action
+at the right. Put a slim dismissible announcement above the row. The user requested
+a fictional Cupboard 5 announcement as a design reference; replace that copy before
+publishing a real release. Keep charcoal surfaces and Cupboard's sage cabinet mark.
+Docs groups getting started, integrations, user management, identity providers,
+and servers and machines. Resources groups Guides, Changelog, and Support with
+short descriptions. These links reserve future content destinations; do not add
+GitHub or source-code links to marketing navigation. Cupboard is not open source.
+On mobile, keep the logo and a Menu control. Use the shared
+Sheet with labeled Menu and Close controls, 44-pixel links, keyboard focus
+containment, and Escape dismissal.
+
+Reference: the Giga capture linked below.
+
+## Marketing landing page
+
+CUP-51 expands the marketing work to a full homepage, based on the linked
+[Giga landing-page capture](https://mobbin.com/sites/giga-e8026bbd-682d-4bab-820c-eddb76d71bff/77a9cacb-2791-4f1d-8111-39cbe7b4ec13/sections).
+Use its dark grid, dotted type, line reveal, section sequence, setup walkthrough,
+map, framed product illustrations, capability panels, story composition, FAQ,
+closing action, and footer. Keep Cupboard's cabinet mark, charcoal and sage tokens,
+logo-only integrated navigation, and authentication/dashboard header exclusions.
+
+Marketing has a scoped exception to the workspace's compact typography and
+restrained imagery rules: large dot-pattern headings, subtle atmospheric color,
+and the existing coastal Rust artwork may establish the page composition.
+These styles live in the landing component's CSS module and do not alter the
+workspace or authentication design. The headline resolves scrambled glyphs once; light columns, the logo marquee, rotating subheadline, and map move continuously following the
+reference recording. The hero omits the explore card, graph caption, and visible
+motion control at the user's request. The overview uses a regular sans-serif
+heading, no eyebrow or supporting paragraph, and a wide product view without
+a separate outer frame.
+The overview showcase follows the [Giga Showcase capture](https://mobbin.com/sites/sections/b0f8fb5b-aa00-4aec-8213-2418d9a7a275):
+a single-line heading above a full-width dark operations window, a slim workspace
+bar, narrow navigation, paired performance metrics, and a wide chart. A progressive
+lower gradient and masked backdrop blur blend the dashboard into the page.
+Its entrance resolves blur, opacity, and vertical offset once; the chart draws in
+2.6 seconds. Time-range controls update the illustrated readings, and pointer or
+keyboard inspection exposes individual values. Mobile retains the chart and
+summary while removing the decorative sidebar. Reduced motion shows the finished
+chart immediately. These interactions use local presentation data, not live telemetry.
+The chart's hover marker follows the SVG curve continuously rather than snapping
+between readings. The tooltip and crosshair ease between positions. Controls and
+metric cards respond to hover and keyboard focus; the decorative Console/Overview
+segments respond to hover without changing the dashboard. Monitoring can be toggled
+within the illustration. The showcase remains one view.
+All additional transitions respect reduced motion.
+Sections reveal once as they enter view. All content stays visible without JavaScript,
+and reduced-motion preference removes optional animation and hidden reveal states.
+
+Use real Cupboard capabilities in copy. Product illustrations are decorative,
+not connected telemetry. Do not invent customer logos, testimonials, certification
+badges, subscription prices, or performance statistics to fill reference sections.
+Setup steps, product tabs, and FAQ disclosures use source-owned components and
+support keyboard input. Signup actions lead to the existing account flow. Docs
+and resource links retain the requested placeholder destinations until that work
+is separately authorized.
+
+The hero graph draws once from left to right in six seconds on desktop and 2.8
+seconds on mobile. One reveal includes the line, upper gradient, and four labeled
+checkpoints, with no additional moving dot. Wide screens extend the line on either
+side while keeping checkpoint positions and proportions fixed. Mobile gives the
+curve more vertical room and uses readable labels below the markers. It does not
+scroll or repeat. The user-selected Vital, Wicked, Vitality, Atlas, Physgun, and
+GameServerKings logos replace the feature strip. Use their actual locally stored
+marks in white/grayscale without customer or endorsement claims. Sources are
+recorded beside the assets. Logo links and their focus targets remain accessible;
+the duplicate marquee group is hidden from assistive technology and keyboard focus.
