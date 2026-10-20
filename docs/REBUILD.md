@@ -374,3 +374,14 @@ so multiple clients share the same reservation. Contended observations wait in
 FIFO order for at most eight seconds before a bounded jittered client retry.
 Waiting observations do not hold shared operation permits. Candidate imported-state lookup uses one scoped database query
 for the complete bounded candidate set.
+
+## Marketing homepage
+
+CUP-51 adds a public marketing homepage using Giga's dark landing-page composition,
+adapted to Cupboard. This extends the navbar-only work in CUP-50 at the user's
+explicit request. It describes implemented server, machine, file, and organization
+capabilities, uses decorative product illustrations, and links signup actions to
+the existing account flow. Interactive setup steps, product tabs, and FAQ answers
+are public presentation state only. The page reads no private organization data,
+collects no lead information, and introduces no API, persistence, or service.
+Documentation and resource destinations remain the requested placeholder links.
