@@ -299,6 +299,7 @@ async fn save(
     {
         return Err(conflict());
     }
+    let before = current.as_ref().and_then(|saved| saved.error.clone());
     let now = now();
     let (servers, error, last_success) = match result {
         Ok(servers) => (
@@ -313,6 +314,7 @@ async fn save(
     };
     sqlx::query("INSERT INTO pelican_connections(organization_id,id,revision,panel_url,api_key_encrypted,checked_at,last_success_at,error,servers) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(organization_id) DO UPDATE SET revision=EXCLUDED.revision,panel_url=EXCLUDED.panel_url,api_key_encrypted=EXCLUDED.api_key_encrypted,checked_at=EXCLUDED.checked_at,last_success_at=EXCLUDED.last_success_at,error=EXCLUDED.error,servers=EXCLUDED.servers")
         .bind(&org).bind(&id).bind(input.revision.unwrap_or(0)+1).bind(url.as_str()).bind(encrypted).bind(now).bind(last_success).bind(error).bind(servers).execute(&mut *tx).await?;
+    announce(&mut tx, &org, before.as_deref(), error).await?;
     let response = stored(&mut tx, &org)
         .await?
         .ok_or_else(internal)?
@@ -353,6 +355,7 @@ async fn check(
     if current.id != previous.id || current.revision != previous.revision {
         return Err(conflict());
     }
+    let before = current.error.clone();
     let now = now();
     let (servers, error, success) = match result {
         Ok(servers) => (
@@ -362,6 +365,7 @@ async fn check(
         ),
         Err(error) => (current.servers, Some(error), current.last_success_at),
     };
+    announce(&mut tx, &org, before.as_deref(), error).await?;
     sqlx::query("UPDATE pelican_connections SET revision=revision+1,checked_at=$2,last_success_at=$3,error=$4,servers=$5 WHERE organization_id=$1")
         .bind(&org).bind(now).bind(success).bind(error).bind(servers).execute(&mut *tx).await?;
     let response = stored(&mut tx, &org)
@@ -438,9 +442,47 @@ pub(crate) async fn poll_due(
     };
     // Organization, connection identity, revision, and timestamp all must still
     // match. A manual check, edit, or disconnect wins over the scheduled result.
+    let mut tx = pool.begin().await?;
+    let before: Option<Option<String>> = sqlx::query_scalar("SELECT error FROM pelican_connections WHERE organization_id=$1 AND id=$2 AND revision=$3 AND checked_at=$4 FOR UPDATE")
+        .bind(&org).bind(&id).bind(revision).bind(previous_check).fetch_optional(&mut *tx).await?;
+    let Some(before) = before else {
+        return Ok(true);
+    };
     sqlx::query("UPDATE pelican_connections SET checked_at=$4,next_check_at=$4+300000,last_success_at=CASE WHEN $5::jsonb IS NOT NULL THEN $4 ELSE last_success_at END,servers=COALESCE($5,servers),error=$6 WHERE organization_id=$1 AND id=$2 AND revision=$3 AND checked_at=$7")
-        .bind(org).bind(id).bind(revision).bind(checked).bind(servers).bind(error).bind(previous_check).execute(pool).await?;
+        .bind(&org).bind(&id).bind(revision).bind(checked).bind(servers).bind(error).bind(previous_check).execute(&mut *tx).await?;
+    announce(&mut tx, &org, before.as_deref(), error).await?;
+    tx.commit().await?;
     Ok(true)
+}
+async fn announce(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> ApiResult<()> {
+    match (before, after) {
+        (None, Some(error)) => {
+            crate::alerts::record(
+                tx,
+                org,
+                "pelican.failed",
+                "Pelican check failed",
+                &format!("Cupboard could not refresh the Pelican server inventory. {error}"),
+            )
+            .await
+        }
+        (Some(_), None) => {
+            crate::alerts::record(
+                tx,
+                org,
+                "pelican.recovered",
+                "Pelican checks recovered",
+                "Cupboard refreshed the Pelican server inventory successfully.",
+            )
+            .await
+        }
+        _ => Ok(()),
+    }
 }
 async fn remove(
     State(pool): State<PgPool>,

@@ -217,8 +217,6 @@ async fn check(
     if !ctx.permissions.iter().any(|p| p == "servers.manage") {
         return Err(forbidden());
     }
-    let server: Server = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid FROM servers WHERE organization_id=$1 AND id=$2")
-        .bind(&ctx.organization_id).bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::NOT_FOUND, "Server not found."))?;
     let locked: bool =
         sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1, 6))")
             .bind(&id)
@@ -230,6 +228,9 @@ async fn check(
             "A connection check is already running for this server.",
         ));
     }
+    // Read under the lock so alerts compare against the latest committed check.
+    let server: Server = sqlx::query_as("SELECT id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid FROM servers WHERE organization_id=$1 AND id=$2")
+        .bind(&ctx.organization_id).bind(&id).fetch_optional(&mut *tx).await?.ok_or(ApiError(StatusCode::NOT_FOUND, "Server not found."))?;
     let result = probe(&mut tx, &key, &ctx.organization_id, &server).await?;
     tx.commit().await?;
     Ok(Json(result))
@@ -275,7 +276,60 @@ async fn probe(
     };
     let result = sqlx::query_as("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint,rcon_status=$3,a2s_status=$4,players=COALESCE($5,players),players_at=CASE WHEN $5::bigint IS NOT NULL THEN (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint ELSE players_at END,players_source=COALESCE($6,players_source) WHERE organization_id=$1 AND id=$2 RETURNING id,name,rcon_host,rcon_port,a2s_host,a2s_port,checked_at,rcon_status,a2s_status,players,players_at,players_source,panel_server_uuid")
         .bind(org).bind(&server.id).bind(rcon.as_str()).bind(a2s.as_str()).bind(observation.map(|v| v.0)).bind(observation.map(|v| v.1)).fetch_one(&mut **tx).await?;
+    announce(tx, org, server, &result).await?;
     Ok(result)
+}
+fn online(server: &Server) -> Option<bool> {
+    server.checked_at?;
+    Some(
+        server.rcon_status.as_deref() == Some("connected")
+            || server.a2s_status.as_deref() == Some("connected"),
+    )
+}
+fn outcome(status: Option<&str>) -> &'static str {
+    match status {
+        Some("authentication_failed") => "authentication failed",
+        Some("unreachable") => "unreachable",
+        Some("timeout") => "timed out",
+        Some("invalid_configuration") => "not configured",
+        Some("protocol_error") => "unexpected response",
+        _ => "unknown",
+    }
+}
+// The advisory lock held by every probe orders transitions for each server.
+async fn announce(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: &str,
+    before: &Server,
+    after: &Server,
+) -> ApiResult<()> {
+    match (online(before), online(after)) {
+        (Some(true), Some(false)) => {
+            crate::alerts::record(
+                tx,
+                org,
+                "server.offline",
+                &format!("{} is offline", after.name),
+                &format!(
+                    "RCON and A2S health checks both failed. RCON: {}. A2S: {}.",
+                    outcome(after.rcon_status.as_deref()),
+                    outcome(after.a2s_status.as_deref())
+                ),
+            )
+            .await
+        }
+        (Some(false), Some(true)) => {
+            crate::alerts::record(
+                tx,
+                org,
+                "server.recovered",
+                &format!("{} is back online", after.name),
+                "Health checks are succeeding again.",
+            )
+            .await
+        }
+        _ => Ok(()),
+    }
 }
 /// Poll within the API runtime. The database lock and freshness check prevent
 /// duplicate probes across replicas and operator-triggered checks.

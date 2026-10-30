@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   accessPath,
+  alertsPath,
   auditLogPath,
   connectionsPath,
   credentialsPath,
@@ -21,5 +22,8 @@ describe("dashboard navigation", () => {
     expect(navigationHref("audit-log")).toBe(auditLogPath);
     expect(navigationHref("team-users")).toBe(usersPath);
     expect(navigationHref("team-roles")).toBe(rolesPath);
+    expect(navigationHref("alerts-data")).toBe(alertsPath);
+    // Observability's planned alerts page is separate from alert settings.
+    expect(navigationHref("alerts")).toBeUndefined();
   });
 });

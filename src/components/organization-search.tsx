@@ -30,7 +30,7 @@ import {
   accessPath,
   auditLogPath,
   connectionsPath,
-  notificationsDataPath,
+  alertsPath,
   rolesPath,
   serversPath,
   machinesPath,
@@ -193,10 +193,10 @@ export function OrganizationSearch({
                   Connections
                 </CommandItem>
                 <CommandItem
-                  value="Organization notifications data preferences browser storage"
-                  onSelect={() => navigate(notificationsDataPath)}
+                  value="Organization alerts notifications discord webhooks data export retention"
+                  onSelect={() => navigate(alertsPath)}
                 >
-                  Notifications &amp; data
+                  Alerts &amp; data
                 </CommandItem>
               </CommandGroup>
               <CommandGroup heading="Organization information">
