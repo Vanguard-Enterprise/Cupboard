@@ -551,6 +551,7 @@ dependencies = [
  "axum-login",
  "email_address",
  "futures-util",
+ "hmac",
  "image",
  "object_store",
  "percent-encoding",

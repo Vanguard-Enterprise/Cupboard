@@ -376,6 +376,19 @@ async fn mutate(
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
+            if existing.status != "invited" {
+                crate::alerts::record(
+                    &mut tx,
+                    &org,
+                    "member.removed",
+                    &format!("{} was removed", existing.name),
+                    &format!(
+                        "{} removed {} from the organization.",
+                        account.name, existing.email
+                    ),
+                )
+                .await?;
+            }
         }
     }
     let owners:i64=sqlx::query_scalar("SELECT count(*) FROM organization_members m JOIN organizations o ON o.id=m.organization_id JOIN organization_member_roles mr ON mr.organization_id=m.organization_id AND mr.member_id=m.id WHERE m.organization_id=$1 AND mr.role_id='owner' AND m.status='active' AND m.account_id=o.owner_account_id").bind(&org).fetch_one(&mut *tx).await?;
@@ -427,6 +440,14 @@ async fn accept(
             "This invitation is invalid, expired, or belongs to another email address.",
         ));
     }
+    crate::alerts::record(
+        &mut tx,
+        &org,
+        "member.joined",
+        &format!("{} joined", user.name),
+        &format!("{} accepted an invitation to the organization.", user.email),
+    )
+    .await?;
     sqlx::query("UPDATE organizations SET revision=revision+1 WHERE id=$1")
         .bind(&org)
         .execute(&mut *tx)

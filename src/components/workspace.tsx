@@ -26,7 +26,7 @@ import {
   auditLogPath,
   connectionsPath,
   credentialsPath,
-  notificationsDataPath,
+  alertsPath,
   profilePath,
   rolesPath,
   serversPath,
@@ -87,14 +87,10 @@ export function Workspace({
                       activeSection: "access",
                       crumbs: ["Organization", "Security", "Approvals"],
                     }
-                  : pathname === notificationsDataPath
+                  : pathname === alertsPath
                     ? {
-                        activeSection: "preferences",
-                        crumbs: [
-                          "Organization",
-                          "Settings",
-                          "Notifications & data",
-                        ],
+                        activeSection: "alerts-data",
+                        crumbs: ["Organization", "Settings", "Alerts & data"],
                       }
                     : undefined;
   const teamPage =
