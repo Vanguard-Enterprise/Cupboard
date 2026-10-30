@@ -42,6 +42,8 @@ const RETENTION_DAYS: [i32; 3] = [7, 30, 90];
 /// A healthy agent reports well inside the offline threshold, so this wait lets
 /// fleets report in after Cupboard or its database was unavailable.
 const REPORT_GRACE: Duration = Duration::from_secs(90);
+/// Covers DNS resolution as well as the request, which has its own timeout.
+const SEND_DEADLINE: Duration = Duration::from_secs(10);
 const MANAGE: &[&str] = &["organization.manage"];
 // The export returns data that other routes protect with their own permissions.
 const EXPORT: &[&str] = &[
@@ -723,7 +725,26 @@ pub(crate) fn signature(secret: &str, timestamp: i64, body: &[u8]) -> String {
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     format!("t={timestamp},v1={hex}")
 }
+async fn within(
+    deadline: Duration,
+    attempt: impl Future<Output = Result<(), Failure>>,
+) -> Result<(), Failure> {
+    tokio::time::timeout(deadline, attempt)
+        .await
+        .unwrap_or_else(|_| {
+            Err(Failure::Retry(
+                "The destination did not respond within 10 seconds.".into(),
+            ))
+        })
+}
 async fn send(
+    target: &Decrypted,
+    message: &Message<'_>,
+    policy: &PanelPolicy,
+) -> Result<(), Failure> {
+    within(SEND_DEADLINE, attempt(target, message, policy)).await
+}
+async fn attempt(
     target: &Decrypted,
     message: &Message<'_>,
     policy: &PanelPolicy,
@@ -860,7 +881,8 @@ async fn drain(pool: &PgPool, key: &SecretKey, policy: &PanelPolicy) {
 pub(crate) async fn sweep_machines(pool: &PgPool) -> ApiResult<usize> {
     let mut tx = pool.begin().await?;
     // The guard on alert_offline makes concurrent replicas announce each outage once.
-    let stale: Vec<(String, String)> = sqlx::query_as("UPDATE machines SET alert_offline=true WHERE agent_hash IS NOT NULL AND last_seen_at < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-90000 AND NOT alert_offline RETURNING organization_id,name")
+    // An agent that enrolled but never reported counts from its enrollment.
+    let stale: Vec<(String, String)> = sqlx::query_as("UPDATE machines SET alert_offline=true WHERE agent_hash IS NOT NULL AND COALESCE(last_seen_at,enrolled_at) < (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-90000 AND NOT alert_offline RETURNING organization_id,name")
         .fetch_all(&mut *tx)
         .await?;
     for (org, name) in &stale {
@@ -1067,6 +1089,16 @@ mod tests {
         assert!(!gate.open(start));
         assert!(!gate.open(start + REPORT_GRACE - Duration::from_secs(1)));
         assert!(gate.open(start + REPORT_GRACE));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_send_fails_with_a_retry_at_its_deadline() {
+        let result = within(
+            Duration::from_millis(10),
+            std::future::pending::<Result<(), Failure>>(),
+        )
+        .await;
+        assert!(matches!(result, Err(Failure::Retry(_))));
     }
 
     #[test]

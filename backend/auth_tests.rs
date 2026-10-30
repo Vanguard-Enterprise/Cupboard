@@ -5584,6 +5584,26 @@ async fn alerts_are_scoped_authorized_encrypted_routed_retried_and_exported() {
         StatusCode::OK
     );
     assert_eq!(count("machine.recovered").await, 2);
+    // An agent that enrolls and never reports is still detected.
+    let silent = owner.request("POST", "machines", machine_input()).await.1["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sqlx::query("UPDATE machines SET agent_hash=$2,enrolled_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint WHERE id=$1")
+        .bind(&silent)
+        .bind(crate::auth::digest(&crate::auth::secret()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    assert_eq!(count("machine.offline").await, 2);
+    sqlx::query("UPDATE machines SET enrolled_at=0 WHERE id=$1")
+        .bind(&silent)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    assert_eq!(count("machine.offline").await, 3);
     while crate::alerts::deliver_due(&pool, &key, &policy)
         .await
         .unwrap()

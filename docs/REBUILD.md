@@ -380,8 +380,9 @@ records an alert in the same transaction as the state change that caused it:
 a server whose RCON and A2S checks both start failing or recover, an enrolled
 machine that stops reporting for 90 seconds or reports again, a Pelican check
 that starts failing or recovers, and a member who joins or is removed. Machine
-staleness is detected by a sweep in the API's background loop; a stored flag
-makes each outage announce once across replicas. The sweep waits 90 seconds
+staleness is detected by a sweep in the API's background loop, counting from
+enrollment when an agent has never reported; a stored flag makes each outage
+announce once across replicas. The sweep waits 90 seconds
 after startup or a failed sweep, so an outage of Cupboard or its database does
 not read as every machine going offline.
 
