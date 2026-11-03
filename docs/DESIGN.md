@@ -500,3 +500,21 @@ GameServerKings logos replace the feature strip. Use their actual locally stored
 marks in white/grayscale without customer or endorsement claims. Sources are
 recorded beside the assets. Logo links and their focus targets remain accessible;
 the duplicate marquee group is hidden from assistive technology and keyboard focus.
+
+## Maintenance and status page
+
+The admin page follows [incident.io's status page overview](https://mobbin.com/screens/1c0dbbc8-df9c-408c-9d03-b2ae7be690d0)
+and [components settings](https://mobbin.com/screens/2f54654e-82b2-4664-b483-65fa66ebf0ef):
+a header with the page name, published state, copyable public address, Visit
+status page, and a primary Schedule maintenance action, then Overview and
+Settings tabs. Overview pairs a single status banner with grouped components on
+the left and maintenance windows on the right; past windows collapse. Settings
+keeps page setup, the sortable component list with eye toggles for visibility,
+and a public preview in one form with the shared sticky save bar. The preview
+follows [Better Stack's public page](https://mobbin.com/screens/0d34fbf2-e4c4-451c-ad5d-de3cdf409164)
+composition and is the reference for the public page slice. Status colors use
+the existing tokens: sage operational, amber degraded, red unavailable, neutral
+for maintenance and unknown, always with a text label. The source picker uses
+the shared Popover and Command components inside the dialog; the base-ui
+Combobox is not used inside modal dialogs because its portal sits outside the
+dialog's pointer-events layer.

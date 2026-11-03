@@ -427,10 +427,17 @@ it("forwards only bounded alert channel paths", async () => {
     `alerts/channels/${id}/remove`,
     `alerts/channels/${id}/rotate`,
     "organization/export",
+    "status-page",
+    "status-page/maintenance",
+    `status-page/maintenance/${id}`,
+    `status-page/maintenance/${id}/complete`,
+    `status-page/maintenance/${id}/remove`,
   ])
     expect((await proxyApi(request(), path)).status).toBe(200);
   for (const invalid of [
     "alerts/channels/arbitrary",
+    "status-page/maintenance/arbitrary",
+    `status-page/maintenance/${id}/delete`,
     `alerts/channels/${id}/delete`,
     `alerts/channels/${id}/../../auth/me`,
     "alerts/events",

@@ -34,6 +34,7 @@ import {
   rolesPath,
   serversPath,
   machinesPath,
+  maintenancePath,
   usersPath,
 } from "@/lib/dashboard-navigation";
 
@@ -117,6 +118,12 @@ export function OrganizationSearch({
                   onSelect={() => navigate(machinesPath)}
                 >
                   Machines
+                </CommandItem>
+                <CommandItem
+                  value="Maintenance status page uptime windows"
+                  onSelect={() => navigate(maintenancePath)}
+                >
+                  Maintenance
                 </CommandItem>
                 <CommandItem
                   value="Dashboard overview"

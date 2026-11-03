@@ -419,3 +419,17 @@ the existing account flow. Interactive setup steps, product tabs, and FAQ answer
 are public presentation state only. The page reads no private organization data,
 collects no lead information, and introduces no API, persistence, or service.
 Documentation and resource destinations remain the requested placeholder links.
+
+## Maintenance and status page
+
+The status page lives in the existing Rust runtime and PostgreSQL. One page per
+organization stores its name, unique public address, published flag,
+announcement, and support link with a revision for conflict detection. Components
+reference a saved server or machine by kind and id; their health is derived at
+read time from the stored connection checks and agent reports, so no new poller,
+history store, or worker is introduced. Maintenance windows store a title,
+message, time range, completion time, and the affected component ids. Reads need
+`infrastructure.view`; writes need `infrastructure.manage`; both check the page
+organization and tenant ownership in the data path. This slice ships the admin
+page only. The public `/status/<address>` page, uptime history, and incident
+posts are separate follow-ups.

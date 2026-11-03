@@ -32,6 +32,7 @@ impl Client {
             || path.starts_with("integrations/")
             || path.starts_with("servers/")
             || path.starts_with("alerts")
+            || path.starts_with("status-page")
             || path == "organization/export"
         {
             request = request.header("x-cupboard-organization", &self.organization);
@@ -5896,4 +5897,295 @@ async fn alerts_are_scoped_authorized_encrypted_routed_retried_and_exported() {
             })
     }));
     hook_task.abort();
+}
+
+#[tokio::test]
+async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::secrets::SecretKey::parse(&"ef".repeat(32)).unwrap(),
+    ));
+    let suffix = uuid::Uuid::new_v4();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut member = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    assert_eq!(
+        anonymous.request("GET", "status-page", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    owner
+        .signup(&format!("status-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let org = owner.organization.clone();
+
+    // Defaults come from the organization until the first save.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["revision"], 0);
+    assert_eq!(page["name"], "Test organization");
+    assert_eq!(page["slug"], "test-organization");
+    assert_eq!(page["published"], false);
+    assert_eq!(page["components"], json!([]));
+    assert_eq!(page["sources"], json!([]));
+    owner.organization = other.organization.clone();
+    assert_eq!(
+        owner.request("GET", "status-page", json!(null)).await.0,
+        StatusCode::CONFLICT
+    );
+    owner.organization = org.clone();
+
+    let server_input = json!({"name":"Rust EU","rconHost":"127.0.0.1","rconPort":28016,"rconPassword":"rcon-secret-never-returned","a2sHost":"127.0.0.1","a2sPort":28017});
+    let (status, server) = owner.request("POST", "servers", server_input.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{server}");
+    let server_id = server["id"].as_str().unwrap().to_owned();
+    let (status, machine) = owner.request("POST", "machines", machine_input()).await;
+    assert_eq!(status, StatusCode::OK, "{machine}");
+    let machine_id = machine["id"].as_str().unwrap().to_owned();
+    let (status, foreign) = other.request("POST", "servers", server_input).await;
+    assert_eq!(status, StatusCode::OK, "{foreign}");
+    let foreign_id = foreign["id"].as_str().unwrap().to_owned();
+
+    let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","components":components});
+    let component = |id: Option<&str>, kind: &str, source: &str, public: bool| json!({"id":id,"name":format!("{kind} shown"),"kind":kind,"sourceId":source,"groupName":"EU","public":public});
+    // Another organization's server cannot be shown, even with a valid id.
+    for (body, expected) in [
+        (
+            save(
+                0,
+                "northstar",
+                json!([component(None, "server", &foreign_id, true)]),
+            ),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            save(
+                0,
+                "northstar",
+                json!([
+                    component(None, "server", &server_id, true),
+                    component(None, "server", &server_id, false)
+                ]),
+            ),
+            StatusCode::BAD_REQUEST,
+        ),
+        (save(0, "North Star", json!([])), StatusCode::BAD_REQUEST),
+        (save(1, "northstar", json!([])), StatusCode::CONFLICT),
+        (
+            json!({"revision":0,"name":"x","slug":"x","published":false,"announcement":"","supportUrl":"http://insecure.example.com","components":[]}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, response) = owner.request("POST", "status-page", body).await;
+        assert_eq!(status, expected, "{response}");
+    }
+    assert_eq!(
+        owner.request("GET", "status-page", json!(null)).await.1["revision"],
+        0
+    );
+
+    let (status, saved) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                0,
+                "northstar",
+                json!([
+                    component(None, "server", &server_id, true),
+                    component(None, "machine", &machine_id, false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["name"], "Northstar status");
+    assert_eq!(saved["published"], true);
+    assert_eq!(saved["components"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["components"][0]["sourceName"], "Rust EU");
+    assert_eq!(saved["components"][0]["health"], "unknown");
+    assert_eq!(saved["components"][1]["kind"], "machine");
+    assert_eq!(saved["components"][1]["public"], false);
+    assert_eq!(saved["sources"].as_array().unwrap().len(), 2);
+    assert!(!saved.to_string().contains("rcon-secret"));
+    let server_component = saved["components"][0]["id"].as_str().unwrap().to_owned();
+    let machine_component = saved["components"][1]["id"].as_str().unwrap().to_owned();
+
+    // Public addresses are unique across organizations; other tenants see nothing.
+    let (status, response) = other
+        .request("POST", "status-page", save(0, "northstar", json!([])))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+    let (status, response) = other.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["revision"], 0);
+    assert_eq!(response["components"], json!([]));
+
+    // Reordering keeps component ids, so maintenance links survive.
+    let (status, reordered) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                1,
+                "northstar",
+                json!([
+                    component(Some(&machine_component), "machine", &machine_id, true),
+                    component(Some(&server_component), "server", &server_id, true)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reordered}");
+    assert_eq!(reordered["revision"], 2);
+    assert_eq!(reordered["components"][0]["id"], machine_component);
+    assert_eq!(reordered["components"][1]["id"], server_component);
+
+    let now = time::OffsetDateTime::now_utc().unix_timestamp() * 1000;
+    let window = |starts: i64, ends: i64, ids: Value| json!({"title":" Monthly wipe ","message":"Map reset.","startsAt":starts,"endsAt":ends,"componentIds":ids});
+    for body in [
+        window(now, now - 1, json!([])),
+        window(now, now + 31 * 86_400_000, json!([])),
+        window(now, now + 1000, json!([uuid::Uuid::new_v4().to_string()])),
+    ] {
+        let (status, response) = owner.request("POST", "status-page/maintenance", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+    }
+    let (status, scheduled) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window(now - 1000, now + 3_600_000, json!([server_component])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    assert_eq!(scheduled["maintenance"].as_array().unwrap().len(), 1);
+    assert_eq!(scheduled["maintenance"][0]["title"], "Monthly wipe");
+    assert_eq!(scheduled["maintenance"][0]["completedAt"], Value::Null);
+    assert_eq!(
+        scheduled["maintenance"][0]["componentIds"],
+        json!([server_component])
+    );
+    let window_id = scheduled["maintenance"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    for path in [
+        format!("status-page/maintenance/{window_id}"),
+        format!("status-page/maintenance/{window_id}/complete"),
+        format!("status-page/maintenance/{window_id}/remove"),
+    ] {
+        let body = if path.ends_with(&window_id) {
+            window(now, now + 1000, json!([]))
+        } else {
+            json!({})
+        };
+        assert_eq!(
+            other.request("POST", &path, body).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        other.request("GET", "status-page", json!(null)).await.1["maintenance"],
+        json!([])
+    );
+
+    let (status, updated) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{window_id}"),
+            json!({"title":"Wipe and host reboot","message":"","startsAt":now - 1000,"endsAt":now + 7_200_000,"componentIds":[]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["maintenance"][0]["title"], "Wipe and host reboot");
+    assert_eq!(updated["maintenance"][0]["componentIds"], json!([]));
+    let (status, completed) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{window_id}/complete"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{completed}");
+    let completed_at = completed["maintenance"][0]["completedAt"].as_i64().unwrap();
+    assert!(completed_at >= now - 1000);
+    assert!(completed["maintenance"][0]["endsAt"].as_i64().unwrap() <= completed_at);
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                &format!("status-page/maintenance/{window_id}"),
+                window(now, now + 1000, json!([]))
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, removed) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{window_id}/remove"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["maintenance"], json!([]));
+
+    // Infrastructure viewers can read the page but cannot change it.
+    let viewer = owner
+        .create_role("Infrastructure viewer", &["infrastructure.view"])
+        .await;
+    let member_email = format!("status-member-{suffix}@example.com");
+    member.signup(&member_email).await;
+    let (_, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Member","email":member_email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    member.request("GET", "auth/me", json!(null)).await;
+    let (status, visible) = member.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{visible}");
+    assert_eq!(visible["revision"], 2);
+    assert_eq!(
+        member
+            .request("POST", "status-page", save(2, "northstar", json!([])))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "status-page/maintenance",
+                window(now, now + 1000, json!([]))
+            )
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
 }

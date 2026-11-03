@@ -31,6 +31,8 @@ const paths = new Set([
   "alerts/settings",
   "alerts/channels",
   "organization/export",
+  "status-page",
+  "status-page/maintenance",
 ]);
 export function backendUrl(path: string) {
   const base = process.env.CUPBOARD_API_URL ?? "http://127.0.0.1:8080";
@@ -64,7 +66,12 @@ export async function proxyApi(
     !/^files\/[0-9a-f-]{36}(?:\/(?:delete|rename|move|copy|share|share\/revoke))?$/.test(
       path,
     ) &&
-    !/^alerts\/channels\/[0-9a-f-]{36}(?:\/(?:remove|rotate|test))?$/.test(path)
+    !/^alerts\/channels\/[0-9a-f-]{36}(?:\/(?:remove|rotate|test))?$/.test(
+      path,
+    ) &&
+    !/^status-page\/maintenance\/[0-9a-f-]{36}(?:\/(?:complete|remove))?$/.test(
+      path,
+    )
   )
     return Response.json({ error: "Not found." }, { status: 404 });
   const headers = new Headers();
@@ -90,7 +97,9 @@ export async function proxyApi(
     path.startsWith("integrations/") ||
     path === "alerts" ||
     path.startsWith("alerts/") ||
-    path === "organization/export"
+    path === "organization/export" ||
+    path === "status-page" ||
+    path.startsWith("status-page/")
   ) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);

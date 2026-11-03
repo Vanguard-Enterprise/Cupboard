@@ -640,3 +640,26 @@ Already-running databases and applications are left running. Applications that
 are stopped receive fresh reports after they start. Newly created worktrees join
 when their development seed is run. Use `npm run dev:machines` to run the shared
 reporter separately; its repository-wide lock prevents duplicate collectors.
+
+## Maintenance and status page
+
+Open `/dashboard/infrastructure/maintenance` to manage the organization's status
+page. Overview shows every component's live health, with maintenance windows that
+are happening now, scheduled, or past. Settings edits the page name, public
+address under `/status/<address>`, announcement, support link, and whether the
+page is published, and lists the components: each mirrors one saved game server
+or machine with its own display name, optional group, and public or hidden
+visibility. Drag the handle, use Arrow Up and Arrow Down, or the row menu to
+order them. A public preview reflects unsaved changes; Save changes applies the
+whole page at once and rejects edits made from an older revision.
+
+Server components are Operational when RCON and A2S both responded, Degraded
+when one did, and Unavailable when neither did; machines are Operational while
+reporting and Unavailable after 90 seconds of silence. Components without a
+check or report show Unknown. Schedule maintenance records a title, message,
+start and end, and the affected components (or all of them). While a window is
+open, its components show Under maintenance instead of their live health. Mark
+complete closes a window early; Delete removes it. Infrastructure viewers can
+read the page; infrastructure managers can change it. Public addresses are
+unique across organizations. The public `/status/<address>` page is not built
+yet, so the Visit status page link leads nowhere until that slice lands.
