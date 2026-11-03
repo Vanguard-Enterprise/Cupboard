@@ -27,6 +27,22 @@ export type MaintenanceWindow = {
 
 export type StatusSource = { id: string; name: string; kind: ComponentKind };
 
+/** The published page as visitors receive it: public targets by display name only. */
+export type PublicStatus = {
+  name: string;
+  announcement: string;
+  supportUrl: string;
+  updatedAt: number;
+  components: {
+    id: string;
+    name: string;
+    groupName: string;
+    health: ComponentHealth;
+    observedAt: number | null;
+  }[];
+  maintenance: MaintenanceWindow[];
+};
+
 export type StatusPageState = {
   revision: number;
   name: string;
@@ -164,7 +180,7 @@ export function overallStatus(
   if (considered.length === 0)
     return {
       tone: "unknown",
-      title: "No components yet",
+      title: "No targets yet",
       detail: "Add the servers and machines you want to show.",
     };
   const statuses = considered.map((c) => ({
@@ -182,7 +198,7 @@ export function overallStatus(
   if (down > 0)
     return {
       tone: "down",
-      title: `${plural(down, "component")} unavailable`,
+      title: `${plural(down, "target")} unavailable`,
       detail: statuses
         .filter((s) => s.status === "down")
         .map((s) => s.name)
@@ -191,7 +207,7 @@ export function overallStatus(
   if (degraded > 0)
     return {
       tone: "degraded",
-      title: `${plural(degraded, "component")} degraded`,
+      title: `${plural(degraded, "target")} degraded`,
       detail: statuses
         .filter((s) => s.status === "degraded")
         .map((s) => s.name)
@@ -201,21 +217,21 @@ export function overallStatus(
     return {
       tone: "maintenance",
       title: "Maintenance in progress",
-      detail: `${plural(inMaintenance, "component")} under maintenance.`,
+      detail: `${plural(inMaintenance, "target")} under maintenance.`,
     };
   if (unknown === considered.length)
     return {
       tone: "unknown",
       title: "Waiting for the first check",
-      detail: "Components show a status after their first health report.",
+      detail: "Targets show a status after their first health report.",
     };
   return {
     tone: "operational",
-    title: "All components operational",
+    title: "All targets operational",
     detail:
       unknown > 0
-        ? `${plural(unknown, "component")} still waiting for a first check.`
-        : `${plural(considered.length, "component")} reporting normally.`,
+        ? `${plural(unknown, "target")} still waiting for a first check.`
+        : `${plural(considered.length, "target")} reporting normally.`,
   };
 }
 
@@ -285,10 +301,10 @@ export function affectedNames(
   window: MaintenanceWindow,
   components: Pick<StatusComponent, "id" | "name">[],
 ) {
-  if (window.componentIds.length === 0) return "All components";
+  if (window.componentIds.length === 0) return "All targets";
   const names = components
     .filter((c) => window.componentIds.includes(c.id))
     .map((c) => c.name);
-  if (names.length === 0) return "Removed components";
+  if (names.length === 0) return "Removed targets";
   return names.join(", ");
 }

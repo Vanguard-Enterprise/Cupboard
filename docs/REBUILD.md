@@ -430,6 +430,8 @@ read time from the stored connection checks and agent reports, so no new poller,
 history store, or worker is introduced. Maintenance windows store a title,
 message, time range, completion time, and the affected component ids. Reads need
 `infrastructure.view`; writes need `infrastructure.manage`; both check the page
-organization and tenant ownership in the data path. This slice ships the admin
-page only. The public `/status/<address>` page, uptime history, and incident
-posts are separate follow-ups.
+organization and tenant ownership in the data path. The public
+`/status/<address>` route reads an unauthenticated API response that only
+includes public targets by display name and recent maintenance; the Next.js
+page renders it on the server and the browser refreshes it. Uptime history and
+incident posts are separate follow-ups.

@@ -83,7 +83,7 @@ describe("status page helpers", () => {
 
   it("summarizes the page from the worst component", () => {
     const now = 5;
-    expect(overallStatus([], [], now).title).toBe("No components yet");
+    expect(overallStatus([], [], now).title).toBe("No targets yet");
     expect(overallStatus([component("a", "unknown")], [], now).title).toBe(
       "Waiting for the first check",
     );
@@ -94,12 +94,12 @@ describe("status page helpers", () => {
     ];
     expect(overallStatus(all, [], now)).toMatchObject({
       tone: "down",
-      title: "1 component unavailable",
+      title: "1 target unavailable",
       detail: "c",
     });
     expect(overallStatus(all, [], now, true)).toMatchObject({
       tone: "degraded",
-      title: "1 component degraded",
+      title: "1 target degraded",
     });
     expect(overallStatus(all, [window(now - 1, now + 1)], now).tone).toBe(
       "maintenance",
@@ -112,7 +112,7 @@ describe("status page helpers", () => {
       ),
     ).toMatchObject({
       tone: "operational",
-      detail: "1 component still waiting for a first check.",
+      detail: "1 target still waiting for a first check.",
     });
   });
 
@@ -151,8 +151,8 @@ describe("status page helpers", () => {
     ).toEqual([{ id: "s1", name: "Host", kind: "machine" }]);
     expect(
       affectedNames(window(0, 1, ["b"]), [component("a", "operational")]),
-    ).toBe("Removed components");
-    expect(affectedNames(window(0, 1), [])).toBe("All components");
+    ).toBe("Removed targets");
+    expect(affectedNames(window(0, 1), [])).toBe("All targets");
   });
 
   it("builds drafts that only differ by meaningful edits", () => {

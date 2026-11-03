@@ -98,7 +98,8 @@ export function MarketingNavbar() {
     pathname === "/login" ||
     pathname === "/signup" ||
     pathname === "/dashboard" ||
-    pathname?.startsWith("/dashboard/")
+    pathname?.startsWith("/dashboard/") ||
+    pathname?.startsWith("/status/")
   )
     return null;
   return (

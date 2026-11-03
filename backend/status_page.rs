@@ -27,6 +27,7 @@ const WRITE: &str = "SELECT id FROM organizations WHERE id=$1 FOR NO KEY UPDATE"
 pub fn routes() -> Router<PgPool> {
     Router::new()
         .route("/app-api/status-page", get(read).post(save))
+        .route("/app-api/public/status/{slug}", get(public_read))
         .route("/app-api/status-page/maintenance", post(create_maintenance))
         .route(
             "/app-api/status-page/maintenance/{id}",
@@ -188,10 +189,8 @@ async fn settings(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Set
         support_url: String::new(),
     }))
 }
-async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<StatusPage> {
-    let org = &ctx.organization_id;
-    let settings = settings(conn, ctx).await?;
-    let components = sqlx::query_as(
+async fn components_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Component>> {
+    Ok(sqlx::query_as(
         "SELECT c.id,c.name,c.kind,c.source_id,c.group_name,c.public,\
          CASE WHEN c.kind='server' THEN s.name ELSE m.name END AS source_name,\
          CASE WHEN c.kind='server' THEN CASE \
@@ -211,12 +210,20 @@ async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Status
     )
     .bind(org)
     .bind(now() - STALE_MS)
-    .fetch_all(&mut *conn)
-    .await?;
-    let maintenance = sqlx::query_as("SELECT id,title,message,starts_at,ends_at,completed_at,component_ids,created_at FROM status_page_maintenance WHERE organization_id=$1 ORDER BY starts_at DESC,id LIMIT 100")
+    .fetch_all(conn)
+    .await?)
+}
+async fn maintenance_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Maintenance>> {
+    Ok(sqlx::query_as("SELECT id,title,message,starts_at,ends_at,completed_at,component_ids,created_at FROM status_page_maintenance WHERE organization_id=$1 ORDER BY starts_at DESC,id LIMIT 100")
         .bind(org)
-        .fetch_all(&mut *conn)
-        .await?;
+        .fetch_all(conn)
+        .await?)
+}
+async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<StatusPage> {
+    let org = &ctx.organization_id;
+    let settings = settings(conn, ctx).await?;
+    let components = components_of(conn, org).await?;
+    let maintenance = maintenance_of(conn, org).await?;
     let sources = sqlx::query_as("SELECT id,name,kind FROM (SELECT id,name,'server' AS kind FROM servers WHERE organization_id=$1 UNION ALL SELECT id,name,'machine' FROM machines WHERE organization_id=$1) AS source ORDER BY kind,lower(name),id")
         .bind(org)
         .fetch_all(&mut *conn)
@@ -232,6 +239,98 @@ async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Status
         maintenance,
         sources,
     })
+}
+
+/// What visitors see: public targets by display name only, with no source
+/// identifiers, plus windows that are open, upcoming, or ended within a week.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicComponent {
+    id: String,
+    name: String,
+    group_name: String,
+    health: String,
+    observed_at: Option<i64>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicMaintenance {
+    id: String,
+    title: String,
+    message: String,
+    starts_at: i64,
+    ends_at: i64,
+    completed_at: Option<i64>,
+    component_ids: Value,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicStatus {
+    name: String,
+    announcement: String,
+    support_url: String,
+    updated_at: i64,
+    components: Vec<PublicComponent>,
+    maintenance: Vec<PublicMaintenance>,
+}
+const RECENT_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+async fn public_read(
+    State(pool): State<PgPool>,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<PublicStatus>> {
+    let missing = || {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "This status page does not exist or is not published.",
+        )
+    };
+    if !valid_slug(&slug) {
+        return Err(missing());
+    }
+    let mut conn = pool.acquire().await?;
+    let row: Option<(String, String, String, String)> = sqlx::query_as(
+        "SELECT organization_id,name,announcement,support_url FROM status_pages WHERE slug=$1 AND published",
+    )
+    .bind(&slug)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let (org, name, announcement, support_url) = row.ok_or_else(missing)?;
+    let now = now();
+    let components = components_of(&mut conn, &org)
+        .await?
+        .into_iter()
+        .filter(|c| c.public)
+        .map(|c| PublicComponent {
+            id: c.id,
+            name: c.name,
+            group_name: c.group_name,
+            health: c.health,
+            observed_at: c.observed_at,
+        })
+        .collect();
+    let maintenance = maintenance_of(&mut conn, &org)
+        .await?
+        .into_iter()
+        .filter(|w| w.ends_at >= now - RECENT_WINDOW_MS)
+        .map(|w| PublicMaintenance {
+            id: w.id,
+            title: w.title,
+            message: w.message,
+            starts_at: w.starts_at,
+            ends_at: w.ends_at,
+            completed_at: w.completed_at,
+            component_ids: w.component_ids,
+        })
+        .collect();
+    Ok(Json(PublicStatus {
+        name,
+        announcement,
+        support_url,
+        updated_at: now,
+        components,
+        maintenance,
+    }))
 }
 
 async fn read(

@@ -438,10 +438,29 @@ it("forwards only bounded alert channel paths", async () => {
     "alerts/channels/arbitrary",
     "status-page/maintenance/arbitrary",
     `status-page/maintenance/${id}/delete`,
+    "public/status/northstar",
     `alerts/channels/${id}/delete`,
     `alerts/channels/${id}/../../auth/me`,
     "alerts/events",
     "organization/import",
   ])
     expect((await proxyApi(request(), invalid)).status).toBe(404);
+});
+
+it("forwards anonymous GET requests for published status pages only", async () => {
+  const fetcher = vi.fn(async () => Response.json({}));
+  vi.stubGlobal("fetch", fetcher);
+  const get = (path: string) =>
+    proxyApi(
+      new Request(`http://localhost:5173/app-api/${path}`, { method: "GET" }),
+      path,
+    );
+  expect((await get("public/status/northstar-games")).status).toBe(200);
+  for (const invalid of [
+    "public/status/Northstar",
+    "public/status/northstar/../../auth/me",
+    "public/status",
+    `public/status/${"a".repeat(41)}`,
+  ])
+    expect((await get(invalid)).status).toBe(404);
 });

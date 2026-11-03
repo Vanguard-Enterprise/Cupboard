@@ -123,7 +123,7 @@ describe("Status page admin", () => {
       "org-one",
     );
     expect(screen.getByRole("status").textContent).toContain(
-      "1 component unavailable",
+      "1 target unavailable",
     );
     expect(screen.getByText("Under maintenance")).toBeTruthy();
     expect(screen.getByText("Unavailable")).toBeTruthy();
@@ -158,7 +158,7 @@ describe("Status page admin", () => {
     mount();
     await ready();
     await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(screen.getByRole("button", { name: "Add component" }));
+    await user.click(screen.getByRole("button", { name: "Add target" }));
     const dialog = await screen.findByRole("dialog");
     await user.click(within(dialog).getByLabelText("Server or machine"));
     await user.type(
@@ -177,7 +177,7 @@ describe("Status page admin", () => {
     await user.type(within(dialog).getByLabelText("Display name"), "EU main");
     await user.type(within(dialog).getByLabelText("Group"), "Game servers");
     await user.click(
-      within(dialog).getByRole("button", { name: "Add component" }),
+      within(dialog).getByRole("button", { name: "Add target" }),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await user.click(
@@ -269,7 +269,7 @@ describe("Status page admin", () => {
     );
     await user.type(within(dialog).getByLabelText("Title"), "Host reboot");
     await user.click(
-      within(dialog).getByRole("checkbox", { name: "All components" }),
+      within(dialog).getByRole("checkbox", { name: "All targets" }),
     );
     await user.click(
       within(dialog).getByRole("checkbox", { name: /Wings host/ }),

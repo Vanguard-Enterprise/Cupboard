@@ -16,9 +16,6 @@ import {
   CalendarClockIcon,
   CheckIcon,
   ChevronsUpDownIcon,
-  CircleAlertIcon,
-  CircleCheckIcon,
-  CircleHelpIcon,
   CopyIcon,
   ExternalLinkIcon,
   EyeIcon,
@@ -32,7 +29,6 @@ import {
   RefreshCwIcon,
   ServerIcon,
   Trash2Icon,
-  TriangleAlertIcon,
   WrenchIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -58,9 +54,7 @@ import {
   windowLabel,
   type ComponentDraft,
   type ComponentKind,
-  type ComponentStatus,
   type MaintenanceWindow,
-  type OverallStatus,
   type PageDraft,
   type StatusComponent,
   type StatusPageState,
@@ -123,56 +117,17 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  StatusDot,
+  ToneIcon,
+  toneClass,
+  toneTile,
+} from "@/components/status-indicators";
 
 const message = (error: unknown) =>
   error instanceof Error
     ? error.message
     : "The request could not be completed.";
-
-type Tone = OverallStatus["tone"];
-const toneClass: Record<Tone, string> = {
-  operational: "text-primary",
-  degraded: "text-warning",
-  down: "text-destructive",
-  maintenance: "text-muted-foreground",
-  unknown: "text-muted-foreground",
-};
-const toneTile: Record<Tone, string> = {
-  operational: "border-primary/40 bg-primary/10 text-primary",
-  degraded: "border-warning/40 bg-warning/10 text-warning",
-  down: "border-destructive/40 bg-destructive/10 text-destructive",
-  maintenance: "border-border-strong bg-surface-elevated text-foreground",
-  unknown: "border-border bg-surface-elevated text-muted-foreground",
-};
-function ToneIcon({ tone, className }: { tone: Tone; className?: string }) {
-  const Icon =
-    tone === "operational"
-      ? CircleCheckIcon
-      : tone === "degraded"
-        ? TriangleAlertIcon
-        : tone === "down"
-          ? CircleAlertIcon
-          : tone === "maintenance"
-            ? WrenchIcon
-            : CircleHelpIcon;
-  return <Icon aria-hidden="true" className={className} />;
-}
-
-function StatusDot({ status }: { status: ComponentStatus }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "size-2 shrink-0 rounded-full",
-        status === "operational" && "bg-primary",
-        status === "degraded" && "bg-warning",
-        status === "down" && "bg-destructive",
-        status === "maintenance" && "bg-foreground/70",
-        status === "unknown" && "bg-border-strong",
-      )}
-    />
-  );
-}
 
 function KindIcon({ kind }: { kind: ComponentKind }) {
   const Icon = kind === "server" ? ServerIcon : HardDriveIcon;
@@ -486,7 +441,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       return fail("Enter when the window starts and ends.");
     if (endsAt <= startsAt) return fail("The window must end after it starts.");
     if (!form.all && form.componentIds.length === 0)
-      return fail("Choose at least one affected component, or select all.");
+      return fail("Choose at least one affected target, or select all.");
     setMaintenanceBusy(true);
     try {
       const next = await apiRequest<StatusPageState>(
@@ -542,9 +497,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       const source = available.find((s) => sourceLabel(s) === form.sourceLabel);
       if (!source) return fail("Choose a server or machine to show.");
       if (draft!.components.length >= maxComponents)
-        return fail(
-          `A status page can list up to ${maxComponents} components.`,
-        );
+        return fail(`A status page can list up to ${maxComponents} targets.`);
       updateComponents((list) => [
         ...list,
         {
@@ -677,7 +630,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             <TabsTrigger
               key={value}
               value={value}
-              className="h-full flex-none rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:after:bottom-[-1px] data-[state=active]:after:bg-primary"
+              className="h-full flex-none rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:after:bottom-[-1px] data-[state=active]:after:bg-primary dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-transparent dark:data-[state=active]:text-foreground"
             >
               {value === "overview" ? "Overview" : "Settings"}
             </TabsTrigger>
@@ -714,14 +667,10 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-            <Section
-              id="components"
-              title="Components"
-              description="Live health for everything on the page."
-            >
+            <Section id="targets" title="Targets">
               {components.length === 0 ? (
                 <div className="border-t border-border px-5 py-8 text-center md:px-6">
-                  <p className="text-sm font-medium">No components yet</p>
+                  <p className="text-sm font-medium">No targets yet</p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Add the servers and machines your players rely on.
                   </p>
@@ -733,7 +682,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       onClick={() => setTab("settings")}
                     >
                       <PlusIcon aria-hidden="true" />
-                      Add components
+                      Add targets
                     </Button>
                   )}
                 </div>
@@ -824,11 +773,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               )}
             </Section>
 
-            <Section
-              id="maintenance"
-              title="Maintenance windows"
-              description="Planned work shows as Under maintenance instead of an outage."
-            >
+            <Section id="maintenance" title="Maintenance windows">
               <div className="border-t border-border">
                 {current.length === 0 && upcoming.length === 0 ? (
                   <div className="px-5 py-8 text-center md:px-6">
@@ -945,7 +890,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       onChange={(e) =>
                         updateDraft({ announcement: e.target.value })
                       }
-                      placeholder="Optional notice shown above the components, such as a wipe date."
+                      placeholder="Optional notice shown above the targets, such as a wipe date."
                     />
                   </div>
                   <div className="space-y-2 md:col-span-2">
@@ -970,7 +915,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       <Label htmlFor="status-published">Publish page</Label>
                       <p className="text-xs leading-5 text-muted-foreground">
                         Anyone with the address can open the page. Hidden
-                        components stay private either way.
+                        targets stay private either way.
                       </p>
                     </div>
                     <Switch
@@ -986,8 +931,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 
               <Section
                 id="component-setup"
-                title="Components"
-                description="Drag to order the page. Hide anything you want to watch privately."
+                title="Targets"
+                description="Each target mirrors a saved server or machine. Drag to order the page and hide anything you want to watch privately."
                 action={
                   canManage && (
                     <Button
@@ -1007,18 +952,18 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       }
                     >
                       <PlusIcon aria-hidden="true" />
-                      Add component
+                      Add target
                     </Button>
                   )
                 }
               >
                 {draft.components.length === 0 ? (
                   <div className="border-t border-border px-5 py-8 text-center md:px-6">
-                    <p className="text-sm font-medium">No components yet</p>
+                    <p className="text-sm font-medium">No targets yet</p>
                     <p className="mt-1 text-sm text-muted-foreground">
                       {state.sources.length === 0
                         ? "Add a game server or machine first, then show it here."
-                        : "Each component mirrors one saved server or machine."}
+                        : "Add a target to show it on the page."}
                     </p>
                   </div>
                 ) : (
@@ -1321,14 +1266,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           <form onSubmit={submitComponent} className="space-y-4" noValidate>
             <DialogHeader>
               <DialogTitle>
-                {componentForm?.index === null
-                  ? "Add component"
-                  : "Edit component"}
+                {componentForm?.index === null ? "Add target" : "Edit target"}
               </DialogTitle>
               <DialogDescription>
                 {componentForm?.index === null
                   ? "Pick a saved server or machine and choose how it appears."
-                  : "Change how this component appears on the page."}
+                  : "Change how this target appears on the page."}
               </DialogDescription>
             </DialogHeader>
             {componentForm?.index === null && (
@@ -1508,7 +1451,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 Cancel
               </Button>
               <Button type="submit" className="h-10 px-4">
-                {componentForm?.index === null ? "Add component" : "Apply"}
+                {componentForm?.index === null ? "Add target" : "Apply"}
               </Button>
             </DialogFooter>
           </form>
@@ -1530,7 +1473,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   : "Schedule maintenance"}
               </DialogTitle>
               <DialogDescription>
-                Affected components show Under maintenance while the window is
+                Affected targets show Under maintenance while the window is
                 open, and the page lists it ahead of time.
               </DialogDescription>
             </DialogHeader>
@@ -1601,9 +1544,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               </div>
             </div>
             <fieldset className="space-y-2">
-              <legend className="text-sm font-medium">
-                Affected components
-              </legend>
+              <legend className="text-sm font-medium">Affected targets</legend>
               <label className="flex items-center gap-3 text-sm">
                 <Checkbox
                   checked={maintenanceForm?.all ?? true}
@@ -1615,13 +1556,13 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     )
                   }
                 />
-                All components
+                All targets
               </label>
               {!maintenanceForm?.all && (
                 <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-border p-3">
                   {components.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
-                      Save components first to pick specific ones.
+                      Save targets first to pick specific ones.
                     </p>
                   ) : (
                     components.map((component) => (
@@ -1704,7 +1645,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               Mark {completing?.title} as complete?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              The window closes now. Affected components return to their live
+              The window closes now. Affected targets return to their live
               status on the public page.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1930,7 +1871,7 @@ function PublicPreview({
       ))}
       {components.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          Public components appear here.
+          Public targets appear here.
         </p>
       ) : (
         <div className="divide-y divide-border rounded-lg border border-border bg-card">
@@ -1964,8 +1905,8 @@ function PublicPreview({
       )}
       {hidden > 0 && (
         <p className="text-xs text-muted-foreground">
-          {hidden} hidden {hidden === 1 ? "component is" : "components are"} not
-          shown publicly.
+          {hidden} hidden {hidden === 1 ? "target is" : "targets are"} not shown
+          publicly.
         </p>
       )}
     </div>

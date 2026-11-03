@@ -661,5 +661,12 @@ start and end, and the affected components (or all of them). While a window is
 open, its components show Under maintenance instead of their live health. Mark
 complete closes a window early; Delete removes it. Infrastructure viewers can
 read the page; infrastructure managers can change it. Public addresses are
-unique across organizations. The public `/status/<address>` page is not built
-yet, so the Visit status page link leads nowhere until that slice lands.
+unique across organizations.
+
+Published pages are served at `/status/<address>` without signing in. Visitors
+see the page name, announcement, support link, the overall status, public
+targets grouped and labeled by status, maintenance in progress, scheduled
+windows, and windows that ended within the last week. Hidden targets, source
+identifiers, and server names never leave the API. The page refreshes every
+minute while open and keeps the last state if a refresh fails. Unpublished or
+unknown addresses return a not-found page.

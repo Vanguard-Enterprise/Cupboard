@@ -71,6 +71,9 @@ export async function proxyApi(
     ) &&
     !/^status-page\/maintenance\/[0-9a-f-]{36}(?:\/(?:complete|remove))?$/.test(
       path,
+    ) &&
+    !(
+      /^public\/status\/[a-z0-9-]{1,40}$/.test(path) && request.method === "GET"
     )
   )
     return Response.json({ error: "Not found." }, { status: 404 });

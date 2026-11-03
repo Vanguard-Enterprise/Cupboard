@@ -430,7 +430,7 @@ changes. Webhook signing secrets appear once in a dialog with a copy action.
 ## Marketing navigation
 
 Marketing pages share a dark-only header. Sign-in, signup, invitation acceptance,
-and dashboard pages retain their existing layouts without this header. Follow the linked Giga capture's
+dashboard, and public status pages retain their existing layouts without this header. Follow the linked Giga capture's
 single integrated navigation row, with the logo alone at the left, Product, Docs,
 and Resources centered, and Pricing, Sign in, and a pale pill Get started action
 at the right. Put a slim dismissible announcement above the row. The user requested
@@ -512,7 +512,11 @@ the left and maintenance windows on the right; past windows collapse. Settings
 keeps page setup, the sortable component list with eye toggles for visibility,
 and a public preview in one form with the shared sticky save bar. The preview
 follows [Better Stack's public page](https://mobbin.com/screens/0d34fbf2-e4c4-451c-ad5d-de3cdf409164)
-composition and is the reference for the public page slice. Status colors use
+composition: a compact name and Contact support header, the announcement, a
+centered status hero with the update time, maintenance in progress, grouped
+targets with status labels, scheduled and past maintenance, and a Powered by
+Cupboard footer. Operators asked for the word "targets" in place of
+"components" and for the overview sections to carry no descriptions. Status colors use
 the existing tokens: sage operational, amber degraded, red unavailable, neutral
 for maintenance and unknown, always with a text label. The source picker uses
 the shared Popover and Command components inside the dialog; the base-ui

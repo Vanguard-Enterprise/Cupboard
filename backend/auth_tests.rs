@@ -6026,6 +6026,24 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     let server_component = saved["components"][0]["id"].as_str().unwrap().to_owned();
     let machine_component = saved["components"][1]["id"].as_str().unwrap().to_owned();
 
+    // The public page needs no session, hides private targets, and omits sources.
+    let (status, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    assert_eq!(public["name"], "Northstar status");
+    assert_eq!(public["components"].as_array().unwrap().len(), 1);
+    assert_eq!(public["components"][0]["name"], "server shown");
+    assert!(public.get("revision").is_none());
+    assert!(!public.to_string().contains("sourceId"));
+    assert!(!public.to_string().contains("Rust EU"));
+    for missing in ["public/status/nobody", "public/status/Northstar"] {
+        assert_eq!(
+            anonymous.request("GET", missing, json!(null)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+
     // Public addresses are unique across organizations; other tenants see nothing.
     let (status, response) = other
         .request("POST", "status-page", save(0, "northstar", json!([])))
@@ -6036,13 +6054,45 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert_eq!(response["revision"], 0);
     assert_eq!(response["components"], json!([]));
 
+    // Unpublishing hides the page from visitors.
+    let (status, hidden) = owner
+        .request(
+            "POST",
+            "status-page",
+            json!({"revision":1,"name":"Northstar status","slug":"northstar","published":false,"announcement":"","supportUrl":"","components":[component(Some(&server_component), "server", &server_id, true), component(Some(&machine_component), "machine", &machine_id, false)]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{hidden}");
+    assert_eq!(
+        anonymous
+            .request("GET", "public/status/northstar", json!(null))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, republished) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                2,
+                "northstar",
+                json!([
+                    component(Some(&server_component), "server", &server_id, true),
+                    component(Some(&machine_component), "machine", &machine_id, false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{republished}");
+
     // Reordering keeps component ids, so maintenance links survive.
     let (status, reordered) = owner
         .request(
             "POST",
             "status-page",
             save(
-                1,
+                3,
                 "northstar",
                 json!([
                     component(Some(&machine_component), "machine", &machine_id, true),
@@ -6052,7 +6102,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{reordered}");
-    assert_eq!(reordered["revision"], 2);
+    assert_eq!(reordered["revision"], 4);
     assert_eq!(reordered["components"][0]["id"], machine_component);
     assert_eq!(reordered["components"][1]["id"], server_component);
 
@@ -6169,10 +6219,10 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     member.request("GET", "auth/me", json!(null)).await;
     let (status, visible) = member.request("GET", "status-page", json!(null)).await;
     assert_eq!(status, StatusCode::OK, "{visible}");
-    assert_eq!(visible["revision"], 2);
+    assert_eq!(visible["revision"], 4);
     assert_eq!(
         member
-            .request("POST", "status-page", save(2, "northstar", json!([])))
+            .request("POST", "status-page", save(4, "northstar", json!([])))
             .await
             .0,
         StatusCode::FORBIDDEN

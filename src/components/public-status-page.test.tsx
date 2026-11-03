@@ -1,0 +1,102 @@
+// @vitest-environment jsdom
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PublicStatusPage } from "./public-status-page";
+import type { PublicStatus } from "@/lib/status-page";
+import { apiRequest } from "@/lib/api-client";
+
+vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
+
+const now = Date.now();
+const status: PublicStatus = {
+  name: "Northstar Games status",
+  announcement: "Wipe on Thursday.",
+  supportUrl: "https://discord.gg/northstar",
+  updatedAt: now,
+  components: [
+    {
+      id: "eu",
+      name: "EU Main",
+      groupName: "Game servers",
+      health: "operational",
+      observedAt: now,
+    },
+    {
+      id: "us",
+      name: "US Vanilla",
+      groupName: "Game servers",
+      health: "down",
+      observedAt: now,
+    },
+  ],
+  maintenance: [
+    {
+      id: "w1",
+      title: "Monthly wipe",
+      message: "Map reset.",
+      startsAt: now - 60_000,
+      endsAt: now + 3_600_000,
+      completedAt: null,
+      componentIds: ["eu"],
+      createdAt: now,
+    },
+    {
+      id: "w2",
+      title: "Host reboot",
+      message: "",
+      startsAt: now + 86_400_000,
+      endsAt: now + 90_000_000,
+      completedAt: null,
+      componentIds: [],
+      createdAt: now,
+    },
+  ],
+};
+
+beforeEach(() => vi.mocked(apiRequest).mockReset());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe("Public status page", () => {
+  it("shows the worst status, maintenance, and the support link", () => {
+    render(<PublicStatusPage slug="northstar" initial={status} />);
+    expect(screen.getByText("1 target unavailable")).toBeTruthy();
+    expect(screen.getByText("Wipe on Thursday.")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "Contact support" })
+        .getAttribute("href"),
+    ).toBe("https://discord.gg/northstar");
+    expect(screen.getByText("Under maintenance")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(
+      screen.getByText(/Maintenance in progress: Monthly wipe/),
+    ).toBeTruthy();
+    expect(screen.getByText("Scheduled maintenance")).toBeTruthy();
+    expect(screen.getByText("Host reboot")).toBeTruthy();
+    expect(screen.queryByText("Past maintenance")).toBeNull();
+  });
+
+  it("refreshes from the public endpoint and keeps the last state on failure", async () => {
+    vi.useFakeTimers();
+    vi.mocked(apiRequest).mockRejectedValueOnce(new Error("offline"));
+    render(<PublicStatusPage slug="northstar" initial={status} />);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(apiRequest).toHaveBeenCalledWith("public/status/northstar");
+    expect(screen.getByText("1 target unavailable")).toBeTruthy();
+    expect(screen.getByText(/Refresh failed/)).toBeTruthy();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...status,
+      components: status.components.map((c) => ({
+        ...c,
+        health: "operational" as const,
+      })),
+      maintenance: [],
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(screen.getByText("All targets operational")).toBeTruthy();
+    expect(screen.queryByText(/Refresh failed/)).toBeNull();
+  });
+});
