@@ -410,6 +410,23 @@ confirmed running software. The row's Tags action assigns tags and opens
 organization-wide create, rename, and confirmed deletion controls. Provide Wings,
 Game server, Database, Backups, and Bot server as editable recommended defaults.
 
+## Alerts and data
+
+The organization's Alerts & data page follows
+[fal's notification settings](https://mobbin.com/screens/8248454f-ffe1-43ab-bec4-d83afdb5d6cc):
+delivery channels above an alert-by-channel routing table, with critical and
+warning tags beside the alert name. Channel rows use
+[Laravel Cloud's](https://mobbin.com/screens/c2d83187-249e-4c50-bab3-057a926391a1)
+contained card rows with a masked destination, the last delivery result, and a
+visible Send test action. Routing rows explain the trigger in a full sentence;
+do not restate the alert name. On narrow screens the routing table scrolls
+inside its card with the alert column pinned. Recent alerts show each channel's
+delivery result, with retry errors in a tooltip. The data section follows
+[Mixpanel's data and privacy rows](https://mobbin.com/screens/a9cbba75-40fe-499e-a368-705d02b913ec):
+a retention select and a labeled export action that names what is excluded.
+Routing and retention share one sticky save bar that appears only with unsaved
+changes. Webhook signing secrets appear once in a dialog with a copy action.
+
 ## Marketing navigation
 
 Marketing pages share a dark-only header. Sign-in, signup, invitation acceptance,

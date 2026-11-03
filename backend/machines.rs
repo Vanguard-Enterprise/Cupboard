@@ -220,7 +220,7 @@ async fn disconnect(
     Path(id): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let (mut tx, org) = access(&pool, &auth, &session, &headers, "infrastructure.manage").await?;
-    let changed = sqlx::query("UPDATE machines SET enrollment_hash=NULL,enrollment_expires_at=NULL,agent_hash=NULL,enrolled_at=NULL,last_seen_at=NULL,health=NULL,metric_history='[]'::jsonb WHERE organization_id=$1 AND id=$2")
+    let changed = sqlx::query("UPDATE machines SET enrollment_hash=NULL,enrollment_expires_at=NULL,agent_hash=NULL,enrolled_at=NULL,last_seen_at=NULL,health=NULL,metric_history='[]'::jsonb,alert_offline=false WHERE organization_id=$1 AND id=$2")
         .bind(org).bind(id).execute(&mut *tx).await?;
     if changed.rows_affected() == 0 {
         return Err(ApiError(StatusCode::NOT_FOUND, "Machine not found."));
@@ -471,12 +471,23 @@ async fn heartbeat(
         ));
     }
     let mut tx = pool.begin().await?;
-    let row: Option<(String, serde_json::Value)> =
-        sqlx::query_as("SELECT id,metric_history FROM machines WHERE agent_hash=$1 FOR UPDATE")
-            .bind(&hash)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let (id, history) = row.ok_or_else(agent_unauthorized)?;
+    let row: Option<(String, serde_json::Value, String, String, bool)> = sqlx::query_as(
+        "SELECT id,metric_history,organization_id,name,alert_offline FROM machines WHERE agent_hash=$1 FOR UPDATE",
+    )
+    .bind(&hash)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (id, history, org, name, offline) = row.ok_or_else(agent_unauthorized)?;
+    if offline {
+        crate::alerts::record(
+            &mut tx,
+            &org,
+            "machine.recovered",
+            &format!("{name} is reporting again"),
+            "The Cupboard agent resumed sending health reports.",
+        )
+        .await?;
+    }
     let now: i64 =
         sqlx::query_scalar("SELECT (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint")
             .fetch_one(&mut *tx)
@@ -487,7 +498,7 @@ async fn heartbeat(
     if samples.len() > 120 {
         samples.drain(..samples.len() - 120);
     }
-    sqlx::query("UPDATE machines SET health=$2,last_seen_at=$3,metric_history=$4 WHERE id=$1")
+    sqlx::query("UPDATE machines SET health=$2,last_seen_at=$3,metric_history=$4,alert_offline=false WHERE id=$1")
         .bind(id)
         .bind(serde_json::to_value(health).map_err(|_| internal())?)
         .bind(now)

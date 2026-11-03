@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod auth;
 #[cfg(any(debug_assertions, test))]
 pub mod dev_seed;

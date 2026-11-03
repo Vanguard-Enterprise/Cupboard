@@ -22,7 +22,6 @@ import {
 } from "@/lib/organization-profile";
 import { organizationIntegrationsKey } from "@/lib/organization-integrations";
 import { organizationAccessKey } from "@/lib/organization-access";
-import { organizationNotificationsKey } from "@/lib/organization-notifications";
 import { securityAlertStorageKey } from "@/lib/security-alerts";
 
 beforeEach(() => localStorage.clear());
@@ -31,7 +30,6 @@ const bases = [
   organizationProfileKey,
   organizationIntegrationsKey,
   organizationAccessKey,
-  organizationNotificationsKey,
   securityAlertStorageKey,
 ];
 

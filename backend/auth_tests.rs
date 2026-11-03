@@ -31,6 +31,8 @@ impl Client {
             || path.starts_with("machines/")
             || path.starts_with("integrations/")
             || path.starts_with("servers/")
+            || path.starts_with("alerts")
+            || path == "organization/export"
         {
             request = request.header("x-cupboard-organization", &self.organization);
         }
@@ -3980,6 +3982,43 @@ async fn pelican_inventory_is_tenant_authorized_encrypted_and_persistent() {
         .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     connection = updated;
+    // Saving reports the same transitions as scheduled checks.
+    let organization = owner.organization.clone();
+    let events = |event: &'static str| {
+        let pool = pool.clone();
+        let organization = organization.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM alert_events WHERE organization_id=$1 AND event=$2",
+            )
+            .bind(organization)
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let (failed_before, recovered_before) = (
+        events("pelican.failed").await,
+        events("pelican.recovered").await,
+    );
+    for (mode, failed, recovered) in [(1, 1, 0), (0, 1, 1)] {
+        panel.mode.store(mode, Ordering::SeqCst);
+        let (status, updated) = owner
+            .request(
+                "POST",
+                "integrations/pelican",
+                json!({"panelUrl":url,"apiKey":null,"id":connection["id"],"revision":connection["revision"]}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{updated}");
+        connection = updated;
+        assert_eq!(events("pelican.failed").await, failed_before + failed);
+        assert_eq!(
+            events("pelican.recovered").await,
+            recovered_before + recovered
+        );
+    }
     let verified = connection["servers"].clone();
     let last_success = connection["lastSuccessAt"].clone();
     for (mode, fragment) in [
@@ -5174,4 +5213,687 @@ async fn scheduled_panel_batch_refreshes_fast_tenants_while_one_is_slow() {
         3
     );
     server.abort();
+}
+
+#[tokio::test]
+async fn alerts_are_scoped_authorized_encrypted_routed_retried_and_exported() {
+    use axum::{extract::State, routing::post};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicU16, Ordering},
+    };
+    #[derive(Clone, Default)]
+    struct Hook {
+        status: Arc<AtomicU16>,
+        received: Arc<Mutex<Vec<(axum::http::HeaderMap, Value)>>>,
+    }
+    async fn receive(
+        State(hook): State<Hook>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> StatusCode {
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        // The signature covers the exact bytes Cupboard sent.
+        let signature = headers["x-cupboard-signature"].to_str().unwrap().to_owned();
+        let timestamp: i64 = signature[2..signature.find(',').unwrap()].parse().unwrap();
+        hook.received
+            .lock()
+            .unwrap()
+            .push((headers.clone(), json!({"body": value, "timestamp": timestamp, "raw": String::from_utf8(body.to_vec()).unwrap()})));
+        StatusCode::from_u16(hook.status.load(Ordering::SeqCst)).unwrap()
+    }
+    let hook = Hook::default();
+    hook.status.store(204, Ordering::SeqCst);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let hook_url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let hook_app = Router::new()
+        .route("/hook", post(receive))
+        .with_state(hook.clone());
+    let hook_task = tokio::spawn(async move {
+        axum::serve(listener, hook_app).await.unwrap();
+    });
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let key = crate::secrets::SecretKey::parse(&"cd".repeat(32)).unwrap();
+    let mut policy = crate::pelican::PanelPolicy::default();
+    policy.test_origin = Some(hook_url.clone());
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(key.clone()))
+    .layer(axum::Extension(policy.clone()));
+    let suffix = uuid::Uuid::new_v4();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut member = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    assert_eq!(
+        anonymous.request("GET", "alerts", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    owner
+        .signup(&format!("alerts-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("alerts-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let org = owner.organization.clone();
+
+    // A stale page organization cannot read or change the newly selected one.
+    let (status, empty) = owner.request("GET", "alerts", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["revision"], 0);
+    assert_eq!(empty["channels"], json!([]));
+    owner.organization = other.organization.clone();
+    assert_eq!(
+        owner.request("GET", "alerts", json!(null)).await.0,
+        StatusCode::CONFLICT
+    );
+    owner.organization = org.clone();
+
+    for (kind, url) in [
+        ("webhook", "http://hooks.example.com/alerts"),
+        ("discord", "https://example.com/api/webhooks/1/token"),
+        ("email", "https://hooks.example.com/alerts"),
+    ] {
+        let (status, _) = owner
+            .request(
+                "POST",
+                "alerts/channels",
+                json!({"revision":0,"kind":kind,"name":"Ops","url":url}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{kind} {url}");
+    }
+    let (status, created) = owner
+        .request(
+            "POST",
+            "alerts/channels",
+            json!({"revision":0,"kind":"webhook","name":"Ops webhook","url":hook_url}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let channel = created["channelId"].as_str().unwrap().to_owned();
+    let signing_secret = created["signingSecret"].as_str().unwrap().to_owned();
+    assert!(signing_secret.starts_with("whsec_"));
+    let alerts = &created["alerts"];
+    assert_eq!(alerts["revision"], 1);
+    assert_eq!(alerts["channels"][0]["destination"], "127.0.0.1");
+    assert!(!alerts.to_string().contains("/hook"));
+    assert!(!alerts.to_string().contains("whsec_"));
+    for event in ["server.offline", "machine.offline", "pelican.failed"] {
+        assert_eq!(alerts["routes"][event], json!([channel]));
+    }
+    let (url_encrypted, signing_encrypted): (Vec<u8>, Vec<u8>) = sqlx::query_as(
+        "SELECT url_encrypted,signing_secret_encrypted FROM alert_channels WHERE organization_id=$1 AND id=$2",
+    )
+    .bind(&org)
+    .bind(&channel)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!url_encrypted.windows(5).any(|w| w == b"/hook"));
+    assert!(!signing_encrypted.windows(6).any(|w| w == b"whsec_"));
+    assert_eq!(
+        key.decrypt(&url_encrypted, &org, &channel, "alert-url")
+            .unwrap(),
+        hook_url.as_bytes()
+    );
+    assert!(
+        key.decrypt(&url_encrypted, &other.organization, &channel, "alert-url")
+            .is_err()
+    );
+    assert!(
+        key.decrypt(&url_encrypted, &org, &channel, "alert-signing")
+            .is_err()
+    );
+
+    // Stale revisions and other tenants cannot change the channel.
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                &format!("alerts/channels/{channel}"),
+                json!({"revision":0,"name":"Renamed"})
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                &format!("alerts/channels/{channel}/remove"),
+                json!({"revision":0})
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                &format!("alerts/channels/{channel}/test"),
+                json!({})
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                "alerts/settings",
+                json!({"revision":0,"routes":{"server.offline":[channel]},"retentionDays":30})
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        other.request("GET", "alerts", json!(null)).await.1["channels"],
+        json!([])
+    );
+
+    // A test alert is signed with the secret shown once at creation.
+    let (status, tested) = owner
+        .request(
+            "POST",
+            &format!("alerts/channels/{channel}/test"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tested}");
+    assert_eq!(tested["delivered"], true);
+    assert_eq!(tested["alerts"]["channels"][0]["lastDeliveryOk"], true);
+    {
+        let received = hook.received.lock().unwrap();
+        let (headers, request) = received.last().unwrap();
+        assert_eq!(request["body"]["test"], true);
+        assert_eq!(request["body"]["organization"]["id"], org);
+        assert_eq!(headers["content-type"], "application/json");
+        assert_eq!(
+            headers["x-cupboard-signature"].to_str().unwrap(),
+            crate::alerts::signature(
+                &signing_secret,
+                request["timestamp"].as_i64().unwrap(),
+                request["raw"].as_str().unwrap().as_bytes()
+            )
+        );
+    }
+
+    // Validation rejects unsupported events and retention periods.
+    for body in [
+        json!({"revision":1,"routes":{"server.exploded":[channel]},"retentionDays":30}),
+        json!({"revision":1,"routes":{},"retentionDays":14}),
+        json!({"revision":1,"routes":{"server.offline":["missing"]},"retentionDays":30}),
+    ] {
+        assert_ne!(
+            owner.request("POST", "alerts/settings", body).await.0,
+            StatusCode::OK
+        );
+    }
+    let (status, saved) = owner
+        .request(
+            "POST",
+            "alerts/settings",
+            json!({"revision":1,"routes":{"server.offline":[channel,channel],"machine.offline":[channel],"member.joined":[channel]},"retentionDays":7}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], 2);
+    assert_eq!(saved["retentionDays"], 7);
+    assert_eq!(saved["routes"]["server.offline"], json!([channel]));
+    assert!(saved["routes"].get("pelican.failed").is_none());
+
+    // Members without organization management cannot read alert settings.
+    let viewer = owner.create_role("Viewer", &["servers.view"]).await;
+    let member_email = format!("alerts-member-{suffix}@example.com");
+    member.signup(&member_email).await;
+    let (_, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Member","email":member_email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    member.request("GET", "auth/me", json!(null)).await;
+    for (method, path) in [("GET", "alerts"), ("GET", "organization/export")] {
+        assert_eq!(
+            member.request(method, path, json!(null)).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                &format!("alerts/channels/{channel}/test"),
+                json!({})
+            )
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        crate::alerts::deliver_due(&pool, &key, &policy)
+            .await
+            .unwrap()
+    );
+    {
+        let received = hook.received.lock().unwrap();
+        let (headers, request) = received.last().unwrap();
+        assert_eq!(request["body"]["type"], "member.joined");
+        assert_eq!(request["body"]["test"], false);
+        assert_eq!(headers["x-cupboard-event"], "member.joined");
+    }
+    let member_id = owner.team().await["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["email"] == member_email)
+        .unwrap()["id"]
+        .clone();
+    assert_eq!(
+        owner
+            .change(json!({"kind":"removeUser","id":member_id}))
+            .await
+            .0,
+        StatusCode::OK
+    );
+
+    // Machines announce one outage per stale period and a recovery on the next report.
+    let machine = owner.request("POST", "machines", machine_input()).await.1["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let token = crate::auth::secret();
+    sqlx::query("UPDATE machines SET agent_hash=$2,enrolled_at=0,last_seen_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-200000 WHERE id=$1")
+        .bind(&machine)
+        .bind(crate::auth::digest(&token))
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    let count = |event: &'static str| {
+        let pool = pool.clone();
+        let org = org.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM alert_events WHERE organization_id=$1 AND event=$2",
+            )
+            .bind(org)
+            .bind(event)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(count("machine.offline").await, 1);
+    assert_eq!(count("member.removed").await, 1);
+    assert_eq!(
+        node_request(&app, "heartbeat", &token, node_health())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(count("machine.recovered").await, 1);
+    node_request(&app, "heartbeat", &token, node_health()).await;
+    assert_eq!(count("machine.recovered").await, 1);
+    // A machine revived by enrolling a new agent still closes its outage.
+    sqlx::query("UPDATE machines SET last_seen_at=0 WHERE id=$1")
+        .bind(&machine)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    assert_eq!(count("machine.offline").await, 2);
+    let enrollment = owner
+        .request("POST", &format!("machines/{machine}/enrollment"), json!({}))
+        .await
+        .1;
+    let enrolled = node_request(
+        &app,
+        "enroll",
+        enrollment["token"].as_str().unwrap(),
+        json!({}),
+    )
+    .await
+    .1;
+    let token = enrolled["credential"].as_str().unwrap().to_owned();
+    assert_eq!(
+        node_request(&app, "heartbeat", &token, node_health())
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(count("machine.recovered").await, 2);
+    // An agent that enrolls and never reports is still detected.
+    let silent = owner.request("POST", "machines", machine_input()).await.1["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sqlx::query("UPDATE machines SET agent_hash=$2,enrolled_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint WHERE id=$1")
+        .bind(&silent)
+        .bind(crate::auth::digest(&crate::auth::secret()))
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    assert_eq!(count("machine.offline").await, 2);
+    sqlx::query("UPDATE machines SET enrolled_at=0 WHERE id=$1")
+        .bind(&silent)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::alerts::sweep_machines(&pool).await.unwrap();
+    assert_eq!(count("machine.offline").await, 3);
+    while crate::alerts::deliver_due(&pool, &key, &policy)
+        .await
+        .unwrap()
+    {}
+    assert!(
+        hook.received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, r)| r["body"]["type"] == "machine.offline"
+                && r["body"]["title"] == "EU host stopped reporting")
+    );
+
+    // Servers announce a transition from reachable to unreachable; failed deliveries retry.
+    let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let (_, server) = owner.request("POST", "servers", json!({"name":"Alerted Rust","rconHost":"127.0.0.1","rconPort":port,"rconPassword":"alert-rcon-secret","a2sHost":"127.0.0.1","a2sPort":port})).await;
+    let server = server["id"].as_str().unwrap().to_owned();
+    sqlx::query("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-60000,rcon_status='connected',a2s_status='connected' WHERE id=$1")
+        .bind(&server)
+        .execute(&pool)
+        .await
+        .unwrap();
+    hook.status.store(503, Ordering::SeqCst);
+    crate::servers::poll_server(&pool, &key, &org, &server)
+        .await
+        .unwrap();
+    assert_eq!(count("server.offline").await, 1);
+    while crate::alerts::deliver_due(&pool, &key, &policy)
+        .await
+        .unwrap()
+    {}
+    let (status, attempts, error): (String, i32, Option<String>) = sqlx::query_as("SELECT d.status,d.attempts,d.error FROM alert_deliveries d JOIN alert_events e ON e.organization_id=d.organization_id AND e.id=d.event_id WHERE d.organization_id=$1 AND e.event='server.offline'")
+        .bind(&org)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!((status.as_str(), attempts), ("pending", 1));
+    assert!(error.unwrap().contains("503"));
+    let history = owner.request("GET", "alerts", json!(null)).await.1;
+    assert_eq!(history["channels"][0]["lastDeliveryOk"], false);
+    assert_eq!(history["events"][0]["event"], "server.offline");
+    assert_eq!(history["events"][0]["severity"], "critical");
+    assert_eq!(history["events"][0]["deliveries"][0]["status"], "pending");
+    hook.status.store(204, Ordering::SeqCst);
+    sqlx::query("UPDATE alert_deliveries SET next_attempt_at=0 WHERE organization_id=$1 AND status='pending'")
+        .bind(&org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    while crate::alerts::deliver_due(&pool, &key, &policy)
+        .await
+        .unwrap()
+    {}
+    let history = owner.request("GET", "alerts", json!(null)).await.1;
+    assert_eq!(history["events"][0]["deliveries"][0]["status"], "sent");
+    assert_eq!(history["channels"][0]["lastDeliveryOk"], true);
+    assert_eq!(
+        other.request("GET", "alerts", json!(null)).await.1["events"],
+        json!([])
+    );
+
+    // Permanent failures are reported without retrying.
+    hook.status.store(410, Ordering::SeqCst);
+    let (_, tested) = owner
+        .request(
+            "POST",
+            &format!("alerts/channels/{channel}/test"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(tested["delivered"], false);
+    assert!(tested["error"].as_str().unwrap().contains("410"));
+    assert!(!tested.to_string().contains("/hook"));
+
+    // Retention removes only history older than the organization's setting.
+    for (id, age_days) in [("old", 8), ("recent", 2)] {
+        sqlx::query("INSERT INTO alert_events(organization_id,id,event,severity,title,detail,created_at) VALUES($1,$2,'member.joined','info','Old','Old',(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-$3::bigint*86400000)")
+            .bind(&org)
+            .bind(id)
+            .bind(age_days)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    crate::alerts::prune(&pool).await.unwrap();
+    let kept: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM alert_events WHERE organization_id=$1 AND id IN ('old','recent')",
+    )
+    .bind(&org)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept, vec!["recent".to_owned()]);
+
+    // Exports contain configuration but no credentials, tokens, or delivery URLs.
+    let (status, export) = owner
+        .request("GET", "organization/export", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{export}");
+    assert_eq!(export["format"], "cupboard-organization-export");
+    assert_eq!(export["servers"][0]["name"], "Alerted Rust");
+    assert_eq!(export["machines"][0]["name"], "EU host");
+    assert_eq!(export["alerts"]["channels"][0]["name"], "Ops webhook");
+    let text = export.to_string();
+    for secret in ["alert-rcon-secret", "whsec_", "/hook", &token] {
+        assert!(!text.contains(secret), "{secret}");
+    }
+    let other_export = other
+        .request("GET", "organization/export", json!(null))
+        .await
+        .1;
+    assert_eq!(other_export["servers"], json!([]));
+    assert_eq!(other_export["alerts"]["channels"], json!([]));
+
+    // The export needs every permission that protects the data it contains.
+    let lead_role = owner
+        .create_role("Alert lead", &["organization.manage"])
+        .await;
+    let lead_email = format!("alerts-lead-{suffix}@example.com");
+    let mut lead = Client::new(&app);
+    lead.signup(&lead_email).await;
+    let (_, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Lead","email":lead_email,"roleIds":[lead_role["id"]],"status":"invited","lastActiveAt":null}})).await;
+    lead.request(
+        "POST",
+        "invitations/accept",
+        json!({"token":invitation["invitationToken"]}),
+    )
+    .await;
+    lead.request("GET", "auth/me", json!(null)).await;
+    assert_eq!(
+        lead.request("GET", "alerts", json!(null)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        lead.request("GET", "organization/export", json!(null))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Reading alerts does not wait for a connection check holding the organization.
+    let mut check = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM organizations WHERE id=$1 FOR SHARE")
+        .bind(&org)
+        .execute(&mut *check)
+        .await
+        .unwrap();
+    let (status, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        owner.request("GET", "alerts", json!(null)),
+    )
+    .await
+    .expect("reads share the organization row");
+    assert_eq!(status, StatusCode::OK);
+    check.rollback().await.unwrap();
+
+    // A backlog in one organization cannot crowd out another's alerts.
+    for (organization, events) in [(org.as_str(), 12), (other.organization.as_str(), 1)] {
+        sqlx::query("INSERT INTO alert_channels(organization_id,id,kind,name,destination,url_encrypted,created_at) VALUES($1,'queue','discord','Queue','hidden',$2,0)")
+            .bind(organization)
+            .bind(vec![0u8; 29])
+            .execute(&pool)
+            .await
+            .unwrap();
+        for index in 0..events {
+            let event = format!("queued-{index}");
+            sqlx::query("INSERT INTO alert_events(organization_id,id,event,severity,title,detail,created_at) VALUES($1,$2,'server.offline','critical','Queued','Queued',0)")
+                .bind(organization)
+                .bind(&event)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO alert_deliveries(organization_id,event_id,channel_id,channel_name,status,next_attempt_at) VALUES($1,$2,'queue','Queue','pending',0)")
+                .bind(organization)
+                .bind(&event)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+    }
+    crate::alerts::deliver_due(&pool, &key, &policy)
+        .await
+        .unwrap();
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM alert_deliveries WHERE organization_id=$1 AND channel_id='queue'",
+    )
+    .bind(&other.organization)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "failed");
+    while crate::alerts::deliver_due(&pool, &key, &policy)
+        .await
+        .unwrap()
+    {}
+
+    // Rotation replaces only a webhook's signing secret, and stays within the tenant.
+    let revision = owner.request("GET", "alerts", json!(null)).await.1["revision"].clone();
+    let rotate = format!("alerts/channels/{channel}/rotate");
+    let other_revision = other.request("GET", "alerts", json!(null)).await.1["revision"].clone();
+    assert_eq!(
+        other
+            .request("POST", &rotate, json!({"revision":other_revision}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "alerts/channels/queue/rotate",
+                json!({"revision":revision})
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        owner
+            .request("POST", &rotate, json!({"revision":0}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (status, rotated) = owner
+        .request("POST", &rotate, json!({"revision":revision}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rotated}");
+    let rotated_secret = rotated["signingSecret"].as_str().unwrap().to_owned();
+    assert!(rotated_secret.starts_with("whsec_"));
+    assert!(!rotated["alerts"].to_string().contains(&rotated_secret));
+    let encrypted: Vec<u8> = sqlx::query_scalar(
+        "SELECT signing_secret_encrypted FROM alert_channels WHERE organization_id=$1 AND id=$2",
+    )
+    .bind(&org)
+    .bind(&channel)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        key.decrypt(&encrypted, &org, &channel, "alert-signing")
+            .unwrap(),
+        rotated_secret.as_bytes()
+    );
+
+    // Removing a channel removes its routes and waiting deliveries, not its history.
+    let mut conn = pool.acquire().await.unwrap();
+    crate::alerts::record(&mut conn, &org, "server.offline", "Waiting", "Waiting")
+        .await
+        .unwrap();
+    drop(conn);
+    let revision = rotated["alerts"]["revision"].clone();
+    let (status, removed) = owner
+        .request(
+            "POST",
+            &format!("alerts/channels/{channel}/remove"),
+            json!({"revision":revision}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["channels"].as_array().unwrap().len(), 1);
+    assert!(
+        removed["routes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .all(|ids| !ids.to_string().contains(&channel))
+    );
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM alert_deliveries WHERE organization_id=$1 AND channel_id=$2 AND status='pending'",
+    )
+    .bind(&org)
+    .bind(&channel)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(waiting, 0);
+    assert!(removed["events"].as_array().unwrap().iter().any(|event| {
+        event["deliveries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|delivery| {
+                delivery["channelId"] == json!(channel)
+                    && delivery["status"] == "sent"
+                    && delivery["channelName"] == "Ops webhook"
+            })
+    }));
+    hook_task.abort();
 }

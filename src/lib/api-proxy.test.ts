@@ -334,9 +334,16 @@ it("forwards the expected organization for scoped reads and mutations", async ()
     "machines",
     "machines/00000000-0000-0000-0000-000000000000/history",
     "machines/00000000-0000-0000-0000-000000000000/remove",
+    "alerts",
+    "organization/export",
+    "alerts/channels/00000000-0000-0000-0000-000000000000/test",
+    "alerts/channels/00000000-0000-0000-0000-000000000000/remove",
+    "alerts/channels/00000000-0000-0000-0000-000000000000/rotate",
   ]) {
     const method =
-      path.endsWith("remove") || path.endsWith("check") ? "POST" : "GET";
+      path.endsWith("remove") || path.endsWith("check") || path.endsWith("test")
+        ? "POST"
+        : "GET";
     await proxyApi(
       new Request(`http://localhost:5173/app-api/${path}`, {
         method,
@@ -405,4 +412,29 @@ it("serves authenticated logo bytes with a fixed safe image type", async () => {
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   expect(await response.text()).toBe("png");
+});
+
+it("forwards only bounded alert channel paths", async () => {
+  const fetcher = vi.fn(async () => Response.json({}));
+  vi.stubGlobal("fetch", fetcher);
+  const id = "12345678-1234-1234-1234-123456789abc";
+  for (const path of [
+    "alerts",
+    "alerts/settings",
+    "alerts/channels",
+    `alerts/channels/${id}`,
+    `alerts/channels/${id}/test`,
+    `alerts/channels/${id}/remove`,
+    `alerts/channels/${id}/rotate`,
+    "organization/export",
+  ])
+    expect((await proxyApi(request(), path)).status).toBe(200);
+  for (const invalid of [
+    "alerts/channels/arbitrary",
+    `alerts/channels/${id}/delete`,
+    `alerts/channels/${id}/../../auth/me`,
+    "alerts/events",
+    "organization/import",
+  ])
+    expect((await proxyApi(request(), invalid)).status).toBe(404);
 });
