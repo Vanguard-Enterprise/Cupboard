@@ -1171,13 +1171,13 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       }}
                       aria-labelledby="status-theme-label"
                       spacing={0}
-                      className="w-fit rounded-lg bg-surface-elevated p-1"
+                      className="w-full rounded-lg bg-surface-elevated p-1"
                     >
                       {(["dark", "light"] as const).map((theme) => (
                         <ToggleGroupItem
                           key={theme}
                           value={theme}
-                          className="h-8 gap-1.5 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                          className="h-8 flex-1 gap-1.5 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
                         >
                           {theme === "dark" ? (
                             <MoonIcon aria-hidden="true" />
@@ -1328,7 +1328,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                               ),
                             })
                           }
-                          className="h-10"
+                          className="col-start-1 row-start-1 h-10 sm:col-start-auto sm:row-start-auto"
                         />
                         <Input
                           aria-label={`Link ${index + 1} address`}
@@ -1343,13 +1343,13 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                               ),
                             })
                           }
-                          className="col-span-1 row-start-2 h-10 sm:row-start-auto"
+                          className="col-span-2 row-start-2 h-10 sm:col-span-1 sm:row-start-auto"
                         />
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon-sm"
-                          className="row-start-1 size-10 sm:row-start-auto [@media(any-pointer:coarse)]:size-11"
+                          className="col-start-2 row-start-1 size-10 sm:col-start-auto sm:row-start-auto [@media(any-pointer:coarse)]:size-11"
                           aria-label={`Remove link ${index + 1}`}
                           onClick={() =>
                             updateDraft({

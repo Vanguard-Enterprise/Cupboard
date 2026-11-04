@@ -135,7 +135,7 @@ export function PublicStatusView({
           embedded ? "py-6" : "py-8 md:py-12",
         )}
       >
-        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+        <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             {logoUrl ? (
               // Logos are re-encoded PNGs served by Cupboard, not remote images.
@@ -161,7 +161,7 @@ export function PublicStatusView({
           {(data.links.length > 0 || data.supportUrl) && (
             <nav
               aria-label="Status page links"
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm"
+              className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm"
             >
               {data.links.map((link) => (
                 <a
@@ -169,7 +169,7 @@ export function PublicStatusView({
                   href={link.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                  className="rounded-sm font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   {link.label}
                 </a>
@@ -179,7 +179,7 @@ export function PublicStatusView({
                   href={data.supportUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex h-9 items-center rounded-lg px-3 font-medium transition-[filter] hover:brightness-110"
+                  className="inline-flex h-9 items-center rounded-lg px-3.5 font-medium transition-[filter] hover:brightness-110 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none [@media(any-pointer:coarse)]:min-h-11"
                   style={{ background: accent, color: accentText }}
                 >
                   Contact support
@@ -190,14 +190,22 @@ export function PublicStatusView({
         </header>
 
         {data.announcement && (
-          <p className="mt-6 rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+          <p
+            className={cn(
+              "rounded-xl border border-border bg-card px-4 py-3 text-sm leading-6",
+              embedded ? "mt-6" : "mt-8",
+            )}
+          >
             {data.announcement}
           </p>
         )}
 
         <section
           aria-live={embedded ? undefined : "polite"}
-          className="mt-6 rounded-xl border border-border bg-card px-5 py-6 text-center md:px-8 md:py-8"
+          className={cn(
+            "rounded-xl border border-border bg-card px-5 py-7 text-center md:px-8 md:py-9",
+            data.announcement ? "mt-4" : embedded ? "mt-6" : "mt-8",
+          )}
         >
           <span
             className={cn(
@@ -207,19 +215,34 @@ export function PublicStatusView({
           >
             <ToneIcon tone={overall.tone} className="size-6" />
           </span>
-          <p className="mt-4 text-2xl font-semibold tracking-tight">
+          <p className="mt-4 text-2xl font-semibold tracking-tight text-balance md:text-3xl">
             {overall.title}
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">{overall.detail}</p>
-          <p className="mt-3 text-xs text-muted-foreground">
-            {stale ? "Refresh failed. Showing the last known state, " : ""}
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            {overall.detail}
+          </p>
+          <p className="mt-4 text-xs text-muted-foreground">
             Updated {formatDistanceToNow(data.updatedAt, { addSuffix: true })}
           </p>
+          {stale && (
+            <p className="mt-1 text-xs font-medium text-warning">
+              Refresh failed. Showing the last known state.
+            </p>
+          )}
         </section>
 
-        {active.map((window) => (
-          <MaintenanceNotice key={window.id} window={window} now={now} active />
-        ))}
+        {active.length > 0 && (
+          <div className="mt-4 space-y-3">
+            {active.map((window) => (
+              <MaintenanceNotice
+                key={window.id}
+                window={window}
+                now={now}
+                active
+              />
+            ))}
+          </div>
+        )}
 
         <section aria-label="Current status" className="mt-6">
           {components.length === 0 ? (
@@ -227,40 +250,42 @@ export function PublicStatusView({
               Nothing is being tracked on this page yet.
             </p>
           ) : (
-            <div className="divide-y divide-border rounded-xl border border-border bg-card">
+            <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
               {groupComponents(components).map((group) => (
-                <div key={group.name || "(ungrouped)"} className="py-1">
+                <div key={group.name || "(ungrouped)"}>
                   {group.name && (
-                    <p className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+                    <p className="bg-surface-elevated/60 px-4 py-1.5 text-xs font-medium text-muted-foreground">
                       {group.name}
                     </p>
                   )}
-                  {group.items.map((component) => {
-                    const status = componentStatus(
-                      component,
-                      data.maintenance,
-                      now,
-                    );
-                    return (
-                      <div
-                        key={component.id}
-                        className="flex items-center justify-between gap-3 px-4 py-3"
-                      >
-                        <span className="flex min-w-0 items-center gap-3 text-sm font-medium">
-                          <StatusDot status={status} />
-                          <span className="truncate">{component.name}</span>
-                        </span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-xs font-medium",
-                            toneClass[status],
-                          )}
+                  <div className="divide-y divide-border">
+                    {group.items.map((component) => {
+                      const status = componentStatus(
+                        component,
+                        data.maintenance,
+                        now,
+                      );
+                      return (
+                        <div
+                          key={component.id}
+                          className="flex min-h-12 items-center justify-between gap-3 px-4 py-3"
                         >
-                          {statusLabel[status]}
-                        </span>
-                      </div>
-                    );
-                  })}
+                          <span className="flex min-w-0 items-center gap-3 text-sm font-medium">
+                            <StatusDot status={status} />
+                            <span className="truncate">{component.name}</span>
+                          </span>
+                          <span
+                            className={cn(
+                              "shrink-0 text-xs font-medium",
+                              toneClass[status],
+                            )}
+                          >
+                            {statusLabel[status]}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               ))}
             </div>
@@ -281,7 +306,7 @@ export function PublicStatusView({
         {recent.length > 0 && (
           <section aria-label="Past maintenance" className="mt-8">
             <h2 className="text-base font-semibold">Past maintenance</h2>
-            <ul className="mt-3 divide-y divide-border rounded-xl border border-border bg-card">
+            <ul className="mt-3 divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
               {recent.map((window) => (
                 <li key={window.id} className="px-4 py-3">
                   <p className="text-sm font-medium">{window.title}</p>
@@ -295,14 +320,14 @@ export function PublicStatusView({
         )}
 
         {(data.footerText || data.poweredBy) && (
-          <footer className="mt-10 flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
+          <footer className="mt-10 flex flex-col items-center gap-2 border-t border-border pt-6 text-center text-xs text-muted-foreground">
             {data.footerText && <p>{data.footerText}</p>}
             {data.poweredBy && (
               <p className="flex items-center gap-2">
                 <span>Powered by</span>
                 <Link
                   href="/"
-                  className="flex items-center gap-1.5 font-medium text-foreground"
+                  className="flex items-center gap-1.5 rounded-sm font-medium text-foreground underline-offset-4 hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   <Image
                     src="/images/cupboard-logo.png"
@@ -335,7 +360,7 @@ function MaintenanceNotice({
   return (
     <div
       className={cn(
-        "mt-4 flex items-start gap-3 rounded-xl border px-4 py-3",
+        "flex items-start gap-3 rounded-xl border px-4 py-3",
         active ? "border-warning/40 bg-warning/5" : "border-border bg-card",
       )}
     >
