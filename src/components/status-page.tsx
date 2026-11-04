@@ -31,7 +31,6 @@ import {
   ServerIcon,
   SunIcon,
   Trash2Icon,
-  UploadIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -1531,18 +1530,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           </Popover>
                         )}
                       </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-                        disabled={logoBusy}
-                        onClick={() => logoInput.current?.click()}
-                      >
-                        <UploadIcon aria-hidden="true" />
-                        {state.logoVersion === null
-                          ? "Upload logo"
-                          : "Replace logo"}
-                      </Button>
                       <input
                         ref={logoInput}
                         type="file"

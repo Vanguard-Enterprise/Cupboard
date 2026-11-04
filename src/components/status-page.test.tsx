@@ -469,12 +469,57 @@ describe("Status page admin", () => {
       expect(screen.queryByRole("dialog", { name: "Edit logo" })).toBeNull(),
     );
     expect(
-      await screen.findByRole("button", { name: "Replace logo" }),
+      await screen.findByRole("button", { name: "Edit logo" }),
     ).toBeTruthy();
     expect(screen.getByLabelText("Footer text")).toHaveProperty(
       "value",
       "Draft footer",
     );
+  });
+
+  it("snaps a dragged logo to the frame center and shows the guides", async () => {
+    const user = userEvent.setup();
+    stubImages();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.upload(
+      screen.getByLabelText("Logo file"),
+      new File(["png"], "logo.png", { type: "image/png" }),
+    );
+    const editor = await screen.findByRole("dialog", { name: "Edit logo" });
+    const stage = await within(editor).findByRole("application", {
+      name: "Logo crop area",
+    });
+    vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 225 }),
+    );
+    const image = () =>
+      editor.querySelector<HTMLImageElement>("img.max-w-none");
+    const start = image()!.style.left;
+    const press = { pointerId: 1, button: 0, clientX: 200, clientY: 112 };
+    fireEvent.pointerDown(stage, press);
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 204, clientY: 115 });
+    expect(within(editor).getByTestId("logo-guide-vertical")).toBeTruthy();
+    expect(within(editor).getByTestId("logo-guide-horizontal")).toBeTruthy();
+    expect(image()!.style.left).toBe(start);
+
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 240, clientY: 112 });
+    expect(within(editor).queryByTestId("logo-guide-vertical")).toBeNull();
+    expect(within(editor).getByTestId("logo-guide-horizontal")).toBeTruthy();
+    expect(image()!.style.left).not.toBe(start);
+
+    fireEvent.pointerMove(stage, {
+      pointerId: 1,
+      clientX: 204,
+      clientY: 115,
+      altKey: true,
+    });
+    expect(within(editor).queryByTestId("logo-guide-vertical")).toBeNull();
+    expect(image()!.style.left).not.toBe(start);
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    expect(within(editor).queryByTestId("logo-guide-horizontal")).toBeNull();
   });
 
   it("refuses files that are not images before opening the editor", async () => {
@@ -533,7 +578,7 @@ describe("Status page admin", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Remove logo" })).toBeNull(),
     );
-    expect(screen.getByRole("button", { name: "Upload logo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add logo" })).toBeTruthy();
   });
 
   it("reorders components with the keyboard and keeps the draft until saved", async () => {

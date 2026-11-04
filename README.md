@@ -678,12 +678,14 @@ identifiers, and server names never leave the API. The page refreshes every
 minute while open and keeps the last state if a refresh fails. Unpublished or
 unknown addresses return a not-found page.
 
-Branding in Settings makes the public page your own: pick or drop a logo
-(PNG, JPEG, WebP, GIF, or SVG), then crop, zoom, pan, rotate, flip, and give it
-a background in the logo editor, which previews the page header in both themes.
-Saving uploads the edited PNG right away; the server re-encodes it to a small
-PNG. Clicking the logo reopens the editor, and the trash button removes it after
-a confirmation. Choose a dark or light theme, an accent color, and a font (Geist, Inter,
+Branding in Settings makes the public page your own: click or drop onto the
+logo tile to pick a logo (PNG, JPEG, WebP, GIF, or SVG), then crop, zoom, pan,
+rotate, flip, and give it a background in the logo editor. Dragging snaps the
+logo's center and edges to the frame's center lines and edges (hold Alt to move
+freely), and the editor previews the page header in both themes. Saving uploads
+the edited PNG right away; the server re-encodes it to a small PNG. Clicking a
+set logo reopens the editor, where Choose another replaces it, and the trash
+button removes it after a confirmation. Choose a dark or light theme, an accent color, and a font (Geist, Inter,
 Manrope, IBM Plex Sans, Space Grotesk, Source Serif, or JetBrains Mono), add up
 to three HTTPS header links, set footer text, and turn the Powered by Cupboard
 credit on or off. The accent colors the top bar, the Contact support button, and

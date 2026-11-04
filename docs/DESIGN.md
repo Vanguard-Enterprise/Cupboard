@@ -535,12 +535,16 @@ button, and the initial shown without a logo; status colors never change, so
 players read health the same way on every page. Picking or dropping a logo
 opens an editor dialog instead of uploading the raw file: a 16:9 stage with a
 dimmed crop frame (Original, Square, or Wide), drag or arrow keys to pan, the
-wheel, slider, or plus and minus keys to zoom, quarter turns and a flip, and a
+wheel, slider, or plus and minus keys to zoom, snapping within 6 pixels of
+the frame's center lines and edges with a sage guide line (Alt disables it), quarter turns and a flip, and a
 transparent, white, black, or accent background. At zoom 1 the whole image fits
 the frame, so nothing is cut off by default. The browser renders the result to
 a PNG of at most 640 pixels and shows it in a dark and a light header before
-saving. The logo tile opens the editor, and a trash button on its corner asks
-for confirmation in a popover before removing it. The settings preview renders
+saving. The logo tile is the only entry point (there is no separate upload or
+replace button): it picks a file when empty, opens the editor when set, and
+accepts a dropped file; the editor's Choose another replaces the image. A trash
+button on the tile's corner asks for confirmation in a popover before removing
+it. The settings preview renders
 the real public view, so it shows exactly what visitors get. The light theme is
 a scoped token set (`.theme-light`) that darkens status colors for contrast on
 white, and a full light page also lights the document so the scrollbar gutter

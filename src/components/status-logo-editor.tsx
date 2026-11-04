@@ -146,6 +146,58 @@ export function outputSize(aspect: number, edge = EXPORT_EDGE): Size {
     : { width: Math.max(1, Math.round(edge * aspect)), height: edge };
 }
 
+/** Where a snapped guide sits, in frame heights from the frame center. */
+export type Guides = { x: number | null; y: number | null };
+
+/**
+ * Snaps a dragged position so the image's center or edges line up with the
+ * frame's center lines or edges. `threshold` is in frame heights.
+ */
+export function snap(
+  image: Size,
+  edit: LogoEdit,
+  x: number,
+  y: number,
+  threshold: number,
+): { x: number; y: number; guides: Guides } {
+  const aspect = frameAspect(image, edit);
+  const size = turned(image, edit.rotation);
+  // Image size in frame heights; the frame is `aspect` wide and 1 tall.
+  const scale = Math.min(aspect / size.width, 1 / size.height) * edit.zoom;
+  const halfWidth = (size.width * scale) / 2;
+  const halfHeight = (size.height * scale) / 2;
+  const axis = (value: number, half: number, frameHalf: number) => {
+    // Each candidate pairs the offset that aligns it with the guide it shows.
+    const candidates: [number, number][] = [
+      [0, 0],
+      [half - frameHalf, -frameHalf],
+      [frameHalf - half, frameHalf],
+    ];
+    let best: [number, number] | null = null;
+    for (const candidate of candidates) {
+      const distance = Math.abs(value - candidate[0]);
+      if (
+        distance <= threshold &&
+        (!best || distance < Math.abs(value - best[0]))
+      )
+        best = candidate;
+    }
+    return best
+      ? { value: best[0], guide: best[1] }
+      : { value, guide: null as number | null };
+  };
+  const snappedX = axis(x, halfWidth, aspect / 2);
+  const snappedY = axis(y, halfHeight, 0.5);
+  return {
+    x: snappedX.value,
+    y: snappedY.value,
+    guides: { x: snappedX.guide, y: snappedY.guide },
+  };
+}
+
+/** Screen pixels within which a drag snaps to a guide. */
+const SNAP_PIXELS = 6;
+
 type Loaded = { element: HTMLImageElement; width: number; height: number };
 
 function loadImage(url: string) {
@@ -211,7 +263,14 @@ export function StatusLogoEditor({
   const [preview, setPreview] = useState("");
   const [saving, setSaving] = useState(false);
   const stage = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{ id: number; x: number; y: number } | null>(null);
+  const drag = useRef<{
+    id: number;
+    clientX: number;
+    clientY: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [guides, setGuides] = useState<Guides>({ x: null, y: null });
 
   useEffect(() => {
     if (!file) return;
@@ -282,7 +341,13 @@ export function StatusLogoEditor({
     } catch {
       // Capture is a nicety; dragging still works inside the crop area.
     }
-    drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    drag.current = {
+      id: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      x: edit.x,
+      y: edit.y,
+    };
   }
 
   function pointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -292,18 +357,20 @@ export function StatusLogoEditor({
     const frame = layout(frameAspect(image, edit));
     const unit = box.height * frame.height;
     if (unit <= 0) return;
-    const dx = (event.clientX - start.x) / unit;
-    const dy = (event.clientY - start.y) / unit;
-    drag.current = { ...start, x: event.clientX, y: event.clientY };
-    setEdit((current) => ({
-      ...current,
-      x: current.x + dx,
-      y: current.y + dy,
-    }));
+    const x = start.x + (event.clientX - start.clientX) / unit;
+    const y = start.y + (event.clientY - start.clientY) / unit;
+    // Alt drags freely, like most design tools.
+    const next = event.altKey
+      ? { x, y, guides: { x: null, y: null } }
+      : snap(image, edit, x, y, SNAP_PIXELS / unit);
+    setGuides(next.guides);
+    setEdit((current) => ({ ...current, x: next.x, y: next.y }));
   }
 
   function pointerUp(event: PointerEvent<HTMLDivElement>) {
-    if (drag.current?.id === event.pointerId) drag.current = null;
+    if (drag.current?.id !== event.pointerId) return;
+    drag.current = null;
+    setGuides({ x: null, y: null });
   }
 
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -370,60 +437,81 @@ export function StatusLogoEditor({
         <DialogHeader>
           <DialogTitle>Edit logo</DialogTitle>
           <DialogDescription>
-            Drag to position it, scroll or use the slider to zoom.
+            Drag to position, scroll to zoom. Hold Alt to move without snapping.
           </DialogDescription>
         </DialogHeader>
 
-        <div
-          ref={stage}
-          role="application"
-          aria-label="Logo crop area"
-          aria-roledescription="Crop area. Use the arrow keys to move and plus or minus to zoom."
-          tabIndex={0}
-          onPointerDown={pointerDown}
-          onPointerMove={pointerMove}
-          onPointerUp={pointerUp}
-          onPointerCancel={pointerUp}
-          onKeyDown={keyDown}
-          className="relative aspect-video w-full cursor-grab touch-none overflow-hidden rounded-lg border border-border bg-[conic-gradient(var(--surface-elevated)_25%,var(--background)_0_50%,var(--surface-elevated)_0_75%,var(--background)_0)] bg-[length:16px_16px] outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 active:cursor-grabbing"
-        >
-          {!image && !loadError && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <Spinner aria-label="Loading image" />
-            </div>
-          )}
-          {loadError && !image && (
-            <p
-              role="alert"
-              className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-destructive"
-            >
-              {loadError}
-            </p>
-          )}
-          {image && placed && (
-            <>
-              <div
-                aria-hidden="true"
-                className="absolute"
-                style={{ ...frame.style, background: fill }}
-              />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={loaded?.url}
-                alt=""
-                draggable={false}
-                className="pointer-events-none absolute max-w-none"
-                style={placed}
-              />
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute rounded-[3px] shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-1 ring-white/70"
-                style={frame.style}
-              >
-                <div className="absolute inset-0 bg-[linear-gradient(to_right,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%),linear-gradient(to_bottom,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%)]" />
+        {/* The wrapper keeps the grid from squeezing the 16:9 stage. */}
+        <div>
+          <div
+            ref={stage}
+            role="application"
+            aria-label="Logo crop area"
+            aria-roledescription="Crop area. Use the arrow keys to move and plus or minus to zoom."
+            tabIndex={0}
+            onPointerDown={pointerDown}
+            onPointerMove={pointerMove}
+            onPointerUp={pointerUp}
+            onPointerCancel={pointerUp}
+            onKeyDown={keyDown}
+            className="relative aspect-video w-full cursor-grab touch-none overflow-hidden rounded-lg border border-border bg-[conic-gradient(var(--surface-elevated)_25%,var(--background)_0_50%,var(--surface-elevated)_0_75%,var(--background)_0)] bg-[length:16px_16px] outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 active:cursor-grabbing"
+          >
+            {!image && !loadError && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Spinner aria-label="Loading image" />
               </div>
-            </>
-          )}
+            )}
+            {loadError && !image && (
+              <p
+                role="alert"
+                className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-destructive"
+              >
+                {loadError}
+              </p>
+            )}
+            {image && placed && (
+              <>
+                <div
+                  aria-hidden="true"
+                  className="absolute"
+                  style={{ ...frame.style, background: fill }}
+                />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={loaded?.url}
+                  alt=""
+                  draggable={false}
+                  className="pointer-events-none absolute max-w-none"
+                  style={placed}
+                />
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute rounded-[3px] shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-1 ring-white/70"
+                  style={frame.style}
+                >
+                  <div className="absolute inset-0 bg-[linear-gradient(to_right,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%),linear-gradient(to_bottom,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%)]" />
+                </div>
+                {guides.x !== null && (
+                  <div
+                    aria-hidden="true"
+                    data-testid="logo-guide-vertical"
+                    className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-primary"
+                    style={{
+                      left: `${((STAGE_ASPECT / 2 + guides.x * frame.height) / STAGE_ASPECT) * 100}%`,
+                    }}
+                  />
+                )}
+                {guides.y !== null && (
+                  <div
+                    aria-hidden="true"
+                    data-testid="logo-guide-horizontal"
+                    className="pointer-events-none absolute inset-x-0 h-px -translate-y-1/2 bg-primary"
+                    style={{ top: `${(0.5 + guides.y * frame.height) * 100}%` }}
+                  />
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-3">

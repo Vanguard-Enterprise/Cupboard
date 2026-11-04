@@ -5,6 +5,7 @@ import {
   frameAspect,
   initialEdit,
   outputSize,
+  snap,
 } from "./status-logo-editor";
 
 const wide = { width: 600, height: 300 };
@@ -104,5 +105,35 @@ describe("logo editor geometry", () => {
       "not a color",
     );
     expect(context.calls).toContainEqual(["set fillStyle", "#7cb58d"]);
+  });
+});
+
+describe("logo snapping", () => {
+  const half = { ...initialEdit, zoom: 0.5 };
+
+  it("snaps to the frame center within the threshold", () => {
+    expect(snap(wide, half, 0.03, -0.02, 0.05)).toEqual({
+      x: 0,
+      y: 0,
+      guides: { x: 0, y: 0 },
+    });
+  });
+
+  it("snaps image edges to frame edges", () => {
+    // At half zoom the 2:1 image is 1 frame height wide and 0.5 tall inside a
+    // 2:1 frame, so its left edge meets the frame at x = -0.5.
+    expect(snap(wide, half, -0.52, 0.27, 0.05)).toEqual({
+      x: -0.5,
+      y: 0.25,
+      guides: { x: -1, y: 0.5 },
+    });
+  });
+
+  it("leaves positions outside the threshold alone", () => {
+    expect(snap(wide, half, 0.2, -0.1, 0.05)).toEqual({
+      x: 0.2,
+      y: -0.1,
+      guides: { x: null, y: null },
+    });
   });
 });
