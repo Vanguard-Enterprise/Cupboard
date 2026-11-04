@@ -532,7 +532,15 @@ a logo, dark or light theme, an accent color (presets plus a hex field), one of
 a curated set of fonts, up to three header links, footer text, and the Powered
 by Cupboard credit. The accent only colors the top bar, the Contact support
 button, and the initial shown without a logo; status colors never change, so
-players read health the same way on every page. The settings preview renders
+players read health the same way on every page. Picking or dropping a logo
+opens an editor dialog instead of uploading the raw file: a 16:9 stage with a
+dimmed crop frame (Original, Square, or Wide), drag or arrow keys to pan, the
+wheel, slider, or plus and minus keys to zoom, quarter turns and a flip, and a
+transparent, white, black, or accent background. At zoom 1 the whole image fits
+the frame, so nothing is cut off by default. The browser renders the result to
+a PNG of at most 640 pixels and shows it in a dark and a light header before
+saving. The logo tile opens the editor, and a trash button on its corner asks
+for confirmation in a popover before removing it. The settings preview renders
 the real public view, so it shows exactly what visitors get. The light theme is
 a scoped token set (`.theme-light`) that darkens status colors for contrast on
 white, and a full light page also lights the document so the scrollbar gutter

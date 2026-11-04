@@ -143,6 +143,36 @@ const ready = () =>
     expect(screen.queryByLabelText("Loading status page")).toBeNull(),
   );
 
+/** jsdom has no image decoding or canvas, so give the logo editor stand-ins. */
+function stubImages() {
+  vi.stubGlobal(
+    "Image",
+    class {
+      naturalWidth = 600;
+      naturalHeight = 300;
+      decoding = "auto";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    },
+  );
+  let next = 0;
+  URL.createObjectURL = vi.fn(() => `blob:logo-${++next}`);
+  URL.revokeObjectURL = vi.fn();
+  const context = new Proxy({}, { get: () => vi.fn() });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    context as unknown as CanvasRenderingContext2D,
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+    "data:image/png;base64,",
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(
+    (callback) => callback(new Blob(["png"], { type: "image/png" })),
+  );
+}
+
 describe("Status page admin", () => {
   it("shows live status, maintenance, and visibility on the overview", async () => {
     vi.mocked(apiRequest).mockResolvedValue(live);
@@ -396,8 +426,9 @@ describe("Status page admin", () => {
     );
   });
 
-  it("uploads a logo right away without touching the draft", async () => {
+  it("crops a picked logo in the editor, then uploads it without touching the draft", async () => {
     const user = userEvent.setup();
+    stubImages();
     vi.mocked(apiRequest).mockResolvedValueOnce(empty);
     const fetch = vi.fn(async (path: string) =>
       path === "/app-api/status-page/logo"
@@ -411,12 +442,21 @@ describe("Status page admin", () => {
     await user.type(screen.getByLabelText("Footer text"), "Draft footer");
     const file = new File(["png"], "logo.png", { type: "image/png" });
     await user.upload(screen.getByLabelText("Logo file"), file);
+    const editor = await screen.findByRole("dialog", { name: "Edit logo" });
+    expect(fetch).not.toHaveBeenCalled();
+    await user.click(within(editor).getByRole("radio", { name: "Square" }));
+    await user.click(within(editor).getByRole("button", { name: "Zoom in" }));
+    await user.click(
+      within(editor).getByRole("button", { name: "Rotate right" }),
+    );
+    expect(within(editor).getByText("125%")).toBeTruthy();
+    await user.click(within(editor).getByRole("button", { name: "Save logo" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
         "/app-api/status-page/logo",
         expect.objectContaining({
           method: "POST",
-          body: file,
+          body: expect.any(Blob),
           headers: expect.objectContaining({
             "Content-Type": "application/octet-stream",
             "X-Cupboard-Organization": "org-one",
@@ -425,6 +465,9 @@ describe("Status page admin", () => {
       ),
     );
     expect(toast.success).toHaveBeenCalledWith("Logo updated.");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit logo" })).toBeNull(),
+    );
     expect(
       await screen.findByRole("button", { name: "Replace logo" }),
     ).toBeTruthy();
@@ -432,6 +475,65 @@ describe("Status page admin", () => {
       "value",
       "Draft footer",
     );
+  });
+
+  it("refuses files that are not images before opening the editor", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    stubImages();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.upload(
+      screen.getByLabelText("Logo file"),
+      new File(["text"], "notes.txt", { type: "text/plain" }),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Choose a PNG, JPEG, WebP, GIF, or SVG image.",
+    );
+    expect(screen.queryByRole("dialog", { name: "Edit logo" })).toBeNull();
+  });
+
+  it("removes the logo only after confirming from the trash button", async () => {
+    const user = userEvent.setup();
+    stubImages();
+    vi.mocked(apiRequest).mockImplementation(async (path: string) =>
+      path === "status-page/logo/remove"
+        ? { ...empty, logoVersion: null }
+        : { ...empty, logoVersion: 4 },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Blob(["png"], { type: "image/png" }))),
+    );
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    await user.click(
+      await screen.findByRole("button", { name: "Remove logo" }),
+    );
+    expect(screen.getByText("Remove the logo?")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(apiRequest).not.toHaveBeenCalledWith(
+      "status-page/logo/remove",
+      expect.anything(),
+      expect.anything(),
+    );
+    await user.click(screen.getByRole("button", { name: "Remove logo" }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenCalledWith(
+        "status-page/logo/remove",
+        {},
+        "org-one",
+      ),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Logo removed.");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remove logo" })).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "Upload logo" })).toBeTruthy();
   });
 
   it("reorders components with the keyboard and keeps the draft until saved", async () => {

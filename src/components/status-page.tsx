@@ -71,6 +71,7 @@ import {
   type StatusSource,
 } from "@/lib/status-page";
 import { copyText } from "@/lib/clipboard";
+import { StatusLogoEditor } from "@/components/status-logo-editor";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,7 +99,6 @@ import {
 import {
   Command,
   CommandEmpty,
-  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -308,7 +308,21 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   const nameInput = useRef<HTMLInputElement | null>(null);
   const logoInput = useRef<HTMLInputElement | null>(null);
   const [logoBusy, setLogoBusy] = useState(false);
+  const [logoRemoveOpen, setLogoRemoveOpen] = useState(false);
+  const [logoDrop, setLogoDrop] = useState(false);
+  // The image open in the logo editor. Picked files own their object URL.
+  const [logoEditing, setLogoEditing] = useState<{
+    url: string;
+    owned: boolean;
+  } | null>(null);
   const logoUrl = useStatusLogo(organization.id, state?.logoVersion ?? null);
+
+  useEffect(
+    () => () => {
+      if (logoEditing?.owned) URL.revokeObjectURL(logoEditing.url);
+    },
+    [logoEditing],
+  );
 
   const dirty =
     state !== null && draft !== null && !sameDraft(draft, draftOf(state));
@@ -495,11 +509,21 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     void load();
   }
 
-  async function uploadLogo(file: File) {
-    if (file.size > 2 * 1024 * 1024) {
-      toast.error("Choose an image no larger than 2 MiB.");
+  function editLogoFile(file: File | undefined) {
+    if (logoInput.current) logoInput.current.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Choose a PNG, JPEG, WebP, GIF, or SVG image.");
       return;
     }
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error("Choose an image no larger than 20 MiB.");
+      return;
+    }
+    setLogoEditing({ url: URL.createObjectURL(file), owned: true });
+  }
+
+  async function uploadLogo(png: Blob) {
     setLogoBusy(true);
     try {
       const response = await fetch("/app-api/status-page/logo", {
@@ -509,7 +533,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           "X-Cupboard-Request": "1",
           "X-Cupboard-Organization": organization.id,
         },
-        body: file,
+        body: png,
       });
       const result = await response.json().catch(() => null);
       if (!response.ok)
@@ -520,11 +544,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         );
       adopt(result as StatusPageState);
       toast.success("Logo updated.");
+      return true;
     } catch (cause) {
       toast.error(message(cause));
+      return false;
     } finally {
       setLogoBusy(false);
-      if (logoInput.current) logoInput.current.value = "";
     }
   }
 
@@ -539,6 +564,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         ),
       );
       toast.success("Logo removed.");
+      setLogoRemoveOpen(false);
     } catch (cause) {
       toast.error(message(cause));
     } finally {
@@ -1391,57 +1417,132 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   <div className="space-y-2 md:col-span-2">
                     <p className="text-sm leading-none font-medium">Logo</p>
                     <div className="flex flex-wrap items-center gap-4">
-                      <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-surface-elevated">
-                        {logoUrl ? (
-                          // A same-origin object URL for the re-encoded PNG.
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={logoUrl}
-                            alt="Current logo"
-                            className="max-h-12 max-w-12 object-contain"
-                          />
-                        ) : (
-                          <ImageIcon
-                            aria-hidden="true"
-                            className="size-5 text-muted-foreground"
-                          />
-                        )}
-                      </span>
-                      <div className="min-w-0 space-y-2">
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-                            disabled={logoBusy}
-                            onClick={() => logoInput.current?.click()}
-                          >
-                            {logoBusy ? (
-                              <Spinner aria-hidden="true" />
-                            ) : (
-                              <UploadIcon aria-hidden="true" />
-                            )}
-                            {state.logoVersion === null
-                              ? "Upload logo"
-                              : "Replace logo"}
-                          </Button>
-                          {state.logoVersion !== null && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              className="h-10 px-3 [@media(any-pointer:coarse)]:min-h-11"
-                              disabled={logoBusy}
-                              onClick={() => void removeLogo()}
-                            >
-                              Remove
-                            </Button>
+                      <div className="relative shrink-0">
+                        <button
+                          type="button"
+                          aria-label={logoUrl ? "Edit logo" : "Add logo"}
+                          disabled={logoBusy}
+                          onClick={() =>
+                            logoUrl
+                              ? setLogoEditing({ url: logoUrl, owned: false })
+                              : logoInput.current?.click()
+                          }
+                          onDragOver={(event) => {
+                            if (!canManage) return;
+                            event.preventDefault();
+                            setLogoDrop(true);
+                          }}
+                          onDragLeave={() => setLogoDrop(false)}
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            setLogoDrop(false);
+                            if (canManage)
+                              editLogoFile(event.dataTransfer.files[0]);
+                          }}
+                          className={cn(
+                            "group/logo relative flex h-20 w-36 items-center justify-center overflow-hidden rounded-xl border bg-surface-elevated transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-default",
+                            logoUrl
+                              ? "border-border"
+                              : "border-dashed border-border-strong hover:border-muted-foreground",
+                            logoDrop && "border-ring bg-ring/10",
                           )}
-                        </div>
-                        <p className="text-xs leading-5 text-muted-foreground">
-                          PNG, JPEG, WebP, GIF, or SVG up to 2 MiB. Saves right
-                          away.
-                        </p>
+                        >
+                          {logoUrl ? (
+                            <>
+                              {/* A same-origin object URL for the re-encoded PNG. */}
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={logoUrl}
+                                alt="Current logo"
+                                className="max-h-12 max-w-28 object-contain"
+                              />
+                              <span
+                                aria-hidden="true"
+                                className="absolute inset-0 flex items-center justify-center gap-1.5 bg-background/80 text-xs font-medium opacity-0 transition-opacity group-hover/logo:opacity-100 group-focus-visible/logo:opacity-100 group-disabled/logo:hidden"
+                              >
+                                <PencilIcon className="size-3.5" />
+                                Edit
+                              </span>
+                            </>
+                          ) : (
+                            <span className="flex flex-col items-center gap-1 text-xs text-muted-foreground">
+                              {logoBusy ? (
+                                <Spinner aria-hidden="true" />
+                              ) : (
+                                <ImageIcon
+                                  aria-hidden="true"
+                                  className="size-5"
+                                />
+                              )}
+                              Add logo
+                            </span>
+                          )}
+                        </button>
+                        {logoUrl && canManage && (
+                          <Popover
+                            open={logoRemoveOpen}
+                            onOpenChange={setLogoRemoveOpen}
+                          >
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon-sm"
+                                aria-label="Remove logo"
+                                disabled={logoBusy}
+                                className="absolute -top-2 -right-2 size-7 rounded-full bg-popover text-muted-foreground shadow-sm hover:text-destructive"
+                              >
+                                <Trash2Icon aria-hidden="true" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              align="start"
+                              className="w-64 space-y-3"
+                            >
+                              <div className="space-y-1">
+                                <p className="text-sm font-medium">
+                                  Remove the logo?
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  Your page shows its initial instead.
+                                </p>
+                              </div>
+                              <div className="flex justify-end gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setLogoRemoveOpen(false)}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  size="sm"
+                                  disabled={logoBusy}
+                                  onClick={() => void removeLogo()}
+                                >
+                                  {logoBusy && <Spinner aria-hidden="true" />}
+                                  Remove
+                                </Button>
+                              </div>
+                            </PopoverContent>
+                          </Popover>
+                        )}
                       </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+                        disabled={logoBusy}
+                        onClick={() => logoInput.current?.click()}
+                      >
+                        <UploadIcon aria-hidden="true" />
+                        {state.logoVersion === null
+                          ? "Upload logo"
+                          : "Replace logo"}
+                      </Button>
                       <input
                         ref={logoInput}
                         type="file"
@@ -1449,10 +1550,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         className="sr-only"
                         tabIndex={-1}
                         aria-label="Logo file"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
-                          if (file) void uploadLogo(file);
-                        }}
+                        onChange={(event) =>
+                          editLogoFile(event.target.files?.[0])
+                        }
                       />
                     </div>
                   </div>
@@ -1746,6 +1846,21 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           </Button>
         </div>
       )}
+
+      <StatusLogoEditor
+        file={logoEditing?.url ?? null}
+        onOpenChange={(open) => {
+          if (!open) setLogoEditing(null);
+        }}
+        onSave={uploadLogo}
+        onChooseFile={() => logoInput.current?.click()}
+        accent={
+          validColor(draft?.accentColor.trim().toLowerCase() ?? "")
+            ? draft!.accentColor.trim().toLowerCase()
+            : state.accentColor
+        }
+        pageName={draft?.name ?? state.name}
+      />
 
       <Dialog
         open={componentForm !== null}
