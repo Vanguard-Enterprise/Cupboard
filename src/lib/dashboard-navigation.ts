@@ -30,7 +30,7 @@ export const dashboardNavigation = [
           },
           {
             id: "maintenance",
-            title: "Maintenance",
+            title: "Status page",
           },
           {
             id: "backups",

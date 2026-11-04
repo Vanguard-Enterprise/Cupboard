@@ -2,9 +2,9 @@ import { StatusPageAdmin } from "@/components/status-page";
 import { getIdentity } from "@/lib/auth-server";
 import { redirect } from "next/navigation";
 
-export const metadata = { title: "Maintenance | Cupboard" };
+export const metadata = { title: "Status page | Cupboard" };
 
-export default async function MaintenancePage() {
+export default async function StatusPagePage() {
   const identity = await getIdentity();
   if (!identity) redirect("/login");
   if (!identity.organization) redirect("/dashboard");

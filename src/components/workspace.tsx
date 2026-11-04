@@ -126,7 +126,7 @@ export function Workspace({
       : pathname === maintenancePath
         ? {
             activeSection: "maintenance",
-            crumbs: ["Infrastructure", "Maintenance"],
+            crumbs: ["Infrastructure", "Status page"],
           }
         : undefined;
   const page = identity.organization

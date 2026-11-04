@@ -993,11 +993,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         <TabsContent value="settings" className="mt-4">
           <form onSubmit={save} className="space-y-6" noValidate>
             <fieldset disabled={!canManage} className="space-y-6">
-              <Section
-                id="page-setup"
-                title="Page setup"
-                description="What players see at the top of the page."
-              >
+              <Section id="page-setup" title="Page setup">
                 <div className="grid gap-4 border-t border-border px-5 py-5 md:grid-cols-2 md:px-6">
                   <div className="space-y-2">
                     <Label htmlFor="status-name">Page name</Label>
@@ -1032,10 +1028,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         className="h-full min-w-0 flex-1 bg-transparent px-1 font-mono text-sm outline-none"
                       />
                     </div>
-                    <p className="text-xs leading-5 text-muted-foreground">
-                      Lower-case letters, digits, and hyphens. Changing it
-                      breaks links you already shared.
-                    </p>
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="status-announcement">Announcement</Label>
@@ -1086,11 +1078,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 </div>
               </Section>
 
-              <Section
-                id="branding"
-                title="Branding"
-                description="Make the public page look like yours."
-              >
+              <Section id="branding" title="Branding">
                 <div className="grid gap-5 border-t border-border px-5 py-5 md:grid-cols-2 md:px-6">
                   <div className="space-y-2 md:col-span-2">
                     <p className="text-sm leading-none font-medium">Logo</p>
@@ -1272,7 +1260,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           aria-invalid={
                             !validColor(draft.accentColor.trim().toLowerCase())
                           }
-                          aria-describedby="status-accent-help"
                           onChange={(e) =>
                             updateDraft({ accentColor: e.target.value })
                           }
@@ -1280,14 +1267,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         />
                       </div>
                     </div>
-                    <p
-                      id="status-accent-help"
-                      className="text-xs leading-5 text-muted-foreground"
-                    >
-                      Used for the top bar, the Contact support button, and your
-                      initial when there is no logo. Status colors stay the same
-                      so players can read them at a glance.
-                    </p>
                   </div>
                   <div className="space-y-3 md:col-span-2">
                     <div className="flex items-center justify-between gap-3">
@@ -1402,7 +1381,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               <Section
                 id="component-setup"
                 title="Targets"
-                description="Each target mirrors a saved server or machine. Drag to order the page and hide anything you want to watch privately."
                 action={
                   canManage && (
                     <Button
@@ -1650,11 +1628,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 )}
               </Section>
 
-              <Section
-                id="preview"
-                title="Public preview"
-                description="How the page reads with your unsaved changes."
-              >
+              <Section id="preview" title="Public preview">
                 <div className="border-t border-border">
                   <div className="max-h-[42rem] overflow-y-auto">
                     <PublicStatusView

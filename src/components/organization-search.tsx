@@ -120,10 +120,10 @@ export function OrganizationSearch({
                   Machines
                 </CommandItem>
                 <CommandItem
-                  value="Maintenance status page uptime windows"
+                  value="Status page maintenance uptime windows"
                   onSelect={() => navigate(maintenancePath)}
                 >
-                  Maintenance
+                  Status page
                 </CommandItem>
                 <CommandItem
                   value="Dashboard overview"

@@ -516,7 +516,9 @@ composition: a compact name and Contact support header, the announcement, a
 centered status hero with the update time, maintenance in progress, grouped
 targets with status labels, scheduled and past maintenance, and a Powered by
 Cupboard footer. Operators asked for the word "targets" in place of
-"components" and for the overview sections to carry no descriptions. Status colors use
+"components", for the sidebar entry to read "Status page", and for the
+overview and settings sections, the address field, and the accent field to carry
+no descriptions. Status colors use
 the existing tokens: sage operational, amber degraded, red unavailable, neutral
 for maintenance and unknown, always with a text label. The source picker uses
 the shared Popover and Command components inside the dialog; the base-ui
