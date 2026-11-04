@@ -24,6 +24,7 @@ import {
   GripVerticalIcon,
   HardDriveIcon,
   ImageIcon,
+  MonitorIcon,
   MoonIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -33,6 +34,7 @@ import {
   Trash2Icon,
   WrenchIcon,
   XIcon,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { apiRequest, type Identity } from "@/lib/api-client";
@@ -66,6 +68,7 @@ import {
   type PublicStatus,
   type StatusComponent,
   type StatusFont,
+  type StatusTheme,
   type StatusPageState,
   type StatusSource,
 } from "@/lib/status-page";
@@ -218,6 +221,13 @@ type ComponentForm = {
   tagId: string;
   public: boolean;
   error: string;
+};
+
+/** Dark and Light lock the page; System follows each visitor's device. */
+const themeOption: Record<StatusTheme, { label: string; Icon: LucideIcon }> = {
+  dark: { label: "Dark", Icon: MoonIcon },
+  light: { label: "Light", Icon: SunIcon },
+  system: { label: "System", Icon: MonitorIcon },
 };
 
 const kindLabel: Record<ComponentKind, string> = {
@@ -1549,27 +1559,26 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       type="single"
                       value={draft.theme}
                       onValueChange={(value) => {
-                        if (value === "dark" || value === "light")
-                          updateDraft({ theme: value });
+                        if (value in themeOption)
+                          updateDraft({ theme: value as StatusTheme });
                       }}
                       aria-labelledby="status-theme-label"
                       spacing={0}
                       className="w-full rounded-lg bg-surface-elevated p-1"
                     >
-                      {(["dark", "light"] as const).map((theme) => (
-                        <ToggleGroupItem
-                          key={theme}
-                          value={theme}
-                          className="h-8 flex-1 gap-1.5 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
-                        >
-                          {theme === "dark" ? (
-                            <MoonIcon aria-hidden="true" />
-                          ) : (
-                            <SunIcon aria-hidden="true" />
-                          )}
-                          {theme === "dark" ? "Dark" : "Light"}
-                        </ToggleGroupItem>
-                      ))}
+                      {(["dark", "light", "system"] as const).map((theme) => {
+                        const { label, Icon } = themeOption[theme];
+                        return (
+                          <ToggleGroupItem
+                            key={theme}
+                            value={theme}
+                            className="h-8 flex-1 gap-1.5 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                          >
+                            <Icon aria-hidden="true" />
+                            {label}
+                          </ToggleGroupItem>
+                        );
+                      })}
                     </ToggleGroup>
                   </div>
                   <div className="space-y-2">

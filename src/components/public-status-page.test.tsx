@@ -128,6 +128,23 @@ describe("Public status page", () => {
     expect(screen.queryByText("Powered by")).toBeNull();
   });
 
+  it("follows the visitor's device only when the page uses the system theme", () => {
+    const system = render(
+      <PublicStatusPage
+        slug="northstar"
+        initial={{ ...status, theme: "system" }}
+      />,
+    );
+    const root = system.container.firstElementChild as HTMLElement;
+    expect(root.className).toContain("theme-system");
+    expect(root.className).not.toContain("theme-light");
+    system.unmount();
+    const dark = render(<PublicStatusPage slug="northstar" initial={status} />);
+    expect(
+      (dark.container.firstElementChild as HTMLElement).className,
+    ).not.toMatch(/theme-(light|system)/);
+  });
+
   it("shows an initial in the accent color without a logo", () => {
     render(<PublicStatusPage slug="northstar" initial={status} />);
     expect(screen.getByText("N")).toBeTruthy();

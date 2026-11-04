@@ -121,6 +121,7 @@ export function PublicStatusView({
       className={cn(
         "bg-background text-foreground",
         data.theme === "light" && "theme-light",
+        data.theme === "system" && "theme-system",
         !embedded && "min-h-screen",
       )}
       style={

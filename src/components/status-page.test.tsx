@@ -367,6 +367,34 @@ describe("Status page admin", () => {
     expect(heading.parentElement?.textContent).toContain("Public");
   });
 
+  it("lets the page follow each visitor's system theme", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(
+      screen.getByRole("radio", { name: "Dark" }).getAttribute("aria-checked"),
+    ).toBe("true");
+    await user.click(screen.getByRole("radio", { name: "System" }));
+    const preview = screen.getByRole("region", { name: "Public preview" });
+    expect(preview.querySelector(".theme-system")).toBeTruthy();
+    expect(preview.querySelector(".theme-light")).toBeNull();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...empty,
+      revision: 1,
+      theme: "system",
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({ theme: "system" }),
+        "org-one",
+      ),
+    );
+  });
+
   it("brands the page, previews it, and saves the branding", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValueOnce(empty);

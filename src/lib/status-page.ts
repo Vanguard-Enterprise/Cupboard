@@ -39,7 +39,7 @@ export type StatusSource = {
 };
 export type StatusTag = { id: string; name: string };
 
-export type StatusTheme = "dark" | "light";
+export type StatusTheme = "dark" | "light" | "system";
 export type StatusFont =
   | "geist"
   | "inter"

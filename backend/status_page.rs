@@ -30,7 +30,7 @@ const VIEW: &str = "infrastructure.view";
 const MANAGE: &str = "infrastructure.manage";
 const MAX_LINKS: usize = 3;
 const MAX_LOGO_BYTES: usize = 256 * 1024;
-const THEMES: [&str; 2] = ["dark", "light"];
+const THEMES: [&str; 3] = ["dark", "light", "system"];
 const FONTS: [&str; 7] = [
     "geist",
     "inter",
@@ -560,7 +560,7 @@ async fn save(
     )?;
     let support_url = support_url(&input.support_url)?;
     if !THEMES.contains(&input.theme.as_str()) {
-        return Err(invalid("Choose a dark or light theme."));
+        return Err(invalid("Choose a dark, light, or system theme."));
     }
     if !FONTS.contains(&input.font.as_str()) {
         return Err(invalid("Choose one of the listed fonts."));

@@ -100,11 +100,12 @@
   --sidebar-ring: #7cb58d;
 }
 
-/* Light palette for public status pages that choose it. Status colors keep
-   their meaning and are darkened to stay readable on white. A full public
-   page also lights the document, so the scrollbar gutter matches. */
-.theme-light,
-:root:has([data-status-page].theme-light) {
+/* Light palette for public status pages. Status colors keep their meaning and
+   are darkened to stay readable on white. Light locks it on; System applies it
+   when the visitor's device prefers light, in CSS so the first paint is right.
+   A full public page also lights the document, so the scrollbar gutter
+   matches. */
+@utility status-light {
   color-scheme: light;
   --background: #f6f7f8;
   --foreground: #16181c;
@@ -131,6 +132,18 @@
   --border: #e1e4e8;
   --border-strong: #c8cdd4;
   --input: #d5d9df;
+}
+
+.theme-light,
+:root:has([data-status-page].theme-light) {
+  @apply status-light;
+}
+
+@media (prefers-color-scheme: light) {
+  .theme-system,
+  :root:has([data-status-page].theme-system) {
+    @apply status-light;
+  }
 }
 
 @layer base {

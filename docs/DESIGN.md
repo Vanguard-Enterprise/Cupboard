@@ -528,7 +528,7 @@ dialog's pointer-events layer.
 The admin header reads "Status" with the published badge beside it and the
 public address below. Branding sits in Settings between page setup and
 targets, modeled on what Uptime Kuma and hosted status pages let customers set:
-a logo, dark or light theme, an accent color (presets plus a hex field), one of
+a logo, a dark, light, or system theme, an accent color (presets plus a hex field), one of
 a curated set of fonts, up to three header links, footer text, and the Powered
 by Cupboard credit. The accent only colors the top bar, the Contact support
 button, and the initial shown without a logo; status colors never change, so
@@ -548,7 +548,11 @@ it. The settings preview renders
 the real public view, so it shows exactly what visitors get. The light theme is
 a scoped token set (`.theme-light`) that darkens status colors for contrast on
 white, and a full light page also lights the document so the scrollbar gutter
-matches.
+matches. Dark and Light lock the page to the organization's branding; System
+(`.theme-system`) applies the same light tokens inside a
+`prefers-color-scheme: light` media query. Both share one `status-light`
+utility in `globals.css`, and the choice is pure CSS, so a light-preferring
+visitor never sees a dark first paint.
 
 Targets have their own tab between Overview and Settings, with the shared save
 bar following the editor across tabs. The add dialog starts with a Website,

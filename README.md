@@ -685,7 +685,7 @@ logo's center and edges to the frame's center lines and edges (hold Alt to move
 freely), and the editor previews the page header in both themes. Saving uploads
 the edited PNG right away; the server re-encodes it to a small PNG. Clicking a
 set logo reopens the editor, where Choose another replaces it, and the trash
-button removes it after a confirmation. Choose a dark or light theme, an accent color, and a font (Geist, Inter,
+button removes it after a confirmation. Lock the page to a dark or light theme, or choose System so each visitor sees their device preference, then pick an accent color, and a font (Geist, Inter,
 Manrope, IBM Plex Sans, Space Grotesk, Source Serif, or JetBrains Mono), add up
 to three HTTPS header links, set footer text, and turn the Powered by Cupboard
 credit on or off. The accent colors the top bar, the Contact support button, and

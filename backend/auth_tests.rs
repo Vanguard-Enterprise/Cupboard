@@ -6216,6 +6216,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     };
     for branding in [
         json!({"theme":"neon"}),
+        json!({"theme":"System"}),
         json!({"font":"comic-sans"}),
         json!({"accentColor":"#fff"}),
         json!({"accentColor":"red"}),
@@ -6237,13 +6238,13 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             branded(
                 4,
                 true,
-                json!({"theme":"light","accentColor":"#E4572E","font":"space-grotesk","links":[{"label":" Website ","url":"https://northstar.example"}],"footerText":"Northstar Games LLC","poweredBy":false}),
+                json!({"theme":"system","accentColor":"#E4572E","font":"space-grotesk","links":[{"label":" Website ","url":"https://northstar.example"}],"footerText":"Northstar Games LLC","poweredBy":false}),
             ),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{styled}");
     assert_eq!(styled["revision"], 5);
-    assert_eq!(styled["theme"], "light");
+    assert_eq!(styled["theme"], "system");
     assert_eq!(styled["accentColor"], "#e4572e");
     assert_eq!(styled["font"], "space-grotesk");
     assert_eq!(
@@ -6256,7 +6257,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     let (_, public) = anonymous
         .request("GET", "public/status/northstar", json!(null))
         .await;
-    assert_eq!(public["theme"], "light");
+    assert_eq!(public["theme"], "system");
     assert_eq!(public["accentColor"], "#e4572e");
     assert_eq!(public["font"], "space-grotesk");
     assert_eq!(public["links"][0]["label"], "Website");
