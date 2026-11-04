@@ -28,7 +28,6 @@ import {
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
-  RefreshCwIcon,
   ServerIcon,
   SunIcon,
   Trash2Icon,
@@ -878,18 +877,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 {overall.detail}
               </p>
             </div>
-            <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{checkedLabel}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Refresh status"
-                onClick={() => void load()}
-              >
-                <RefreshCwIcon aria-hidden="true" />
-              </Button>
-            </div>
+            <p className="ml-auto text-xs text-muted-foreground">
+              {checkedLabel}
+            </p>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
@@ -905,7 +895,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       type="button"
                       variant="outline"
                       className="mt-4 h-10 px-4"
-                      onClick={() => setTab("settings")}
+                      onClick={() => setTab("targets")}
                     >
                       <PlusIcon aria-hidden="true" />
                       Add targets

@@ -169,6 +169,20 @@ describe("Status page admin", () => {
     ).toBe("/status/northstar-games");
   });
 
+  it("sends an empty overview to the Targets tab without a manual refresh", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(empty);
+    mount();
+    await ready();
+    expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Add targets" }));
+    expect(
+      screen
+        .getByRole("tab", { name: "Targets" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Add target" })).toBeTruthy();
+  });
+
   it("lets viewers read but not change the page", async () => {
     vi.mocked(apiRequest).mockResolvedValue(live);
     mount({ ...identity, permissions: ["infrastructure.view"] });
