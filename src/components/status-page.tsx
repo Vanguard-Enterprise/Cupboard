@@ -1055,17 +1055,10 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       placeholder="https://discord.gg/your-server"
                       className="h-10"
                     />
-                    <p className="text-xs leading-5 text-muted-foreground">
-                      Where players can reach you during an outage. HTTPS only.
-                    </p>
                   </div>
                   <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface-elevated/40 px-4 py-3 md:col-span-2">
                     <div className="space-y-1">
                       <Label htmlFor="status-published">Publish page</Label>
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        Anyone with the address can open the page. Hidden
-                        targets stay private either way.
-                      </p>
                     </div>
                     <Switch
                       id="status-published"
@@ -1340,10 +1333,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         </Button>
                       </div>
                     ))}
-                    <p className="text-xs leading-5 text-muted-foreground">
-                      Up to three links beside Contact support, such as your
-                      website, store, or rules. HTTPS only.
-                    </p>
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="status-footer">Footer text</Label>
@@ -1363,9 +1352,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       <Label htmlFor="status-powered-by">
                         Show Powered by Cupboard
                       </Label>
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        A small credit at the bottom of the page.
-                      </p>
                     </div>
                     <Switch
                       id="status-powered-by"
