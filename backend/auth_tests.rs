@@ -5960,7 +5960,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert_eq!(status, StatusCode::OK, "{foreign}");
     let foreign_id = foreign["id"].as_str().unwrap().to_owned();
 
-    let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","components":components});
+    let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components});
     let component = |id: Option<&str>, kind: &str, source: &str, public: bool| json!({"id":id,"name":format!("{kind} shown"),"kind":kind,"sourceId":source,"groupName":"EU","public":public});
     // Another organization's server cannot be shown, even with a valid id.
     for (body, expected) in [
@@ -5986,7 +5986,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         (save(0, "North Star", json!([])), StatusCode::BAD_REQUEST),
         (save(1, "northstar", json!([])), StatusCode::CONFLICT),
         (
-            json!({"revision":0,"name":"x","slug":"x","published":false,"announcement":"","supportUrl":"http://insecure.example.com","components":[]}),
+            json!({"revision":0,"name":"x","slug":"x","published":false,"announcement":"","supportUrl":"http://insecure.example.com","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":[]}),
             StatusCode::BAD_REQUEST,
         ),
     ] {
@@ -6059,7 +6059,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         .request(
             "POST",
             "status-page",
-            json!({"revision":1,"name":"Northstar status","slug":"northstar","published":false,"announcement":"","supportUrl":"","components":[component(Some(&server_component), "server", &server_id, true), component(Some(&machine_component), "machine", &machine_id, false)]}),
+            json!({"revision":1,"name":"Northstar status","slug":"northstar","published":false,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":[component(Some(&server_component), "server", &server_id, true), component(Some(&machine_component), "machine", &machine_id, false)]}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{hidden}");
@@ -6198,6 +6198,186 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert_eq!(status, StatusCode::OK, "{removed}");
     assert_eq!(removed["maintenance"], json!([]));
 
+    // Branding is validated, saved with the page, and shown to visitors.
+    let branded = |revision: i64, published: bool, branding: Value| {
+        let mut body = save(
+            revision,
+            "northstar",
+            json!([
+                component(Some(&machine_component), "machine", &machine_id, true),
+                component(Some(&server_component), "server", &server_id, true)
+            ]),
+        );
+        body["published"] = json!(published);
+        for (key, value) in branding.as_object().unwrap() {
+            body[key] = value.clone();
+        }
+        body
+    };
+    for branding in [
+        json!({"theme":"neon"}),
+        json!({"font":"comic-sans"}),
+        json!({"accentColor":"#fff"}),
+        json!({"accentColor":"red"}),
+        json!({"links":[{"label":"Site","url":"http://northstar.example"}]}),
+        json!({"links":[{"label":"","url":"https://northstar.example"}]}),
+        json!({"links":[{"label":"a","url":"https://a.example"},{"label":"b","url":"https://b.example"},{"label":"c","url":"https://c.example"},{"label":"d","url":"https://d.example"}]}),
+        json!({"footerText":"Line one\nLine two"}),
+        json!({"footerText":"x".repeat(201)}),
+    ] {
+        let (status, response) = owner
+            .request("POST", "status-page", branded(4, true, branding.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{branding} {response}");
+    }
+    let (status, styled) = owner
+        .request(
+            "POST",
+            "status-page",
+            branded(
+                4,
+                true,
+                json!({"theme":"light","accentColor":"#E4572E","font":"space-grotesk","links":[{"label":" Website ","url":"https://northstar.example"}],"footerText":"Northstar Games LLC","poweredBy":false}),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{styled}");
+    assert_eq!(styled["revision"], 5);
+    assert_eq!(styled["theme"], "light");
+    assert_eq!(styled["accentColor"], "#e4572e");
+    assert_eq!(styled["font"], "space-grotesk");
+    assert_eq!(
+        styled["links"],
+        json!([{"label":"Website","url":"https://northstar.example"}])
+    );
+    assert_eq!(styled["footerText"], "Northstar Games LLC");
+    assert_eq!(styled["poweredBy"], false);
+    assert_eq!(styled["logoVersion"], Value::Null);
+    let (_, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(public["theme"], "light");
+    assert_eq!(public["accentColor"], "#e4572e");
+    assert_eq!(public["font"], "space-grotesk");
+    assert_eq!(public["links"][0]["label"], "Website");
+    assert_eq!(public["footerText"], "Northstar Games LLC");
+    assert_eq!(public["poweredBy"], false);
+    assert_eq!(public["logoVersion"], Value::Null);
+
+    // Logos are re-encoded, private to the tenant, and public only while published.
+    let body_of = |response: axum::response::Response| async move {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        (status, headers, bytes)
+    };
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(400, 200)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let mut png = png.into_inner();
+    png.extend_from_slice(b"private logo metadata");
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = body_of(
+        owner
+            .file_request(
+                "POST",
+                "status-page/logo",
+                &org,
+                "",
+                b"not an image".to_vec(),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, bytes) = body_of(
+        owner
+            .file_request("POST", "status-page/logo", &org, "", png.clone())
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let uploaded: Value = serde_json::from_slice(&bytes).unwrap();
+    let version = uploaded["logoVersion"].as_i64().unwrap();
+    assert_eq!(uploaded["revision"], 5);
+    let (status, headers, bytes) = body_of(
+        owner
+            .file_request("GET", "status-page/logo", &org, "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    let logo = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((logo.width(), logo.height()), (160, 80));
+    assert!(!String::from_utf8_lossy(&bytes).contains("private logo metadata"));
+    let (status, _, _) = body_of(
+        other
+            .file_request("GET", "status-page/logo", &other.organization, "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, headers, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    assert_eq!(
+        anonymous
+            .request("GET", "public/status/northstar", json!(null))
+            .await
+            .1["logoVersion"],
+        version
+    );
+    let (status, replaced, _) = body_of(
+        owner
+            .file_request("POST", "status-page/logo", &org, "", png.clone())
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replaced:?}");
+    let (status, cleared) = owner
+        .request("POST", "status-page/logo/remove", json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["logoVersion"], Value::Null);
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = body_of(
+        owner
+            .file_request("POST", "status-page/logo", &org, "", png.clone())
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, unpublished) = owner
+        .request("POST", "status-page", branded(5, false, json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     // Infrastructure viewers can read the page but cannot change it.
     let viewer = owner
         .create_role("Infrastructure viewer", &["infrastructure.view"])
@@ -6219,14 +6399,29 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     member.request("GET", "auth/me", json!(null)).await;
     let (status, visible) = member.request("GET", "status-page", json!(null)).await;
     assert_eq!(status, StatusCode::OK, "{visible}");
-    assert_eq!(visible["revision"], 4);
+    assert_eq!(visible["revision"], 6);
     assert_eq!(
         member
-            .request("POST", "status-page", save(4, "northstar", json!([])))
+            .request("POST", "status-page", save(6, "northstar", json!([])))
             .await
             .0,
         StatusCode::FORBIDDEN
     );
+    let (status, _, _) = body_of(
+        member
+            .file_request("GET", "status-page/logo", &org, "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for (method, path, bytes) in [
+        ("POST", "status-page/logo", png.clone()),
+        ("POST", "status-page/logo/remove", b"{}".to_vec()),
+    ] {
+        let (status, _, _) =
+            body_of(member.file_request(method, path, &org, "", bytes).await).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+    }
     assert_eq!(
         member
             .request(

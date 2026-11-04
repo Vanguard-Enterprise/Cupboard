@@ -33,6 +33,7 @@ const paths = new Set([
   "organization/export",
   "status-page",
   "status-page/maintenance",
+  "status-page/logo/remove",
 ]);
 export function backendUrl(path: string) {
   const base = process.env.CUPBOARD_API_URL ?? "http://127.0.0.1:8080";
@@ -43,12 +44,19 @@ export async function proxyApi(
   path: string,
 ): Promise<Response> {
   const logoUpload =
-    (path === "organization-logo" || path === "organization-logo/preview") &&
+    (path === "organization-logo" ||
+      path === "organization-logo/preview" ||
+      path === "status-page/logo") &&
     request.method === "POST";
+  const publicLogo =
+    /^public\/status\/[a-z0-9-]{1,40}\/logo$/.test(path) &&
+    request.method === "GET";
   const logoDownload =
     (path === "organization-logo/preview" && request.method === "POST") ||
     (/^organization-logo\/[0-9a-f-]{36}$/.test(path) &&
-      request.method === "GET");
+      request.method === "GET") ||
+    (path === "status-page/logo" && request.method === "GET") ||
+    publicLogo;
   const fileUpload =
     (path === "files" && request.method === "POST") || logoUpload;
   const fileDownload =
@@ -57,6 +65,7 @@ export async function proxyApi(
   if (
     !paths.has(path) &&
     !logoDownload &&
+    !logoUpload &&
     !/^servers\/[0-9a-f-]{36}\/(?:check|panel\/(?:resources|observation|console|power|command))$/.test(
       path,
     ) &&
@@ -217,6 +226,9 @@ export async function proxyApi(
         "Content-Security-Policy",
         "default-src 'none'; sandbox",
       );
+      // Public logo URLs carry the logo version, so visitors can cache them.
+      if (publicLogo)
+        resultHeaders.set("Cache-Control", "public, max-age=3600");
       return new Response(upstream.body, {
         status: upstream.status,
         headers: resultHeaders,

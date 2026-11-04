@@ -464,3 +464,57 @@ it("forwards anonymous GET requests for published status pages only", async () =
   ])
     expect((await get(invalid)).status).toBe(404);
 });
+
+it("forwards status page logo uploads and serves public logos as cacheable images", async () => {
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) =>
+    url.endsWith("/logo") && init?.method === "GET"
+      ? new Response(new Uint8Array([137, 80, 78, 71]), {
+          headers: { "content-type": "text/html" },
+        })
+      : Response.json({}),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const upload = (contentType: string) =>
+    new Request("http://localhost:5173/app-api/status-page/logo", {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:5173",
+        "content-type": contentType,
+        "x-cupboard-request": "1",
+        "x-cupboard-organization": "org",
+      },
+      body: new Uint8Array(12),
+    });
+  expect(
+    (await proxyApi(upload("application/json"), "status-page/logo")).status,
+  ).toBe(403);
+  expect(
+    (await proxyApi(upload("application/octet-stream"), "status-page/logo"))
+      .status,
+  ).toBe(200);
+  const options = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+  expect(new Headers(options[1].headers).get("x-cupboard-organization")).toBe(
+    "org",
+  );
+  expect(new Headers(options[1].headers).get("content-type")).toBe(
+    "application/octet-stream",
+  );
+  const get = (path: string) =>
+    proxyApi(
+      new Request(`http://localhost:5173/app-api/${path}`, { method: "GET" }),
+      path,
+    );
+  const logo = await get("public/status/northstar/logo");
+  expect(logo.status).toBe(200);
+  expect(logo.headers.get("content-type")).toBe("image/png");
+  expect(logo.headers.get("cache-control")).toBe("public, max-age=3600");
+  const admin = await get("status-page/logo");
+  expect(admin.headers.get("content-type")).toBe("image/png");
+  expect(admin.headers.get("cache-control")).toBe("no-store");
+  for (const invalid of [
+    "public/status/Northstar/logo",
+    "public/status/northstar/logo/extra",
+    "status-page/logo/other",
+  ])
+    expect((await get(invalid)).status).toBe(404);
+});

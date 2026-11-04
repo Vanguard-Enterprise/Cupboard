@@ -6,12 +6,30 @@ import type { PublicStatus } from "@/lib/status-page";
 import { apiRequest } from "@/lib/api-client";
 
 vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
+vi.mock("@/components/status-fonts", () => ({
+  statusFontFamily: {
+    geist: "Geist",
+    inter: "Inter",
+    manrope: "Manrope",
+    "ibm-plex-sans": "IBM Plex Sans",
+    "space-grotesk": "Space Grotesk",
+    "source-serif": "Source Serif 4",
+    "jetbrains-mono": "JetBrains Mono",
+  },
+}));
 
 const now = Date.now();
 const status: PublicStatus = {
   name: "Northstar Games status",
   announcement: "Wipe on Thursday.",
   supportUrl: "https://discord.gg/northstar",
+  theme: "dark",
+  accentColor: "#7cb58d",
+  font: "geist",
+  links: [],
+  footerText: "",
+  poweredBy: true,
+  logoVersion: null,
   updatedAt: now,
   components: [
     {
@@ -77,6 +95,43 @@ describe("Public status page", () => {
     expect(screen.getByText("Scheduled maintenance")).toBeTruthy();
     expect(screen.getByText("Host reboot")).toBeTruthy();
     expect(screen.queryByText("Past maintenance")).toBeNull();
+  });
+
+  it("applies the page branding", () => {
+    const { container } = render(
+      <PublicStatusPage
+        slug="northstar"
+        initial={{
+          ...status,
+          theme: "light",
+          accentColor: "#1f3a5f",
+          font: "space-grotesk",
+          links: [{ label: "Store", url: "https://store.northstar.example" }],
+          footerText: "Northstar Games LLC",
+          poweredBy: false,
+          logoVersion: 9,
+        }}
+      />,
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toContain("theme-light");
+    expect(root.style.fontFamily).toContain("Space Grotesk");
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      "/app-api/public/status/northstar/logo?v=9",
+    );
+    const support = screen.getByRole("link", { name: "Contact support" });
+    expect(support.style.color).toBe("rgb(255, 255, 255)");
+    expect(
+      screen.getByRole("link", { name: "Store" }).getAttribute("href"),
+    ).toBe("https://store.northstar.example");
+    expect(screen.getByText("Northstar Games LLC")).toBeTruthy();
+    expect(screen.queryByText("Powered by")).toBeNull();
+  });
+
+  it("shows an initial in the accent color without a logo", () => {
+    render(<PublicStatusPage slug="northstar" initial={status} />);
+    expect(screen.getByText("N")).toBeTruthy();
+    expect(screen.getByText("Powered by")).toBeTruthy();
   });
 
   it("refreshes from the public endpoint and keeps the last state on failure", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  accentForeground,
   affectedNames,
   componentStatus,
   draftOf,
@@ -7,9 +8,11 @@ import {
   maintenancePhase,
   moveComponent,
   overallStatus,
+  publicLogoPath,
   sameDraft,
   slugify,
   unusedSources,
+  validColor,
   validSlug,
   type MaintenanceWindow,
   type StatusComponent,
@@ -163,6 +166,13 @@ describe("status page helpers", () => {
       published: false,
       announcement: "",
       supportUrl: "",
+      theme: "dark",
+      accentColor: "#7cb58d",
+      font: "geist",
+      links: [],
+      footerText: "",
+      poweredBy: true,
+      logoVersion: null,
       components: [component("a", "operational")],
       maintenance: [],
       sources: [],
@@ -172,5 +182,26 @@ describe("status page helpers", () => {
     expect(sameDraft(draft, draftOf(state))).toBe(true);
     expect(sameDraft(draft, { ...draft, components: [] })).toBe(false);
     expect(sameDraft(draft, { ...draft, slugEdited: true })).toBe(true);
+    expect(sameDraft(draft, { ...draft, theme: "light" })).toBe(false);
+    expect(
+      sameDraft(draft, {
+        ...draft,
+        links: [{ label: "Site", url: "https://a.example" }],
+      }),
+    ).toBe(false);
+    expect(sameDraft(draft, { ...draft, poweredBy: false })).toBe(false);
+  });
+
+  it("validates accents and picks readable text for them", () => {
+    expect(validColor("#7cb58d")).toBe(true);
+    expect(validColor("#7CB58D")).toBe(false);
+    expect(validColor("#7cb")).toBe(false);
+    expect(accentForeground("#f3f4f6")).toBe("#0e0f11");
+    expect(accentForeground("#7cb58d")).toBe("#0e0f11");
+    expect(accentForeground("#1f3a5f")).toBe("#ffffff");
+    expect(accentForeground("#000000")).toBe("#ffffff");
+    expect(publicLogoPath("northstar", 7)).toBe(
+      "/app-api/public/status/northstar/logo?v=7",
+    );
   });
 });

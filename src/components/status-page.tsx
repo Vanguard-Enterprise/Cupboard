@@ -23,18 +23,23 @@ import {
   GlobeIcon,
   GripVerticalIcon,
   HardDriveIcon,
+  ImageIcon,
+  MoonIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   ServerIcon,
+  SunIcon,
   Trash2Icon,
+  UploadIcon,
   WrenchIcon,
+  XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { apiRequest, type Identity } from "@/lib/api-client";
 import {
-  activeMaintenance,
+  accentPresets,
   affectedNames,
   componentStatus,
   draftOf,
@@ -42,21 +47,26 @@ import {
   localDateTimeValue,
   maintenancePhase,
   maxComponents,
+  maxLinks,
   moveComponent,
   overallStatus,
   parseLocalDateTime,
   publicPath,
   sameDraft,
   slugify,
+  statusFonts,
   statusLabel,
   unusedSources,
+  validColor,
   validSlug,
   windowLabel,
   type ComponentDraft,
   type ComponentKind,
   type MaintenanceWindow,
   type PageDraft,
+  type PublicStatus,
   type StatusComponent,
+  type StatusFont,
   type StatusPageState,
   type StatusSource,
 } from "@/lib/status-page";
@@ -67,9 +77,18 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Collapsible,
   CollapsibleContent,
@@ -123,6 +142,8 @@ import {
   toneClass,
   toneTile,
 } from "@/components/status-indicators";
+import { PublicStatusView } from "@/components/public-status-page";
+import { statusFontFamily } from "@/components/status-fonts";
 
 const message = (error: unknown) =>
   error instanceof Error
@@ -191,6 +212,34 @@ type ComponentForm = {
   error: string;
 };
 
+/** Loads the saved logo through the organization-scoped endpoint. */
+function useStatusLogo(organization: string, version: number | null) {
+  const [logo, setLogo] = useState<{ version: number; url: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (version === null) return;
+    let url = "";
+    let canceled = false;
+    void fetch("/app-api/status-page/logo", {
+      headers: { "X-Cupboard-Organization": organization },
+      cache: "no-store",
+    })
+      .then((response) => (response.ok ? response.blob() : null))
+      .then((blob) => {
+        if (canceled || !blob) return;
+        url = URL.createObjectURL(blob);
+        setLogo({ version, url });
+      })
+      .catch(() => {});
+    return () => {
+      canceled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [organization, version]);
+  return logo && logo.version === version ? logo.url : null;
+}
+
 function sourceLabel(source: StatusSource) {
   return `${source.name} (${source.kind})`;
 }
@@ -234,6 +283,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     target: number | null;
   } | null>(null);
   const nameInput = useRef<HTMLInputElement | null>(null);
+  const logoInput = useRef<HTMLInputElement | null>(null);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const logoUrl = useStatusLogo(organization.id, state?.logoVersion ?? null);
 
   const dirty =
     state !== null && draft !== null && !sameDraft(draft, draftOf(state));
@@ -367,6 +419,21 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       );
       return;
     }
+    const accentColor = draft.accentColor.trim().toLowerCase();
+    if (!validColor(accentColor)) {
+      setSaveError(
+        "Enter the accent color as a six-digit hex code, such as #7cb58d.",
+      );
+      return;
+    }
+    const links = draft.links.map((link) => ({
+      label: link.label.trim(),
+      url: link.url.trim(),
+    }));
+    if (links.some((link) => !link.label || !link.url)) {
+      setSaveError("Give each header link a label and an HTTPS address.");
+      return;
+    }
     setSaving(true);
     try {
       const next = await apiRequest<StatusPageState>(
@@ -378,6 +445,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           published: draft.published,
           announcement: draft.announcement,
           supportUrl: draft.supportUrl,
+          theme: draft.theme,
+          accentColor,
+          font: draft.font,
+          links,
+          footerText: draft.footerText,
+          poweredBy: draft.poweredBy,
           components: draft.components,
         },
         organization.id,
@@ -398,6 +471,57 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     setDraft(null);
     setSaveError("");
     void load();
+  }
+
+  async function uploadLogo(file: File) {
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Choose an image no larger than 2 MiB.");
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      const response = await fetch("/app-api/status-page/logo", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Cupboard-Request": "1",
+          "X-Cupboard-Organization": organization.id,
+        },
+        body: file,
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok)
+        throw new Error(
+          typeof result?.error === "string"
+            ? result.error
+            : "The logo could not be uploaded.",
+        );
+      adopt(result as StatusPageState);
+      toast.success("Logo updated.");
+    } catch (cause) {
+      toast.error(message(cause));
+    } finally {
+      setLogoBusy(false);
+      if (logoInput.current) logoInput.current.value = "";
+    }
+  }
+
+  async function removeLogo() {
+    setLogoBusy(true);
+    try {
+      adopt(
+        await apiRequest<StatusPageState>(
+          "status-page/logo/remove",
+          {},
+          organization.id,
+        ),
+      );
+      toast.success("Logo removed.");
+    } catch (cause) {
+      toast.error(message(cause));
+    } finally {
+      setLogoBusy(false);
+    }
   }
 
   async function copyUrl() {
@@ -528,6 +652,39 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       (s) => s.kind === component.kind && s.id === component.sourceId,
     )?.name ?? null;
 
+  const hiddenCount = draft.components.filter((c) => !c.public).length;
+  // The preview renders exactly what visitors would get after saving.
+  const previewOf = (): PublicStatus => ({
+    name: draft.name.trim() || state.name,
+    announcement: draft.announcement.trim(),
+    supportUrl: draft.supportUrl.trim(),
+    theme: draft.theme,
+    accentColor: draft.accentColor.trim().toLowerCase(),
+    font: draft.font,
+    links: draft.links
+      .map((link) => ({ label: link.label.trim(), url: link.url.trim() }))
+      .filter((link) => link.label && link.url),
+    footerText: draft.footerText.trim(),
+    poweredBy: draft.poweredBy,
+    logoVersion: state.logoVersion,
+    updatedAt: checkedAt ?? now,
+    components: draft.components
+      .filter((c) => c.public)
+      .map((c) => {
+        const live = components.find(
+          (s) => s.kind === c.kind && s.sourceId === c.sourceId,
+        );
+        return {
+          id: c.id ?? `${c.kind}:${c.sourceId}`,
+          name: c.name,
+          groupName: c.groupName,
+          health: live?.health ?? "unknown",
+          observedAt: live?.observedAt ?? null,
+        };
+      }),
+    maintenance: state.maintenance,
+  });
+
   const checkedLabel = checkedAt
     ? `Checked ${formatDistanceToNow(checkedAt, { addSuffix: true })}`
     : "";
@@ -545,10 +702,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             <ToneIcon tone={overall.tone} className="size-6" />
           </span>
           <div className="min-w-0">
-            <h1 className="truncate text-2xl font-semibold tracking-tight">
-              {draft.name.trim() || state.name}
-            </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 className="text-2xl font-semibold tracking-tight">Status</h1>
               <Badge variant="outline" className="gap-1">
                 {state.published ? (
                   <GlobeIcon aria-hidden="true" />
@@ -557,6 +712,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 )}
                 {state.published ? "Public" : "Not published"}
               </Badge>
+            </div>
+            <div className="mt-1 flex min-w-0 items-center text-sm text-muted-foreground">
               <span className="flex min-w-0 items-center gap-1">
                 <span className="truncate font-mono text-xs">{publicUrl}</span>
                 <Tooltip>
@@ -930,6 +1087,319 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               </Section>
 
               <Section
+                id="branding"
+                title="Branding"
+                description="Make the public page look like yours."
+              >
+                <div className="grid gap-5 border-t border-border px-5 py-5 md:grid-cols-2 md:px-6">
+                  <div className="space-y-2 md:col-span-2">
+                    <p className="text-sm leading-none font-medium">Logo</p>
+                    <div className="flex flex-wrap items-center gap-4">
+                      <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-surface-elevated">
+                        {logoUrl ? (
+                          // A same-origin object URL for the re-encoded PNG.
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={logoUrl}
+                            alt="Current logo"
+                            className="max-h-12 max-w-12 object-contain"
+                          />
+                        ) : (
+                          <ImageIcon
+                            aria-hidden="true"
+                            className="size-5 text-muted-foreground"
+                          />
+                        )}
+                      </span>
+                      <div className="min-w-0 space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+                            disabled={logoBusy}
+                            onClick={() => logoInput.current?.click()}
+                          >
+                            {logoBusy ? (
+                              <Spinner aria-hidden="true" />
+                            ) : (
+                              <UploadIcon aria-hidden="true" />
+                            )}
+                            {state.logoVersion === null
+                              ? "Upload logo"
+                              : "Replace logo"}
+                          </Button>
+                          {state.logoVersion !== null && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="h-10 px-3 [@media(any-pointer:coarse)]:min-h-11"
+                              disabled={logoBusy}
+                              onClick={() => void removeLogo()}
+                            >
+                              Remove
+                            </Button>
+                          )}
+                        </div>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          PNG, JPEG, WebP, GIF, or SVG up to 2 MiB. Saves right
+                          away.
+                        </p>
+                      </div>
+                      <input
+                        ref={logoInput}
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                        className="sr-only"
+                        tabIndex={-1}
+                        aria-label="Logo file"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) void uploadLogo(file);
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label id="status-theme-label">Theme</Label>
+                    <ToggleGroup
+                      type="single"
+                      value={draft.theme}
+                      onValueChange={(value) => {
+                        if (value === "dark" || value === "light")
+                          updateDraft({ theme: value });
+                      }}
+                      aria-labelledby="status-theme-label"
+                      spacing={0}
+                      className="w-fit rounded-lg bg-surface-elevated p-1"
+                    >
+                      {(["dark", "light"] as const).map((theme) => (
+                        <ToggleGroupItem
+                          key={theme}
+                          value={theme}
+                          className="h-8 gap-1.5 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                        >
+                          {theme === "dark" ? (
+                            <MoonIcon aria-hidden="true" />
+                          ) : (
+                            <SunIcon aria-hidden="true" />
+                          )}
+                          {theme === "dark" ? "Dark" : "Light"}
+                        </ToggleGroupItem>
+                      ))}
+                    </ToggleGroup>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="status-font">Font</Label>
+                    <Select
+                      value={draft.font}
+                      onValueChange={(font) =>
+                        updateDraft({ font: font as StatusFont })
+                      }
+                    >
+                      <SelectTrigger
+                        id="status-font"
+                        className="w-full border-border bg-input-background data-[size=default]:h-11 sm:data-[size=default]:h-10 dark:bg-input-background"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent position="popper">
+                        {statusFonts.map((font) => (
+                          <SelectItem
+                            key={font.id}
+                            value={font.id}
+                            className="min-h-11 sm:min-h-8"
+                          >
+                            <span
+                              style={{ fontFamily: statusFontFamily[font.id] }}
+                            >
+                              {font.label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="status-accent">Accent color</Label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div
+                        role="radiogroup"
+                        aria-label="Accent presets"
+                        className="flex flex-wrap gap-2"
+                      >
+                        {accentPresets.map((color) => {
+                          const selected =
+                            draft.accentColor.trim().toLowerCase() === color;
+                          return (
+                            <button
+                              key={color}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              aria-label={color}
+                              onClick={() =>
+                                updateDraft({ accentColor: color })
+                              }
+                              className={cn(
+                                "size-8 rounded-full border border-border-strong transition-shadow focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none [@media(any-pointer:coarse)]:size-11",
+                                selected &&
+                                  "ring-2 ring-foreground ring-offset-2 ring-offset-card",
+                              )}
+                              style={{ background: color }}
+                            />
+                          );
+                        })}
+                      </div>
+                      <div className="flex h-10 w-36 items-center gap-2 rounded-lg border border-input bg-input-background px-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+                        <span
+                          aria-hidden="true"
+                          className="size-4 shrink-0 rounded-sm border border-border-strong"
+                          style={{
+                            background: validColor(
+                              draft.accentColor.trim().toLowerCase(),
+                            )
+                              ? draft.accentColor.trim().toLowerCase()
+                              : "transparent",
+                          }}
+                        />
+                        <input
+                          id="status-accent"
+                          maxLength={7}
+                          spellCheck={false}
+                          autoComplete="off"
+                          value={draft.accentColor}
+                          aria-invalid={
+                            !validColor(draft.accentColor.trim().toLowerCase())
+                          }
+                          aria-describedby="status-accent-help"
+                          onChange={(e) =>
+                            updateDraft({ accentColor: e.target.value })
+                          }
+                          className="h-full min-w-0 flex-1 bg-transparent font-mono text-sm outline-none"
+                        />
+                      </div>
+                    </div>
+                    <p
+                      id="status-accent-help"
+                      className="text-xs leading-5 text-muted-foreground"
+                    >
+                      Used for the top bar, the Contact support button, and your
+                      initial when there is no logo. Status colors stay the same
+                      so players can read them at a glance.
+                    </p>
+                  </div>
+                  <div className="space-y-3 md:col-span-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm leading-none font-medium">
+                        Header links
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="h-9 px-3 [@media(any-pointer:coarse)]:min-h-11"
+                        disabled={draft.links.length >= maxLinks}
+                        onClick={() =>
+                          updateDraft({
+                            links: [...draft.links, { label: "", url: "" }],
+                          })
+                        }
+                      >
+                        <PlusIcon aria-hidden="true" />
+                        Add link
+                      </Button>
+                    </div>
+                    {draft.links.map((link, index) => (
+                      <div
+                        key={index}
+                        className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto]"
+                      >
+                        <Input
+                          aria-label={`Link ${index + 1} label`}
+                          maxLength={40}
+                          placeholder="Website"
+                          value={link.label}
+                          onChange={(e) =>
+                            updateDraft({
+                              links: draft.links.map((l, i) =>
+                                i === index
+                                  ? { ...l, label: e.target.value }
+                                  : l,
+                              ),
+                            })
+                          }
+                          className="h-10"
+                        />
+                        <Input
+                          aria-label={`Link ${index + 1} address`}
+                          type="url"
+                          maxLength={300}
+                          placeholder="https://"
+                          value={link.url}
+                          onChange={(e) =>
+                            updateDraft({
+                              links: draft.links.map((l, i) =>
+                                i === index ? { ...l, url: e.target.value } : l,
+                              ),
+                            })
+                          }
+                          className="col-span-1 row-start-2 h-10 sm:row-start-auto"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="row-start-1 size-10 sm:row-start-auto [@media(any-pointer:coarse)]:size-11"
+                          aria-label={`Remove link ${index + 1}`}
+                          onClick={() =>
+                            updateDraft({
+                              links: draft.links.filter((_, i) => i !== index),
+                            })
+                          }
+                        >
+                          <XIcon aria-hidden="true" />
+                        </Button>
+                      </div>
+                    ))}
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      Up to three links beside Contact support, such as your
+                      website, store, or rules. HTTPS only.
+                    </p>
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="status-footer">Footer text</Label>
+                    <Input
+                      id="status-footer"
+                      maxLength={200}
+                      value={draft.footerText}
+                      onChange={(e) =>
+                        updateDraft({ footerText: e.target.value })
+                      }
+                      placeholder={`© ${organization.name}`}
+                      className="h-10"
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface-elevated/40 px-4 py-3 md:col-span-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="status-powered-by">
+                        Show Powered by Cupboard
+                      </Label>
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        A small credit at the bottom of the page.
+                      </p>
+                    </div>
+                    <Switch
+                      id="status-powered-by"
+                      checked={draft.poweredBy}
+                      onCheckedChange={(poweredBy) =>
+                        updateDraft({ poweredBy })
+                      }
+                    />
+                  </div>
+                </div>
+              </Section>
+
+              <Section
                 id="component-setup"
                 title="Targets"
                 description="Each target mirrors a saved server or machine. Drag to order the page and hide anything you want to watch privately."
@@ -1185,27 +1655,22 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 title="Public preview"
                 description="How the page reads with your unsaved changes."
               >
-                <div className="border-t border-border bg-background px-5 py-6 md:px-6">
-                  <PublicPreview
-                    name={draft.name.trim() || state.name}
-                    announcement={draft.announcement.trim()}
-                    supportUrl={draft.supportUrl.trim()}
-                    components={draft.components
-                      .filter((c) => c.public)
-                      .map((c) => ({
-                        id: c.id ?? `${c.kind}:${c.sourceId}`,
-                        name: c.name,
-                        groupName: c.groupName,
-                        health:
-                          components.find(
-                            (s) =>
-                              s.kind === c.kind && s.sourceId === c.sourceId,
-                          )?.health ?? "unknown",
-                      }))}
-                    hidden={draft.components.filter((c) => !c.public).length}
-                    maintenance={state.maintenance}
-                    now={now}
-                  />
+                <div className="border-t border-border">
+                  <div className="max-h-[42rem] overflow-y-auto">
+                    <PublicStatusView
+                      embedded
+                      data={previewOf()}
+                      logoUrl={logoUrl}
+                      now={now}
+                    />
+                  </div>
+                  {hiddenCount > 0 && (
+                    <p className="border-t border-border px-5 py-3 text-xs text-muted-foreground md:px-6">
+                      {hiddenCount} hidden{" "}
+                      {hiddenCount === 1 ? "target is" : "targets are"} not
+                      shown publicly.
+                    </p>
+                  )}
                 </div>
               </Section>
             </fieldset>
@@ -1799,116 +2264,5 @@ function MaintenanceRow({
         </DropdownMenu>
       )}
     </li>
-  );
-}
-
-/** A compact rendering of the public page for the settings tab. */
-function PublicPreview({
-  name,
-  announcement,
-  supportUrl,
-  components,
-  hidden,
-  maintenance,
-  now,
-}: {
-  name: string;
-  announcement: string;
-  supportUrl: string;
-  components: {
-    id: string;
-    name: string;
-    groupName: string;
-    health: StatusComponent["health"];
-  }[];
-  hidden: number;
-  maintenance: MaintenanceWindow[];
-  now: number;
-}) {
-  const overall = overallStatus(
-    components.map((c) => ({
-      ...c,
-      kind: "server" as const,
-      sourceId: "",
-      sourceName: null,
-      public: true,
-      observedAt: null,
-    })),
-    maintenance,
-    now,
-  );
-  const active = activeMaintenance(maintenance, now);
-  return (
-    <div className="mx-auto max-w-xl space-y-4" aria-label="Public preview">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold">{name}</p>
-        {supportUrl && (
-          <span className="text-xs text-muted-foreground">Contact support</span>
-        )}
-      </div>
-      {announcement && (
-        <p className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
-          {announcement}
-        </p>
-      )}
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3">
-        <ToneIcon
-          tone={overall.tone}
-          className={cn("size-5", toneClass[overall.tone])}
-        />
-        <p className="text-sm font-medium">{overall.title}</p>
-      </div>
-      {active.map((window) => (
-        <p
-          key={window.id}
-          className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs"
-        >
-          <span className="font-medium">{window.title}</span>
-          {window.message && (
-            <span className="text-muted-foreground"> · {window.message}</span>
-          )}
-        </p>
-      ))}
-      {components.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-          Public targets appear here.
-        </p>
-      ) : (
-        <div className="divide-y divide-border rounded-lg border border-border bg-card">
-          {groupComponents(components).map((group) => (
-            <div key={group.name || "(ungrouped)"}>
-              {group.name && (
-                <p className="px-4 pt-3 text-xs font-medium text-muted-foreground">
-                  {group.name}
-                </p>
-              )}
-              {group.items.map((component) => {
-                const status = componentStatus(component, maintenance, now);
-                return (
-                  <div
-                    key={component.id}
-                    className="flex items-center justify-between gap-3 px-4 py-2.5"
-                  >
-                    <span className="flex items-center gap-2 text-sm">
-                      <StatusDot status={status} />
-                      {component.name}
-                    </span>
-                    <span className={cn("text-xs", toneClass[status])}>
-                      {statusLabel[status]}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      )}
-      {hidden > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {hidden} hidden {hidden === 1 ? "target is" : "targets are"} not shown
-          publicly.
-        </p>
-      )}
-    </div>
   );
 }

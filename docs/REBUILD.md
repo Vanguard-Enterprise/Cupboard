@@ -433,5 +433,10 @@ message, time range, completion time, and the affected component ids. Reads need
 organization and tenant ownership in the data path. The public
 `/status/<address>` route reads an unauthenticated API response that only
 includes public targets by display name and recent maintenance; the Next.js
-page renders it on the server and the browser refreshes it. Uptime history and
-incident posts are separate follow-ups.
+page renders it on the server and the browser refreshes it. Branding (theme,
+accent color, font, header links, footer text, and the Powered by credit) is
+saved and revisioned with the page. The logo is decoded and re-encoded to a
+PNG of at most 160 pixels per side by the existing logo pipeline and stored in
+PostgreSQL beside the page, since it is too small to justify object storage; it
+is served only while the page is published. Uptime history and incident posts
+are separate follow-ups.

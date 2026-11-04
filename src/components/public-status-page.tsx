@@ -1,24 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
 import { CalendarClockIcon, WrenchIcon } from "lucide-react";
 import { apiRequest } from "@/lib/api-client";
 import {
+  accentForeground,
   activeMaintenance,
   componentStatus,
   groupComponents,
   maintenancePhase,
   overallStatus,
+  publicLogoPath,
   statusLabel,
+  validColor,
   windowLabel,
   type MaintenanceWindow,
   type PublicStatus,
 } from "@/lib/status-page";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { statusFontFamily } from "@/components/status-fonts";
 import {
   StatusDot,
   ToneIcon,
@@ -60,6 +63,39 @@ export function PublicStatusPage({
     };
   }, [load]);
 
+  return (
+    <PublicStatusView
+      data={data}
+      logoUrl={
+        data.logoVersion === null
+          ? null
+          : publicLogoPath(slug, data.logoVersion)
+      }
+      now={now}
+      stale={stale}
+    />
+  );
+}
+
+/**
+ * The branded public page. The settings preview renders the same view, so
+ * what operators see while editing is what visitors get.
+ */
+export function PublicStatusView({
+  data,
+  logoUrl,
+  now,
+  stale = false,
+  embedded = false,
+}: {
+  data: PublicStatus;
+  logoUrl: string | null;
+  now: number;
+  stale?: boolean;
+  embedded?: boolean;
+}) {
+  const accent = validColor(data.accentColor) ? data.accentColor : "#7cb58d";
+  const accentText = accentForeground(accent);
   const components = data.components.map((c) => ({
     ...c,
     kind: "server" as const,
@@ -75,18 +111,81 @@ export function PublicStatusPage({
   const recent = data.maintenance.filter(
     (w) => maintenancePhase(w, now) === "completed",
   );
+  const Heading = embedded ? "p" : "h1";
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto w-full max-w-2xl px-4 py-8 md:py-12">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold tracking-tight">{data.name}</h1>
-          {data.supportUrl && (
-            <Button asChild variant="outline" className="h-9 px-3">
-              <a href={data.supportUrl} target="_blank" rel="noreferrer">
-                Contact support
-              </a>
-            </Button>
+    <div
+      data-status-page={embedded ? undefined : ""}
+      className={cn(
+        "bg-background text-foreground",
+        data.theme === "light" && "theme-light",
+        !embedded && "min-h-screen",
+      )}
+      style={
+        {
+          fontFamily: statusFontFamily[data.font] ?? statusFontFamily.geist,
+          "--ring": accent,
+        } as CSSProperties
+      }
+    >
+      <div aria-hidden="true" className="h-1" style={{ background: accent }} />
+      <div
+        className={cn(
+          "mx-auto w-full max-w-2xl px-4",
+          embedded ? "py-6" : "py-8 md:py-12",
+        )}
+      >
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+          <div className="flex min-w-0 items-center gap-3">
+            {logoUrl ? (
+              // Logos are re-encoded PNGs served by Cupboard, not remote images.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={logoUrl}
+                alt=""
+                className="h-9 w-auto max-w-40 shrink-0 object-contain"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold"
+                style={{ background: accent, color: accentText }}
+              >
+                {data.name.trim().charAt(0).toUpperCase()}
+              </span>
+            )}
+            <Heading className="truncate text-lg font-semibold tracking-tight">
+              {data.name}
+            </Heading>
+          </div>
+          {(data.links.length > 0 || data.supportUrl) && (
+            <nav
+              aria-label="Status page links"
+              className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm"
+            >
+              {data.links.map((link) => (
+                <a
+                  key={`${link.label}:${link.url}`}
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                >
+                  {link.label}
+                </a>
+              ))}
+              {data.supportUrl && (
+                <a
+                  href={data.supportUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-9 items-center rounded-lg px-3 font-medium transition-[filter] hover:brightness-110"
+                  style={{ background: accent, color: accentText }}
+                >
+                  Contact support
+                </a>
+              )}
+            </nav>
           )}
         </header>
 
@@ -97,7 +196,7 @@ export function PublicStatusPage({
         )}
 
         <section
-          aria-live="polite"
+          aria-live={embedded ? undefined : "polite"}
           className="mt-6 rounded-xl border border-border bg-card px-5 py-6 text-center md:px-8 md:py-8"
         >
           <span
@@ -169,10 +268,8 @@ export function PublicStatusPage({
         </section>
 
         {upcoming.length > 0 && (
-          <section aria-labelledby="upcoming-heading" className="mt-8">
-            <h2 id="upcoming-heading" className="text-base font-semibold">
-              Scheduled maintenance
-            </h2>
+          <section aria-label="Scheduled maintenance" className="mt-8">
+            <h2 className="text-base font-semibold">Scheduled maintenance</h2>
             <div className="mt-3 space-y-3">
               {upcoming.map((window) => (
                 <MaintenanceNotice key={window.id} window={window} now={now} />
@@ -182,10 +279,8 @@ export function PublicStatusPage({
         )}
 
         {recent.length > 0 && (
-          <section aria-labelledby="recent-heading" className="mt-8">
-            <h2 id="recent-heading" className="text-base font-semibold">
-              Past maintenance
-            </h2>
+          <section aria-label="Past maintenance" className="mt-8">
+            <h2 className="text-base font-semibold">Past maintenance</h2>
             <ul className="mt-3 divide-y divide-border rounded-xl border border-border bg-card">
               {recent.map((window) => (
                 <li key={window.id} className="px-4 py-3">
@@ -199,22 +294,29 @@ export function PublicStatusPage({
           </section>
         )}
 
-        <footer className="mt-10 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-          <span>Powered by</span>
-          <Link
-            href="/"
-            className="flex items-center gap-1.5 font-medium text-foreground"
-          >
-            <Image
-              src="/images/cupboard-logo.png"
-              alt=""
-              width={16}
-              height={16}
-              className="size-4"
-            />
-            Cupboard
-          </Link>
-        </footer>
+        {(data.footerText || data.poweredBy) && (
+          <footer className="mt-10 flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
+            {data.footerText && <p>{data.footerText}</p>}
+            {data.poweredBy && (
+              <p className="flex items-center gap-2">
+                <span>Powered by</span>
+                <Link
+                  href="/"
+                  className="flex items-center gap-1.5 font-medium text-foreground"
+                >
+                  <Image
+                    src="/images/cupboard-logo.png"
+                    alt=""
+                    width={16}
+                    height={16}
+                    className="size-4"
+                  />
+                  Cupboard
+                </Link>
+              </p>
+            )}
+          </footer>
+        )}
       </div>
     </div>
   );

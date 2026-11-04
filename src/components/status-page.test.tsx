@@ -17,6 +17,17 @@ import { toast } from "sonner";
 
 vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/status-fonts", () => ({
+  statusFontFamily: {
+    geist: "Geist",
+    inter: "Inter",
+    manrope: "Manrope",
+    "ibm-plex-sans": "IBM Plex Sans",
+    "space-grotesk": "Space Grotesk",
+    "source-serif": "Source Serif 4",
+    "jetbrains-mono": "JetBrains Mono",
+  },
+}));
 
 const identity: Identity = {
   user: { id: "operator", name: "Operator", email: "operator@example.com" },
@@ -32,6 +43,13 @@ const empty: StatusPageState = {
   published: false,
   announcement: "",
   supportUrl: "",
+  theme: "dark",
+  accentColor: "#7cb58d",
+  font: "geist",
+  links: [],
+  footerText: "",
+  poweredBy: true,
+  logoVersion: null,
   components: [],
   maintenance: [],
   sources: [
@@ -214,6 +232,12 @@ describe("Status page admin", () => {
           published: true,
           announcement: "",
           supportUrl: "",
+          theme: "dark",
+          accentColor: "#7cb58d",
+          font: "geist",
+          links: [],
+          footerText: "",
+          poweredBy: true,
           components: [
             {
               id: null,
@@ -230,6 +254,112 @@ describe("Status page admin", () => {
     );
     expect(toast.success).toHaveBeenCalledWith("Status page saved.");
     expect(screen.queryByText("Unsaved changes")).toBeNull();
+  });
+
+  it("titles the page Status with its visibility beside it", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading.textContent).toBe("Status");
+    expect(heading.parentElement?.textContent).toContain("Public");
+  });
+
+  it("brands the page, previews it, and saves the branding", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(screen.getByRole("radio", { name: "Light" }));
+    await user.click(screen.getByRole("radio", { name: "#e4572e" }));
+    await user.click(screen.getByRole("button", { name: "Add link" }));
+    await user.type(screen.getByLabelText("Link 1 label"), "Website");
+    await user.type(
+      screen.getByLabelText("Link 1 address"),
+      "https://northstar.example",
+    );
+    await user.type(
+      screen.getByLabelText("Footer text"),
+      "Northstar Games LLC",
+    );
+    await user.click(
+      screen.getByRole("switch", { name: "Show Powered by Cupboard" }),
+    );
+    const preview = screen.getByRole("region", { name: "Public preview" });
+    expect(preview.querySelector(".theme-light")).toBeTruthy();
+    expect(
+      within(preview)
+        .getByRole("link", { name: "Website" })
+        .getAttribute("href"),
+    ).toBe("https://northstar.example");
+    expect(within(preview).getByText("Northstar Games LLC")).toBeTruthy();
+    expect(within(preview).queryByText("Powered by")).toBeNull();
+
+    await user.clear(screen.getByLabelText("Accent color"));
+    await user.type(screen.getByLabelText("Accent color"), "#12");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "six-digit hex code",
+    );
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    await user.clear(screen.getByLabelText("Accent color"));
+    await user.type(screen.getByLabelText("Accent color"), "#E4572E");
+    vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({
+          theme: "light",
+          accentColor: "#e4572e",
+          font: "geist",
+          links: [{ label: "Website", url: "https://northstar.example" }],
+          footerText: "Northstar Games LLC",
+          poweredBy: false,
+        }),
+        "org-one",
+      ),
+    );
+  });
+
+  it("uploads a logo right away without touching the draft", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    const fetch = vi.fn(async (path: string) =>
+      path === "/app-api/status-page/logo"
+        ? Response.json({ ...empty, logoVersion: 7 })
+        : Response.json({}),
+    );
+    vi.stubGlobal("fetch", fetch);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.type(screen.getByLabelText("Footer text"), "Draft footer");
+    const file = new File(["png"], "logo.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("Logo file"), file);
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/app-api/status-page/logo",
+        expect.objectContaining({
+          method: "POST",
+          body: file,
+          headers: expect.objectContaining({
+            "Content-Type": "application/octet-stream",
+            "X-Cupboard-Organization": "org-one",
+          }),
+        }),
+      ),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Logo updated.");
+    expect(
+      await screen.findByRole("button", { name: "Replace logo" }),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Footer text")).toHaveProperty(
+      "value",
+      "Draft footer",
+    );
   });
 
   it("reorders components with the keyboard and keeps the draft until saved", async () => {

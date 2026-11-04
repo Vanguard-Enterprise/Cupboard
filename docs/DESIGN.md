@@ -522,3 +522,25 @@ for maintenance and unknown, always with a text label. The source picker uses
 the shared Popover and Command components inside the dialog; the base-ui
 Combobox is not used inside modal dialogs because its portal sits outside the
 dialog's pointer-events layer.
+
+The admin header reads "Status" with the published badge beside it and the
+public address below. Branding sits in Settings between page setup and
+targets, modeled on what Uptime Kuma and hosted status pages let customers set:
+a logo, dark or light theme, an accent color (presets plus a hex field), one of
+a curated set of fonts, up to three header links, footer text, and the Powered
+by Cupboard credit. The accent only colors the top bar, the Contact support
+button, and the initial shown without a logo; status colors never change, so
+players read health the same way on every page. The settings preview renders
+the real public view, so it shows exactly what visitors get. The light theme is
+a scoped token set (`.theme-light`) that darkens status colors for contrast on
+white, and a full light page also lights the document so the scrollbar gutter
+matches.
+
+## Scrollbars
+
+Every scrollable area uses Cupboard's own scrollbar: a slim rounded thumb in
+`--border-strong` on a clear track, matching the ScrollArea component, with the
+thumb darkening on hover. Chromium and Safari use the scrollbar pseudo-elements;
+Firefox, which has none, gets `scrollbar-width: thin` with the same colors.
+Components that hide their scrollbar on purpose, such as menus and the sidebar,
+keep doing so.

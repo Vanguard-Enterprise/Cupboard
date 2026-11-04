@@ -100,9 +100,68 @@
   --sidebar-ring: #7cb58d;
 }
 
+/* Light palette for public status pages that choose it. Status colors keep
+   their meaning and are darkened to stay readable on white. A full public
+   page also lights the document, so the scrollbar gutter matches. */
+.theme-light,
+:root:has([data-status-page].theme-light) {
+  color-scheme: light;
+  --background: #f6f7f8;
+  --foreground: #16181c;
+  --card: #ffffff;
+  --card-foreground: #16181c;
+  --popover: #ffffff;
+  --popover-foreground: #16181c;
+  --surface-elevated: #eef0f2;
+  --input-background: #ffffff;
+  --primary: #2f7a48;
+  --primary-hover: #286b3f;
+  --primary-active: #225c36;
+  --primary-foreground: #ffffff;
+  --secondary: #eef0f2;
+  --secondary-foreground: #16181c;
+  --muted: #eef0f2;
+  --muted-foreground: #565e6b;
+  --text-muted: #6b7380;
+  --accent: #eef0f2;
+  --accent-foreground: #16181c;
+  --destructive: #b23c3c;
+  --warning: #8a6418;
+  --success: #2f7a48;
+  --border: #e1e4e8;
+  --border-strong: #c8cdd4;
+  --input: #d5d9df;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  /* Cupboard's own scrollbar everywhere: a slim rounded thumb on a clear
+     track, matching the ScrollArea component. Firefox has no pseudo-elements,
+     so it gets the closest standard equivalent. */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) transparent;
+    }
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-color: var(--border-strong);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--text-muted);
   }
   body {
     @apply bg-background text-foreground;

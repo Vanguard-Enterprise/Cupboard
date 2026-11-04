@@ -670,3 +670,11 @@ windows, and windows that ended within the last week. Hidden targets, source
 identifiers, and server names never leave the API. The page refreshes every
 minute while open and keeps the last state if a refresh fails. Unpublished or
 unknown addresses return a not-found page.
+
+Branding in Settings makes the public page your own: upload a logo (PNG, JPEG,
+WebP, GIF, or SVG up to 2 MiB, saved right away and re-encoded to a small PNG),
+choose a dark or light theme, an accent color, and a font (Geist, Inter,
+Manrope, IBM Plex Sans, Space Grotesk, Source Serif, or JetBrains Mono), add up
+to three HTTPS header links, set footer text, and turn the Powered by Cupboard
+credit on or off. The accent colors the top bar, the Contact support button, and
+your initial when there is no logo; status colors stay the same.

@@ -27,11 +27,78 @@ export type MaintenanceWindow = {
 
 export type StatusSource = { id: string; name: string; kind: ComponentKind };
 
+export type StatusTheme = "dark" | "light";
+export type StatusFont =
+  | "geist"
+  | "inter"
+  | "manrope"
+  | "ibm-plex-sans"
+  | "space-grotesk"
+  | "source-serif"
+  | "jetbrains-mono";
+export type StatusLink = { label: string; url: string };
+
+/** How the public page looks. Saved with the page; the logo uploads separately. */
+export type Branding = {
+  theme: StatusTheme;
+  accentColor: string;
+  font: StatusFont;
+  links: StatusLink[];
+  footerText: string;
+  poweredBy: boolean;
+};
+
+export const statusFonts: { id: StatusFont; label: string }[] = [
+  { id: "geist", label: "Geist" },
+  { id: "inter", label: "Inter" },
+  { id: "manrope", label: "Manrope" },
+  { id: "ibm-plex-sans", label: "IBM Plex Sans" },
+  { id: "space-grotesk", label: "Space Grotesk" },
+  { id: "source-serif", label: "Source Serif" },
+  { id: "jetbrains-mono", label: "JetBrains Mono" },
+];
+
+export const accentPresets = [
+  "#7cb58d",
+  "#4f8fd6",
+  "#8b6cd9",
+  "#d9658f",
+  "#e4572e",
+  "#e0a526",
+  "#2fa39a",
+  "#f3f4f6",
+];
+
+export const maxLinks = 3;
+
+export function validColor(value: string) {
+  return /^#[0-9a-f]{6}$/.test(value);
+}
+
+/** Dark text on light accents and white text on dark ones, by relative luminance. */
+export function accentForeground(color: string) {
+  if (!validColor(color)) return "#0e0f11";
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(color.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  // Pick whichever of the two text colors contrasts more with the accent.
+  return (luminance + 0.05) / 0.0548 >= 1.05 / (luminance + 0.05)
+    ? "#0e0f11"
+    : "#ffffff";
+}
+
+export function publicLogoPath(slug: string, version: number) {
+  return `/app-api/public/status/${slug}/logo?v=${version}`;
+}
+
 /** The published page as visitors receive it: public targets by display name only. */
-export type PublicStatus = {
+export type PublicStatus = Branding & {
   name: string;
   announcement: string;
   supportUrl: string;
+  logoVersion: number | null;
   updatedAt: number;
   components: {
     id: string;
@@ -43,8 +110,9 @@ export type PublicStatus = {
   maintenance: MaintenanceWindow[];
 };
 
-export type StatusPageState = {
+export type StatusPageState = Branding & {
   revision: number;
+  logoVersion: number | null;
   name: string;
   slug: string;
   published: boolean;
@@ -64,7 +132,7 @@ export type ComponentDraft = {
   groupName: string;
   public: boolean;
 };
-export type PageDraft = {
+export type PageDraft = Branding & {
   name: string;
   slug: string;
   slugEdited: boolean;
@@ -104,6 +172,12 @@ export function draftOf(state: StatusPageState): PageDraft {
     published: state.published,
     announcement: state.announcement,
     supportUrl: state.supportUrl,
+    theme: state.theme,
+    accentColor: state.accentColor,
+    font: state.font,
+    links: state.links.map((link) => ({ ...link })),
+    footerText: state.footerText,
+    poweredBy: state.poweredBy,
     components: state.components.map((c) => ({
       id: c.id,
       name: c.name,
@@ -122,6 +196,12 @@ export function sameDraft(a: PageDraft, b: PageDraft) {
     a.published === b.published &&
     a.announcement === b.announcement &&
     a.supportUrl === b.supportUrl &&
+    a.theme === b.theme &&
+    a.accentColor === b.accentColor &&
+    a.font === b.font &&
+    a.footerText === b.footerText &&
+    a.poweredBy === b.poweredBy &&
+    JSON.stringify(a.links) === JSON.stringify(b.links) &&
     JSON.stringify(a.components) === JSON.stringify(b.components)
   );
 }
