@@ -5961,7 +5961,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     let foreign_id = foreign["id"].as_str().unwrap().to_owned();
 
     let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components});
-    let component = |id: Option<&str>, kind: &str, source: &str, public: bool| json!({"id":id,"name":format!("{kind} shown"),"kind":kind,"sourceId":source,"groupName":"EU","public":public});
+    let component = |id: Option<&str>, kind: &str, source: &str, public: bool| json!({"id":id,"name":format!("{kind} shown"),"kind":kind,"sourceId":source,"tagId":"","public":public});
     // Another organization's server cannot be shown, even with a valid id.
     for (body, expected) in [
         (
@@ -6433,4 +6433,138 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             .0,
         StatusCode::FORBIDDEN
     );
+
+    // URL targets are validated, grouped by machine tags, and probed by the monitor.
+    let (_, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert!(
+        page["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == "wings" && t["name"] == "Wings")
+    );
+    let url_target = |id: Option<&str>, url: &str, tag: &str| json!({"id":id,"name":"Website","kind":"url","sourceId":url,"tagId":tag,"public":true});
+    let mut bad_tag = component(None, "server", &server_id, true);
+    bad_tag["tagId"] = json!("not-a-tag");
+    for targets in [
+        json!([url_target(None, "http://127.0.0.1/", "")]),
+        json!([url_target(None, "https://status.example.com", "not-a-tag")]),
+        json!([
+            url_target(None, "https://status.example.com", ""),
+            url_target(None, "https://status.example.com/", "")
+        ]),
+        json!([{"id":null,"name":"Database","kind":"database","sourceId":"x","tagId":"","public":true}]),
+        json!([bad_tag]),
+    ] {
+        let (status, response) = owner
+            .request("POST", "status-page", save(6, "northstar", targets.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{targets} {response}");
+    }
+    let (status, watched) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                6,
+                "northstar",
+                json!([
+                    url_target(None, " https://status.example.com ", "wings"),
+                    component(Some(&server_component), "server", &server_id, true)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{watched}");
+    assert_eq!(watched["revision"], 7);
+    let website = &watched["components"][0];
+    assert_eq!(website["kind"], "url");
+    assert_eq!(website["sourceId"], "https://status.example.com/");
+    assert_eq!(website["sourceName"], "https://status.example.com/");
+    assert_eq!(website["tagId"], "wings");
+    assert_eq!(website["groupName"], "Wings");
+    assert_eq!(website["health"], "unknown");
+    assert_eq!(website["detail"], Value::Null);
+    let website_id = website["id"].as_str().unwrap().to_owned();
+
+    // Exercise the monitor against a local responder. Saving would reject this
+    // address, so the stored target is pointed at it directly.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = format!("http://{}/", listener.local_addr().unwrap());
+    let responder = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/", axum::routing::get(|| async { "ok" })),
+        )
+        .await
+        .unwrap()
+    });
+    for statement in [
+        "UPDATE status_page_components SET source_id=$3 WHERE organization_id=$1 AND id=$2",
+        "UPDATE status_page_url_checks SET url=$3 WHERE organization_id=$1 AND component_id=$2",
+    ] {
+        sqlx::query(statement)
+            .bind(&org)
+            .bind(&website_id)
+            .bind(&local)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    assert!(
+        crate::status_page::check_due(&pool, |_| true)
+            .await
+            .unwrap()
+    );
+    responder.abort();
+    let (_, checked) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(checked["components"][0]["health"], "operational");
+    assert!(
+        checked["components"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("HTTP 200 in ")
+    );
+    assert!(checked["components"][0]["observedAt"].as_i64().is_some());
+    assert_eq!(
+        other.request("GET", "status-page", json!(null)).await.1["components"],
+        json!([])
+    );
+
+    // Editing the address discards the old result; removing the target drops its checks.
+    let (status, edited) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                7,
+                "northstar",
+                json!([url_target(
+                    Some(&website_id),
+                    "https://status.example.org",
+                    ""
+                )]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["components"][0]["id"], website_id);
+    assert_eq!(edited["components"][0]["health"], "unknown");
+    assert_eq!(edited["components"][0]["groupName"], "");
+    let (_, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(public["components"][0]["name"], "Website");
+    assert!(!public.to_string().contains("status.example.org"));
+    let (status, _) = owner
+        .request("POST", "status-page", save(8, "northstar", json!([])))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let checks: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM status_page_url_checks WHERE organization_id=$1")
+            .bind(&org)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(checks, 0);
 }

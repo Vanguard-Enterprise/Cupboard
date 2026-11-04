@@ -1,5 +1,6 @@
-//! Organization status page: public components, their live health,
-//! maintenance windows, and the page's branding. One page per organization.
+//! Organization status page: public targets (saved servers, machines, and
+//! public URLs), their live health, maintenance windows, and the page's
+//! branding. One page per organization. URL targets are probed by `monitor`.
 use crate::{
     auth::{ApiError, ApiResult, AuthSession, account, bounded, forbidden, internal, invalid},
     team,
@@ -11,10 +12,14 @@ use axum::{
     response::Response,
     routing::{get, post},
 };
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{FromRow, PgConnection, PgPool, Postgres, Transaction};
-use std::time::Duration;
+use std::{
+    net::{IpAddr, SocketAddr},
+    time::{Duration, Instant},
+};
 use tower_sessions::Session;
 
 const MAX_COMPONENTS: usize = 50;
@@ -36,6 +41,11 @@ const FONTS: [&str; 7] = [
     "jetbrains-mono",
 ];
 const DEFAULT_ACCENT: &str = "#7cb58d";
+/// URL targets are probed about once a minute; older results count as unknown.
+const URL_INTERVAL_MS: i64 = 60_000;
+const URL_STALE_MS: i64 = 5 * 60_000;
+const URL_SLOW_MS: u128 = 3_000;
+const URL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
 const READ: &str = "SELECT id FROM organizations WHERE id=$1 FOR SHARE";
 const WRITE: &str = "SELECT id FROM organizations WHERE id=$1 FOR NO KEY UPDATE";
 
@@ -72,10 +82,14 @@ struct Component {
     kind: String,
     source_id: String,
     source_name: Option<String>,
+    tag_id: String,
+    /// The tag's current name; empty when ungrouped or the tag was deleted.
     group_name: String,
     public: bool,
     health: String,
     observed_at: Option<i64>,
+    /// The last URL probe in words, for operators only.
+    detail: Option<String>,
 }
 #[derive(Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -95,6 +109,14 @@ struct Source {
     id: String,
     name: String,
     kind: String,
+    /// Machine tag ids, used to suggest a group.
+    tags: Value,
+}
+/// A tag from the organization's machine tag catalog; targets group under them.
+#[derive(Serialize, Deserialize, Clone)]
+struct Tag {
+    id: String,
+    name: String,
 }
 /// A header link on the public page, such as a website or Discord invite.
 #[derive(Serialize, Deserialize, Clone)]
@@ -130,6 +152,7 @@ struct StatusPage {
     components: Vec<Component>,
     maintenance: Vec<Maintenance>,
     sources: Vec<Source>,
+    tags: Vec<Tag>,
 }
 #[derive(FromRow)]
 struct Settings {
@@ -261,27 +284,55 @@ async fn branding(conn: &mut PgConnection, org: &str, settings: &Settings) -> Ap
 }
 async fn components_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Component>> {
     Ok(sqlx::query_as(
-        "SELECT c.id,c.name,c.kind,c.source_id,c.group_name,c.public,\
-         CASE WHEN c.kind='server' THEN s.name ELSE m.name END AS source_name,\
-         CASE WHEN c.kind='server' THEN CASE \
+        "SELECT c.id,c.name,c.kind,c.source_id,c.tag_id,c.public,\
+         COALESCE((SELECT t->>'name' FROM machine_tag_catalogs mc, jsonb_array_elements(mc.tags) t \
+           WHERE mc.organization_id=c.organization_id AND t->>'id'=c.tag_id AND c.tag_id<>'' LIMIT 1),'') AS group_name,\
+         CASE c.kind WHEN 'server' THEN s.name WHEN 'machine' THEN m.name ELSE c.source_id END AS source_name,\
+         CASE c.kind WHEN 'server' THEN CASE \
            WHEN s.id IS NULL OR s.checked_at IS NULL THEN 'unknown' \
            WHEN s.rcon_status='connected' AND s.a2s_status='connected' THEN 'operational' \
            WHEN s.rcon_status='connected' OR s.a2s_status='connected' THEN 'degraded' \
            ELSE 'down' END \
-         ELSE CASE \
+         WHEN 'machine' THEN CASE \
            WHEN m.id IS NULL OR m.agent_hash IS NULL OR m.last_seen_at IS NULL THEN 'unknown' \
            WHEN m.last_seen_at >= $2 THEN 'operational' \
+           ELSE 'down' END \
+         ELSE CASE \
+           WHEN u.checked_at IS NULL OR u.checked_at < $3 THEN 'unknown' \
+           WHEN u.result='up' THEN 'operational' \
+           WHEN u.result='slow' THEN 'degraded' \
            ELSE 'down' END END AS health,\
-         CASE WHEN c.kind='server' THEN s.checked_at ELSE m.last_seen_at END AS observed_at \
+         CASE c.kind WHEN 'server' THEN s.checked_at WHEN 'machine' THEN m.last_seen_at ELSE u.checked_at END AS observed_at,\
+         CASE WHEN u.checked_at IS NULL THEN NULL \
+           WHEN u.error IS NOT NULL THEN u.error \
+           ELSE format('HTTP %s in %s ms', u.status_code, u.latency_ms) END AS detail \
          FROM status_page_components c \
          LEFT JOIN servers s ON c.kind='server' AND s.organization_id=c.organization_id AND s.id=c.source_id \
          LEFT JOIN machines m ON c.kind='machine' AND m.organization_id=c.organization_id AND m.id=c.source_id \
+         LEFT JOIN status_page_url_checks u ON c.kind='url' AND u.organization_id=c.organization_id AND u.component_id=c.id AND u.url=c.source_id \
          WHERE c.organization_id=$1 ORDER BY c.position,c.id",
     )
     .bind(org)
     .bind(now() - STALE_MS)
+    .bind(now() - URL_STALE_MS)
     .fetch_all(conn)
     .await?)
+}
+/// The machine tag catalog, created with its defaults on first use like the
+/// machines page does.
+async fn tags_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Tag>> {
+    sqlx::query(
+        "INSERT INTO machine_tag_catalogs(organization_id) VALUES($1) ON CONFLICT DO NOTHING",
+    )
+    .bind(org)
+    .execute(&mut *conn)
+    .await?;
+    let value: Value =
+        sqlx::query_scalar("SELECT tags FROM machine_tag_catalogs WHERE organization_id=$1")
+            .bind(org)
+            .fetch_one(&mut *conn)
+            .await?;
+    serde_json::from_value(value).map_err(|_| internal())
 }
 async fn maintenance_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Maintenance>> {
     Ok(sqlx::query_as("SELECT id,title,message,starts_at,ends_at,completed_at,component_ids,created_at FROM status_page_maintenance WHERE organization_id=$1 ORDER BY starts_at DESC,id LIMIT 100")
@@ -295,10 +346,11 @@ async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Status
     let branding = branding(conn, org, &settings).await?;
     let components = components_of(conn, org).await?;
     let maintenance = maintenance_of(conn, org).await?;
-    let sources = sqlx::query_as("SELECT id,name,kind FROM (SELECT id,name,'server' AS kind FROM servers WHERE organization_id=$1 UNION ALL SELECT id,name,'machine' FROM machines WHERE organization_id=$1) AS source ORDER BY kind,lower(name),id")
+    let sources = sqlx::query_as("SELECT id,name,kind,tags FROM (SELECT id,name,'server' AS kind,'[]'::jsonb AS tags FROM servers WHERE organization_id=$1 UNION ALL SELECT id,name,'machine',tags FROM machines WHERE organization_id=$1) AS source ORDER BY kind,lower(name),id")
         .bind(org)
         .fetch_all(&mut *conn)
         .await?;
+    let tags = tags_of(conn, org).await?;
     Ok(StatusPage {
         revision: settings.revision,
         name: settings.name,
@@ -310,6 +362,7 @@ async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Status
         components,
         maintenance,
         sources,
+        tags,
     })
 }
 
@@ -431,7 +484,7 @@ struct ComponentInput {
     name: String,
     kind: String,
     source_id: String,
-    group_name: String,
+    tag_id: String,
     public: bool,
 }
 #[derive(Deserialize)]
@@ -553,6 +606,7 @@ async fn save(
             "That public address belongs to another status page. Choose a different one.",
         ));
     }
+    let tags = tags_of(&mut tx, &org).await?;
     let mut components = Vec::with_capacity(input.components.len());
     let mut seen = std::collections::BTreeSet::new();
     for component in &input.components {
@@ -564,32 +618,39 @@ async fn save(
         if name.chars().any(char::is_control) {
             return Err(invalid("Enter a component name of 1 to 80 characters."));
         }
-        if component.kind != "server" && component.kind != "machine" {
-            return Err(invalid("Choose a server or machine for each component."));
-        }
-        let group_name = text(
-            &component.group_name,
-            80,
-            "Keep group names under 80 characters.",
-        )?;
-        if group_name.contains('\n') {
-            return Err(invalid("Keep group names under 80 characters."));
-        }
-        if !seen.insert((component.kind.clone(), component.source_id.clone())) {
-            return Err(invalid("Each server or machine can appear once."));
-        }
-        // Sources must belong to this organization; the lookup is the tenant check.
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM servers WHERE $1='server' AND organization_id=$2 AND id=$3) OR EXISTS(SELECT 1 FROM machines WHERE $1='machine' AND organization_id=$2 AND id=$3)",
-        )
-        .bind(&component.kind)
-        .bind(&org)
-        .bind(&component.source_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !exists {
+        let source_id = match component.kind.as_str() {
+            "url" => target_url(&component.source_id)?,
+            "server" | "machine" => {
+                // Sources must belong to this organization; the lookup is the tenant check.
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM servers WHERE $1='server' AND organization_id=$2 AND id=$3) OR EXISTS(SELECT 1 FROM machines WHERE $1='machine' AND organization_id=$2 AND id=$3)",
+                )
+                .bind(&component.kind)
+                .bind(&org)
+                .bind(&component.source_id)
+                .fetch_one(&mut *tx)
+                .await?;
+                if !exists {
+                    return Err(invalid(
+                        "A selected server or machine no longer exists. Reload and choose again.",
+                    ));
+                }
+                component.source_id.clone()
+            }
+            _ => {
+                return Err(invalid(
+                    "Choose a URL, machine, or game server for each target.",
+                ));
+            }
+        };
+        if !seen.insert((component.kind.clone(), source_id.clone())) {
             return Err(invalid(
-                "A selected server or machine no longer exists. Reload and choose again.",
+                "Each URL, machine, or game server can appear once.",
+            ));
+        }
+        if !component.tag_id.is_empty() && !tags.iter().any(|t| t.id == component.tag_id) {
+            return Err(invalid(
+                "A selected tag no longer exists. Reload and choose again.",
             ));
         }
         let id = match &component.id {
@@ -597,7 +658,7 @@ async fn save(
             Some(_) => return Err(invalid("Enter valid status page settings.")),
             None => uuid::Uuid::new_v4().to_string(),
         };
-        components.push((id, name, group_name));
+        components.push((id, name, source_id));
     }
     sqlx::query("INSERT INTO status_pages(organization_id,revision,name,slug,published,announcement,support_url,created_at,theme,accent_color,font,links,footer_text,powered_by) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(organization_id) DO UPDATE SET revision=status_pages.revision+1,name=EXCLUDED.name,slug=EXCLUDED.slug,published=EXCLUDED.published,announcement=EXCLUDED.announcement,support_url=EXCLUDED.support_url,theme=EXCLUDED.theme,accent_color=EXCLUDED.accent_color,font=EXCLUDED.font,links=EXCLUDED.links,footer_text=EXCLUDED.footer_text,powered_by=EXCLUDED.powered_by")
         .bind(&org)
@@ -619,21 +680,30 @@ async fn save(
         .bind(&org)
         .execute(&mut *tx)
         .await?;
-    for (position, (component, (id, name, group_name))) in
+    for (position, (component, (id, name, source_id))) in
         input.components.iter().zip(&components).enumerate()
     {
-        sqlx::query("INSERT INTO status_page_components(organization_id,id,name,kind,source_id,group_name,public,position) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+        sqlx::query("INSERT INTO status_page_components(organization_id,id,name,kind,source_id,tag_id,public,position) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(&org)
             .bind(id)
             .bind(name)
             .bind(&component.kind)
-            .bind(&component.source_id)
-            .bind(group_name)
+            .bind(source_id)
+            .bind(&component.tag_id)
             .bind(component.public)
             .bind(position as i32)
             .execute(&mut *tx)
             .await?;
     }
+    // Keep results for unchanged URLs; new or edited URLs are probed right away.
+    sqlx::query("DELETE FROM status_page_url_checks u WHERE organization_id=$1 AND NOT EXISTS (SELECT 1 FROM status_page_components c WHERE c.organization_id=u.organization_id AND c.id=u.component_id AND c.kind='url' AND c.source_id=u.url)")
+        .bind(&org)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO status_page_url_checks(organization_id,component_id,url) SELECT organization_id,id,source_id FROM status_page_components WHERE organization_id=$1 AND kind='url' ON CONFLICT DO NOTHING")
+        .bind(&org)
+        .execute(&mut *tx)
+        .await?;
     let page = state(&mut tx, &ctx).await?;
     tx.commit().await?;
     Ok(Json(page))
@@ -892,6 +962,167 @@ async fn remove_logo(
     Ok(Json(page))
 }
 
+/// A URL target: http or https on a web port, without credentials, naming a
+/// public host. Resolved addresses are checked again before every probe.
+fn target_url(value: &str) -> ApiResult<String> {
+    let message = "Enter a complete http or https address on port 80, 443, 8080, or 8443.";
+    let value = value.trim();
+    let url = Url::parse(value).map_err(|_| invalid(message))?;
+    if value.len() > 300
+        || !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !url
+            .port_or_known_default()
+            .is_some_and(|port| URL_PORTS.contains(&port))
+    {
+        return Err(invalid(message));
+    }
+    let restricted =
+        || invalid("Use a public address. Private and local networks cannot be checked.");
+    let host = url.host_str().ok_or_else(|| invalid(message))?;
+    match host.trim_matches(['[', ']']).parse::<IpAddr>() {
+        Ok(ip) if !crate::pelican::public_ip(ip) => return Err(restricted()),
+        Ok(_) => {}
+        Err(_) => {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            if !host.contains('.')
+                || [".localhost", ".local", ".internal", ".lan", ".home.arpa"]
+                    .iter()
+                    .any(|suffix| host.ends_with(suffix))
+            {
+                return Err(restricted());
+            }
+        }
+    }
+    Ok(url.to_string())
+}
+
+struct Probe {
+    result: &'static str,
+    status_code: Option<i32>,
+    latency_ms: Option<i32>,
+    error: Option<&'static str>,
+}
+
+/// One GET without following redirects. Every resolved address must pass
+/// `allows`, and the connection is pinned to those addresses so a second DNS
+/// answer cannot reach a private network.
+async fn probe(value: &str, allows: fn(IpAddr) -> bool) -> Probe {
+    let down = |error| Probe {
+        result: "down",
+        status_code: None,
+        latency_ms: None,
+        error: Some(error),
+    };
+    let Ok(url) = Url::parse(value) else {
+        return down("The address is invalid.");
+    };
+    let (Some(host), Some(port)) = (url.host_str(), url.port_or_known_default()) else {
+        return down("The address is invalid.");
+    };
+    let host = host.trim_matches(['[', ']']);
+    let addresses: Vec<SocketAddr> = match tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host((host, port)),
+    )
+    .await
+    {
+        Ok(Ok(addresses)) => addresses.collect(),
+        _ => return down("The hostname did not resolve."),
+    };
+    if addresses.is_empty() || addresses.iter().any(|a| !allows(a.ip())) {
+        return down("The address resolves to a private or reserved network.");
+    }
+    let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve_to_addrs(host, &addresses)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(10))
+        .user_agent("Cupboard status check")
+        .build()
+    else {
+        return down("The check could not start.");
+    };
+    let started = Instant::now();
+    match client.get(url).send().await {
+        Ok(response) => {
+            let elapsed = started.elapsed().as_millis();
+            let code = response.status().as_u16();
+            // The body is never read; only reachability and status matter.
+            drop(response);
+            Probe {
+                result: if code >= 400 {
+                    "down"
+                } else if elapsed >= URL_SLOW_MS {
+                    "slow"
+                } else {
+                    "up"
+                },
+                status_code: Some(i32::from(code)),
+                latency_ms: Some(elapsed.min(i32::MAX as u128) as i32),
+                error: None,
+            }
+        }
+        Err(error) if error.is_timeout() => down("The request timed out."),
+        Err(error) if error.is_connect() => down("The connection failed."),
+        Err(_) => down("The request failed."),
+    }
+}
+
+/// Probe URL targets independently of browser sessions. Claimed rows move their
+/// next check forward first, so replicas never probe the same target at once.
+pub async fn monitor(pool: PgPool) {
+    loop {
+        loop {
+            match check_due(&pool, crate::pelican::public_ip).await {
+                Ok(true) => continue,
+                Ok(false) => break,
+                Err(_) => {
+                    eprintln!("Status page URL checks failed; retrying shortly.");
+                    break;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiResult<bool> {
+    let claimed: Vec<(String, String, String)> = sqlx::query_as(
+        "UPDATE status_page_url_checks SET next_check_at=$1+$2 WHERE (organization_id,component_id) IN (SELECT organization_id,component_id FROM status_page_url_checks WHERE next_check_at<=$1 ORDER BY next_check_at LIMIT 10 FOR UPDATE SKIP LOCKED) RETURNING organization_id,component_id,url",
+    )
+    .bind(now())
+    .bind(URL_INTERVAL_MS)
+    .fetch_all(pool)
+    .await?;
+    if claimed.is_empty() {
+        return Ok(false);
+    }
+    let results =
+        futures_util::future::join_all(claimed.into_iter().map(|(org, id, url)| async move {
+            let probe = probe(&url, allows).await;
+            (org, id, url, probe)
+        }))
+        .await;
+    for (org, id, url, probe) in results {
+        // A result only lands if the target still watches the same address.
+        sqlx::query("UPDATE status_page_url_checks SET checked_at=$4,result=$5,status_code=$6,latency_ms=$7,error=$8 WHERE organization_id=$1 AND component_id=$2 AND url=$3")
+            .bind(&org)
+            .bind(&id)
+            .bind(&url)
+            .bind(now())
+            .bind(probe.result)
+            .bind(probe.status_code)
+            .bind(probe.latency_ms)
+            .bind(probe.error)
+            .execute(pool)
+            .await?;
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -907,6 +1138,68 @@ mod tests {
         assert!(!valid_slug("North"));
         assert!(!valid_slug(""));
         assert!(!valid_slug(&"a".repeat(41)));
+    }
+
+    #[test]
+    fn url_targets_must_be_public_web_addresses() {
+        assert_eq!(
+            target_url(" https://status.example.com ").unwrap(),
+            "https://status.example.com/"
+        );
+        assert!(target_url("http://example.com:8080/health").is_ok());
+        for value in [
+            "ftp://example.com",
+            "https://user:pass@example.com",
+            "https://example.com:22",
+            "https://localhost",
+            "https://intranet",
+            "https://db.internal",
+            "http://127.0.0.1",
+            "http://10.0.0.5",
+            "http://100.107.41.153",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]",
+            "http://[fd00::1]",
+            "example.com",
+        ] {
+            assert!(target_url(value).is_err(), "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn probes_report_status_latency_and_refuse_private_networks() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new()
+            .route("/up", axum::routing::get(|| async { "ok" }))
+            .route(
+                "/moved",
+                axum::routing::get(|| async {
+                    axum::response::Redirect::temporary("http://169.254.169.254/")
+                }),
+            )
+            .route(
+                "/broken",
+                axum::routing::get(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let allow_all: fn(IpAddr) -> bool = |_| true;
+        let up = probe(&format!("http://{address}/up"), allow_all).await;
+        assert_eq!((up.result, up.status_code), ("up", Some(200)));
+        assert!(up.latency_ms.is_some() && up.error.is_none());
+        // Redirects are reported, never followed.
+        let moved = probe(&format!("http://{address}/moved"), allow_all).await;
+        assert_eq!((moved.result, moved.status_code), ("up", Some(307)));
+        let broken = probe(&format!("http://{address}/broken"), allow_all).await;
+        assert_eq!((broken.result, broken.status_code), ("down", Some(503)));
+        let blocked = probe(&format!("http://{address}/up"), crate::pelican::public_ip).await;
+        assert_eq!(blocked.result, "down");
+        assert_eq!(blocked.status_code, None);
+        assert_eq!(
+            blocked.error,
+            Some("The address resolves to a private or reserved network.")
+        );
+        server.abort();
     }
 
     #[test]

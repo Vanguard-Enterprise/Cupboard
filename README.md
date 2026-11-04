@@ -643,19 +643,26 @@ reporter separately; its repository-wide lock prevents duplicate collectors.
 
 ## Maintenance and status page
 
-Open `/dashboard/infrastructure/maintenance` to manage the organization's status
-page. Overview shows every component's live health, with maintenance windows that
-are happening now, scheduled, or past. Settings edits the page name, public
-address under `/status/<address>`, announcement, support link, and whether the
-page is published, and lists the components: each mirrors one saved game server
-or machine with its own display name, optional group, and public or hidden
-visibility. Drag the handle, use Arrow Up and Arrow Down, or the row menu to
-order them. A public preview reflects unsaved changes; Save changes applies the
+Open `/dashboard/infrastructure/maintenance` (Status page in the sidebar) to
+manage the organization's status page. Overview shows every target's live
+health, with maintenance windows that are happening now, scheduled, or past.
+Targets lists what the page watches: a website (any public http or https
+address on port 80, 443, 8080, or 8443), a saved machine, or a saved game
+server, each with its own display name, public or hidden visibility, and an
+optional group chosen from the machine tags (a machine starts in its first tag).
+Drag the handle, use Arrow Up and Arrow Down, or the row menu to order them.
+Settings edits the page name, public address under `/status/<address>`,
+announcement, support link, branding, and whether the page is published. A public preview reflects unsaved changes; Save changes applies the
 whole page at once and rejects edits made from an older revision.
 
 Server components are Operational when RCON and A2S both responded, Degraded
 when one did, and Unavailable when neither did; machines are Operational while
-reporting and Unavailable after 90 seconds of silence. Components without a
+reporting and Unavailable after 90 seconds of silence. The API checks each
+website about once a minute with a single GET that never follows redirects:
+below 400 within 3 seconds is Operational, below 400 but slower is Degraded, and
+anything else is Unavailable. Results older than five minutes show Unknown.
+Addresses that resolve to private, local, or reserved networks are refused, and
+the URL and check details stay on the admin page. Components without a
 check or report show Unknown. Schedule maintenance records a title, message,
 start and end, and the affected components (or all of them). While a window is
 open, its components show Under maintenance instead of their live health. Mark

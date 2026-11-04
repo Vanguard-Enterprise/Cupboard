@@ -14,6 +14,7 @@ import {
   unusedSources,
   validColor,
   validSlug,
+  validTargetUrl,
   type MaintenanceWindow,
   type StatusComponent,
   type StatusPageState,
@@ -29,10 +30,12 @@ const component = (
   kind: "server",
   sourceId: `source-${id}`,
   sourceName: id,
+  tagId: "",
   groupName: "",
   public: true,
   health,
   observedAt: null,
+  detail: null,
   ...extra,
 });
 const window = (
@@ -137,8 +140,8 @@ describe("status page helpers", () => {
     expect(
       unusedSources(
         [
-          { id: "s1", name: "EU", kind: "server" },
-          { id: "s1", name: "Host", kind: "machine" },
+          { id: "s1", name: "EU", kind: "server", tags: [] },
+          { id: "s1", name: "Host", kind: "machine", tags: [] },
         ],
         [
           {
@@ -146,12 +149,12 @@ describe("status page helpers", () => {
             name: "EU",
             kind: "server",
             sourceId: "s1",
-            groupName: "",
+            tagId: "",
             public: true,
           },
         ],
       ),
-    ).toEqual([{ id: "s1", name: "Host", kind: "machine" }]);
+    ).toEqual([{ id: "s1", name: "Host", kind: "machine", tags: [] }]);
     expect(
       affectedNames(window(0, 1, ["b"]), [component("a", "operational")]),
     ).toBe("Removed targets");
@@ -176,6 +179,7 @@ describe("status page helpers", () => {
       components: [component("a", "operational")],
       maintenance: [],
       sources: [],
+      tags: [],
     };
     const draft = draftOf(state);
     expect(draft.slugEdited).toBe(false);
@@ -190,6 +194,14 @@ describe("status page helpers", () => {
       }),
     ).toBe(false);
     expect(sameDraft(draft, { ...draft, poweredBy: false })).toBe(false);
+  });
+
+  it("accepts only complete http and https target addresses", () => {
+    expect(validTargetUrl("https://play.example.com")).toBe(true);
+    expect(validTargetUrl(" http://example.com:8080/health ")).toBe(true);
+    expect(validTargetUrl("play.example.com")).toBe(false);
+    expect(validTargetUrl("ftp://example.com")).toBe(false);
+    expect(validTargetUrl("")).toBe(false);
   });
 
   it("validates accents and picks readable text for them", () => {

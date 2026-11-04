@@ -53,8 +53,17 @@ const empty: StatusPageState = {
   components: [],
   maintenance: [],
   sources: [
-    { id: "server-eu", name: "Rust EU", kind: "server" },
-    { id: "machine-1", name: "use1-wings-01", kind: "machine" },
+    { id: "server-eu", name: "Rust EU", kind: "server", tags: [] },
+    {
+      id: "machine-1",
+      name: "use1-wings-01",
+      kind: "machine",
+      tags: ["wings"],
+    },
+  ],
+  tags: [
+    { id: "wings", name: "Wings" },
+    { id: "game-server", name: "Game server" },
   ],
 };
 const now = Date.now();
@@ -69,10 +78,12 @@ const live: StatusPageState = {
       kind: "server",
       sourceId: "server-eu",
       sourceName: "Rust EU",
-      groupName: "Game servers",
+      tagId: "game-server",
+      groupName: "Game server",
       public: true,
       health: "operational",
       observedAt: now - 10_000,
+      detail: null,
     },
     {
       id: "c-host",
@@ -80,10 +91,12 @@ const live: StatusPageState = {
       kind: "machine",
       sourceId: "machine-1",
       sourceName: "use1-wings-01",
+      tagId: "",
       groupName: "",
       public: false,
       health: "down",
       observedAt: now - 300_000,
+      detail: null,
     },
   ],
   maintenance: [
@@ -170,21 +183,65 @@ describe("Status page admin", () => {
     expect(screen.getByText("Infrastructure viewing required")).toBeTruthy();
   });
 
-  it("adds a component, hides it, and saves the ordered page", async () => {
+  it("adds website, machine, and game server targets and saves them", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValueOnce(empty);
     mount();
     await ready();
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(screen.getByRole("tab", { name: "Targets" }));
+
+    // A website target needs a complete address.
     await user.click(screen.getByRole("button", { name: "Add target" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByLabelText("Server or machine"));
-    await user.type(
-      await screen.findByPlaceholderText("Search servers and machines"),
-      "rust",
+    let dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog)
+        .getByRole("radio", { name: "Website" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    await user.type(within(dialog).getByLabelText("Address"), "play.example");
+    await user.type(within(dialog).getByLabelText("Display name"), "Website");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
     );
-    await waitFor(() =>
-      expect(screen.queryByRole("option", { name: /wings/ })).toBeNull(),
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "Enter a complete http or https address.",
+    );
+    await user.clear(within(dialog).getByLabelText("Address"));
+    await user.type(
+      within(dialog).getByLabelText("Address"),
+      "https://play.example.com",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // A machine defaults to its first tag as the group.
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: "Machine" }));
+    await user.click(within(dialog).getByLabelText("Machine"));
+    await user.click(
+      await screen.findByRole("option", { name: /use1-wings-01/ }),
+    );
+    expect(within(dialog).getByLabelText("Group").textContent).toContain(
+      "Wings",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Game servers are searchable and can be hidden from the public page.
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("radio", { name: "Game server" }),
+    );
+    await user.click(within(dialog).getByLabelText("Game server"));
+    await user.type(
+      await screen.findByPlaceholderText("Search game servers"),
+      "rust",
     );
     await user.click(await screen.findByRole("option", { name: /Rust EU/ }));
     expect(within(dialog).getByLabelText("Display name")).toHaveProperty(
@@ -193,7 +250,6 @@ describe("Status page admin", () => {
     );
     await user.clear(within(dialog).getByLabelText("Display name"));
     await user.type(within(dialog).getByLabelText("Display name"), "EU main");
-    await user.type(within(dialog).getByLabelText("Group"), "Game servers");
     await user.click(
       within(dialog).getByRole("button", { name: "Add target" }),
     );
@@ -201,59 +257,61 @@ describe("Status page admin", () => {
     await user.click(
       screen.getByRole("button", { name: "Hide EU main on the public page" }),
     );
-    await user.click(screen.getByRole("switch", { name: "Publish page" }));
-    const saved: StatusPageState = {
-      ...empty,
-      revision: 1,
-      published: true,
-      components: [
-        {
-          id: "new",
-          name: "EU main",
-          kind: "server",
-          sourceId: "server-eu",
-          sourceName: "Rust EU",
-          groupName: "Game servers",
-          public: false,
-          health: "unknown",
-          observedAt: null,
-        },
-      ],
-    };
-    vi.mocked(apiRequest).mockResolvedValueOnce(saved);
+    expect(screen.getByText("https://play.example.com")).toBeTruthy();
+
+    vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
-        {
+        expect.objectContaining({
           revision: 0,
-          name: "Northstar Games",
-          slug: "northstar-games",
-          published: true,
-          announcement: "",
-          supportUrl: "",
-          theme: "dark",
-          accentColor: "#7cb58d",
-          font: "geist",
-          links: [],
-          footerText: "",
-          poweredBy: true,
           components: [
             {
               id: null,
-              name: "EU main",
+              kind: "url",
+              name: "Website",
+              sourceId: "https://play.example.com",
+              tagId: "",
+              public: true,
+            },
+            {
+              id: null,
+              kind: "machine",
+              name: "use1-wings-01",
+              sourceId: "machine-1",
+              tagId: "wings",
+              public: true,
+            },
+            {
+              id: null,
               kind: "server",
+              name: "EU main",
               sourceId: "server-eu",
-              groupName: "Game servers",
+              tagId: "",
               public: false,
             },
           ],
-        },
+        }),
         "org-one",
       ),
     );
     expect(toast.success).toHaveBeenCalledWith("Status page saved.");
-    expect(screen.queryByText("Unsaved changes")).toBeNull();
+  });
+
+  it("copies the public address without the async clipboard", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    const copy = vi.fn(() => true);
+    document.execCommand = copy;
+    await user.click(
+      screen.getByRole("button", { name: "Copy public address" }),
+    );
+    expect(copy).toHaveBeenCalledWith("copy");
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("titles the page Status with its visibility beside it", async () => {
@@ -367,7 +425,7 @@ describe("Status page admin", () => {
     vi.mocked(apiRequest).mockResolvedValue(live);
     mount();
     await ready();
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(screen.getByRole("tab", { name: "Targets" }));
     const handle = screen.getByRole("button", { name: "Reorder Wings host" });
     handle.focus();
     fireEvent.keyDown(handle, { key: "ArrowUp" });

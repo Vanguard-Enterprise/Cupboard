@@ -438,5 +438,10 @@ accent color, font, header links, footer text, and the Powered by credit) is
 saved and revisioned with the page. The logo is decoded and re-encoded to a
 PNG of at most 160 pixels per side by the existing logo pipeline and stored in
 PostgreSQL beside the page, since it is too small to justify object storage; it
-is served only while the page is published. Uptime history and incident posts
-are separate follow-ups.
+is served only while the page is published. Website targets are
+probed by a small loop in the same API process (like the server and Pelican
+monitors): rows in `status_page_url_checks` are claimed with `FOR UPDATE SKIP
+LOCKED`, each URL gets one GET per minute without redirects, and every resolved
+address must be public before the connection is pinned to it. Targets group
+under the existing machine tag catalog instead of free-text groups. Uptime
+history and incident posts are separate follow-ups.

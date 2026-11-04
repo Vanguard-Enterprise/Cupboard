@@ -538,6 +538,15 @@ a scoped token set (`.theme-light`) that darkens status colors for contrast on
 white, and a full light page also lights the document so the scrollbar gutter
 matches.
 
+Targets have their own tab between Overview and Settings, with the shared save
+bar following the editor across tabs. The add dialog starts with a Website,
+Machine, or Game server segmented control; websites take an address, the other
+two use the searchable picker. Groups are a select over the machine tag
+catalog, so the same tags organize machines and the status page.
+
+Copy buttons use `copyText` from `src/lib/clipboard.ts`, which falls back to the
+copy command when the async clipboard is missing on plain-HTTP origins.
+
 ## Scrollbars
 
 Every scrollable area uses Cupboard's own scrollbar: a slim rounded thumb in

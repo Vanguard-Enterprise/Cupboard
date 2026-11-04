@@ -12,7 +12,7 @@ mod panel_servers;
 pub mod pelican;
 pub mod secrets;
 pub mod servers;
-mod status_page;
+pub mod status_page;
 mod team;
 use axum::{Router, extract::State, http::StatusCode, routing::get};
 use sqlx::{ConnectOptions, PgPool, postgres::PgConnectOptions, postgres::PgPoolOptions};

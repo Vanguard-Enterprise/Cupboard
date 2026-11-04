@@ -1,4 +1,4 @@
-export type ComponentKind = "server" | "machine";
+export type ComponentKind = "url" | "machine" | "server";
 export type ComponentHealth = "operational" | "degraded" | "down" | "unknown";
 export type ComponentStatus = ComponentHealth | "maintenance";
 
@@ -8,10 +8,15 @@ export type StatusComponent = {
   kind: ComponentKind;
   sourceId: string;
   sourceName: string | null;
+  /** A machine tag id; empty when the target is ungrouped. */
+  tagId: string;
+  /** The tag's name, resolved by the server. */
   groupName: string;
   public: boolean;
   health: ComponentHealth;
   observedAt: number | null;
+  /** The last URL check in words, for operators only. */
+  detail: string | null;
 };
 
 export type MaintenanceWindow = {
@@ -25,7 +30,14 @@ export type MaintenanceWindow = {
   createdAt: number;
 };
 
-export type StatusSource = { id: string; name: string; kind: ComponentKind };
+export type StatusSource = {
+  id: string;
+  name: string;
+  kind: Exclude<ComponentKind, "url">;
+  /** Machine tag ids, used to suggest a group. */
+  tags: string[];
+};
+export type StatusTag = { id: string; name: string };
 
 export type StatusTheme = "dark" | "light";
 export type StatusFont =
@@ -121,6 +133,7 @@ export type StatusPageState = Branding & {
   components: StatusComponent[];
   maintenance: MaintenanceWindow[];
   sources: StatusSource[];
+  tags: StatusTag[];
 };
 
 /** Editable copy of the page. Components keep their ids so maintenance links survive. */
@@ -129,7 +142,7 @@ export type ComponentDraft = {
   name: string;
   kind: ComponentKind;
   sourceId: string;
-  groupName: string;
+  tagId: string;
   public: boolean;
 };
 export type PageDraft = Branding & {
@@ -183,7 +196,7 @@ export function draftOf(state: StatusPageState): PageDraft {
       name: c.name,
       kind: c.kind,
       sourceId: c.sourceId,
-      groupName: c.groupName,
+      tagId: c.tagId,
       public: c.public,
     })),
   };
@@ -339,6 +352,18 @@ export function moveComponent<T>(list: T[], from: number, to: number) {
   const next = [...list];
   next.splice(to, 0, next.splice(from, 1)[0]);
   return next;
+}
+
+/** A URL target address: http or https with a host. The server checks the rest. */
+export function validTargetUrl(value: string) {
+  try {
+    const url = new URL(value.trim());
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") && !!url.hostname
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Sources that are not yet shown as a component. */

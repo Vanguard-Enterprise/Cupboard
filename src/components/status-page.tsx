@@ -59,6 +59,7 @@ import {
   unusedSources,
   validColor,
   validSlug,
+  validTargetUrl,
   windowLabel,
   type ComponentDraft,
   type ComponentKind,
@@ -70,6 +71,7 @@ import {
   type StatusPageState,
   type StatusSource,
 } from "@/lib/status-page";
+import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -151,7 +153,12 @@ const message = (error: unknown) =>
     : "The request could not be completed.";
 
 function KindIcon({ kind }: { kind: ComponentKind }) {
-  const Icon = kind === "server" ? ServerIcon : HardDriveIcon;
+  const Icon =
+    kind === "server"
+      ? ServerIcon
+      : kind === "machine"
+        ? HardDriveIcon
+        : GlobeIcon;
   return (
     <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface-elevated">
       <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
@@ -205,12 +212,29 @@ type MaintenanceForm = {
 };
 type ComponentForm = {
   index: number | null;
+  kind: ComponentKind;
+  /** The chosen machine or game server when adding one. */
   sourceLabel: string | null;
+  url: string;
   name: string;
-  groupName: string;
+  tagId: string;
   public: boolean;
   error: string;
 };
+
+const kindLabel: Record<ComponentKind, string> = {
+  url: "Website",
+  machine: "Machine",
+  server: "Game server",
+};
+
+function sameUrl(a: string, b: string) {
+  try {
+    return new URL(a.trim()).href === new URL(b.trim()).href;
+  } catch {
+    return a.trim() === b.trim();
+  }
+}
 
 /** Loads the saved logo through the organization-scoped endpoint. */
 function useStatusLogo(organization: string, version: number | null) {
@@ -384,9 +408,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     .filter((w) => w.phase === "scheduled")
     .sort((a, b) => a.window.startsAt - b.window.startsAt);
   const past = windows.filter((w) => w.phase === "completed");
-  const existingGroups = [
-    ...new Set(draft.components.map((c) => c.groupName).filter(Boolean)),
-  ];
+  const tagName = (id: string) =>
+    state.tags.find((tag) => tag.id === id)?.name ?? "";
   const available = unusedSources(state.sources, draft.components);
 
   function updateDraft(change: Partial<PageDraft>) {
@@ -404,8 +427,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     setSaveError("");
   }
 
-  async function save(event: FormEvent) {
-    event.preventDefault();
+  async function save(event?: FormEvent) {
+    event?.preventDefault();
     if (!state || !draft || saving) return;
     const name = draft.name.trim();
     if (!name) {
@@ -526,7 +549,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 
   async function copyUrl() {
     try {
-      await navigator.clipboard.writeText(publicUrl);
+      await copyText(publicUrl);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -608,39 +631,79 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 
   function submitComponent(event: FormEvent) {
     event.preventDefault();
-    if (!componentForm) return;
+    if (!componentForm || !draft) return;
     const form = componentForm;
     const name = form.name.trim();
-    const groupName = form.groupName.trim();
     const fail = (error: string) =>
       setComponentForm((current) =>
         current ? { ...current, error } : current,
       );
+    if (form.index === null && draft.components.length >= maxComponents)
+      return fail(`A status page can list up to ${maxComponents} targets.`);
+    let sourceId: string;
+    if (form.kind === "url") {
+      sourceId = form.url.trim();
+      if (!validTargetUrl(sourceId))
+        return fail("Enter a complete http or https address.");
+      if (
+        draft.components.some(
+          (c, i) =>
+            i !== form.index &&
+            c.kind === "url" &&
+            sameUrl(c.sourceId, sourceId),
+        )
+      )
+        return fail("That address is already a target.");
+    } else if (form.index === null) {
+      const source = available.find(
+        (s) => s.kind === form.kind && sourceLabel(s) === form.sourceLabel,
+      );
+      if (!source)
+        return fail(
+          form.kind === "machine"
+            ? "Choose a machine to show."
+            : "Choose a game server to show.",
+        );
+      sourceId = source.id;
+    } else {
+      sourceId = draft.components[form.index].sourceId;
+    }
     if (!name) return fail("Enter a display name.");
+    const values = { name, sourceId, tagId: form.tagId, public: form.public };
     if (form.index === null) {
-      const source = available.find((s) => sourceLabel(s) === form.sourceLabel);
-      if (!source) return fail("Choose a server or machine to show.");
-      if (draft!.components.length >= maxComponents)
-        return fail(`A status page can list up to ${maxComponents} targets.`);
       updateComponents((list) => [
         ...list,
-        {
-          id: null,
-          name,
-          kind: source.kind,
-          sourceId: source.id,
-          groupName,
-          public: form.public,
-        },
+        { id: null, kind: form.kind, ...values },
       ]);
     } else {
       updateComponents((list) =>
-        list.map((c, i) =>
-          i === form.index ? { ...c, name, groupName, public: form.public } : c,
-        ),
+        list.map((c, i) => (i === form.index ? { ...c, ...values } : c)),
       );
     }
     setComponentForm(null);
+  }
+
+  function chooseSource(source: StatusSource) {
+    setComponentForm((current) =>
+      current
+        ? {
+            ...current,
+            sourceLabel: sourceLabel(source),
+            name:
+              current.name.trim() === "" ||
+              available.some((s) => s.name === current.name)
+                ? source.name
+                : current.name,
+            // A machine's first tag is the natural group.
+            tagId:
+              current.tagId ||
+              (source.tags.find((id) => state!.tags.some((t) => t.id === id)) ??
+                ""),
+            error: "",
+          }
+        : current,
+    );
+    setSourceOpen(false);
   }
 
   function move(from: number, to: number) {
@@ -648,9 +711,11 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   }
 
   const sourceName = (component: ComponentDraft) =>
-    state.sources.find(
-      (s) => s.kind === component.kind && s.id === component.sourceId,
-    )?.name ?? null;
+    component.kind === "url"
+      ? component.sourceId
+      : (state.sources.find(
+          (s) => s.kind === component.kind && s.id === component.sourceId,
+        )?.name ?? null);
 
   const hiddenCount = draft.components.filter((c) => !c.public).length;
   // The preview renders exactly what visitors would get after saving.
@@ -677,7 +742,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         return {
           id: c.id ?? `${c.kind}:${c.sourceId}`,
           name: c.name,
-          groupName: c.groupName,
+          groupName: tagName(c.tagId),
           health: live?.health ?? "unknown",
           observedAt: live?.observedAt ?? null,
         };
@@ -783,13 +848,17 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           variant="line"
           className="h-9 w-full justify-start rounded-none border-b border-border p-0"
         >
-          {(["overview", "settings"] as const).map((value) => (
+          {(["overview", "targets", "settings"] as const).map((value) => (
             <TabsTrigger
               key={value}
               value={value}
               className="h-full flex-none rounded-none px-3 data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:after:bottom-[-1px] data-[state=active]:after:bg-primary dark:data-[state=active]:border-transparent dark:data-[state=active]:bg-transparent dark:data-[state=active]:text-foreground"
             >
-              {value === "overview" ? "Overview" : "Settings"}
+              {value === "overview"
+                ? "Overview"
+                : value === "targets"
+                  ? "Targets"
+                  : "Settings"}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -871,12 +940,13 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                 </p>
                                 <p className="truncate text-xs text-muted-foreground">
                                   {component.sourceName === null
-                                    ? `Removed ${component.kind}`
+                                    ? `Removed ${kindLabel[component.kind].toLowerCase()}`
                                     : component.sourceName !== component.name
                                       ? component.sourceName
-                                      : component.kind === "server"
-                                        ? "Game server"
-                                        : "Machine"}
+                                      : kindLabel[component.kind]}
+                                  {component.detail
+                                    ? ` · ${component.detail}`
+                                    : ""}
                                   {component.observedAt
                                     ? ` · ${formatDistanceToNow(component.observedAt, { addSuffix: true })}`
                                     : ""}
@@ -988,6 +1058,261 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               </div>
             </Section>
           </div>
+        </TabsContent>
+
+        <TabsContent value="targets" className="mt-4">
+          <fieldset disabled={!canManage} className="space-y-6">
+            <Section
+              id="component-setup"
+              title="Targets"
+              action={
+                canManage && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+                    onClick={() =>
+                      setComponentForm({
+                        index: null,
+                        kind: "url",
+                        sourceLabel: null,
+                        url: "",
+                        name: "",
+                        tagId: "",
+                        public: true,
+                        error: "",
+                      })
+                    }
+                  >
+                    <PlusIcon aria-hidden="true" />
+                    Add target
+                  </Button>
+                )
+              }
+            >
+              {draft.components.length === 0 ? (
+                <div className="border-t border-border px-5 py-8 text-center md:px-6">
+                  <p className="text-sm font-medium">No targets yet</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Add a website, machine, or game server to show it on the
+                    page.
+                  </p>
+                </div>
+              ) : (
+                <ul className="divide-y divide-border border-t border-border">
+                  {draft.components.map((component, index) => (
+                    <li
+                      key={`${component.kind}:${component.sourceId}`}
+                      data-component-target={index}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-2.5 md:px-4",
+                        dropTarget === index &&
+                          "bg-primary/10 outline-2 outline-primary -outline-offset-2",
+                      )}
+                    >
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-11 touch-none cursor-grab active:cursor-grabbing md:size-8"
+                        aria-label={`Reorder ${component.name}`}
+                        title="Drag to reorder, or use Arrow Up and Arrow Down"
+                        onPointerDown={(event) => {
+                          if (event.button !== 0) return;
+                          event.preventDefault();
+                          event.currentTarget.focus();
+                          event.currentTarget.setPointerCapture(
+                            event.pointerId,
+                          );
+                          pointerDrag.current = {
+                            index,
+                            pointerId: event.pointerId,
+                            x: event.clientX,
+                            y: event.clientY,
+                            moved: false,
+                            target: null,
+                          };
+                        }}
+                        onPointerMove={(event) => {
+                          const drag = pointerDrag.current;
+                          if (!drag || drag.pointerId !== event.pointerId)
+                            return;
+                          if (
+                            !drag.moved &&
+                            Math.hypot(
+                              event.clientX - drag.x,
+                              event.clientY - drag.y,
+                            ) < 5
+                          )
+                            return;
+                          drag.moved = true;
+                          const value = document
+                            .elementFromPoint(event.clientX, event.clientY)
+                            ?.closest<HTMLElement>("[data-component-target]")
+                            ?.dataset.componentTarget;
+                          const target =
+                            value === undefined ? null : Number(value);
+                          drag.target =
+                            target !== null && target !== drag.index
+                              ? target
+                              : null;
+                          setDropTarget(drag.target);
+                        }}
+                        onPointerUp={(event) => {
+                          const drag = pointerDrag.current;
+                          if (!drag || drag.pointerId !== event.pointerId)
+                            return;
+                          pointerDrag.current = null;
+                          setDropTarget(null);
+                          if (
+                            event.currentTarget.hasPointerCapture(
+                              event.pointerId,
+                            )
+                          )
+                            event.currentTarget.releasePointerCapture(
+                              event.pointerId,
+                            );
+                          if (drag.moved && drag.target !== null)
+                            move(drag.index, drag.target);
+                        }}
+                        onPointerCancel={() => {
+                          pointerDrag.current = null;
+                          setDropTarget(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (
+                            event.key === "ArrowUp" ||
+                            event.key === "ArrowDown"
+                          ) {
+                            event.preventDefault();
+                            move(
+                              index,
+                              index + (event.key === "ArrowUp" ? -1 : 1),
+                            );
+                          }
+                        }}
+                      >
+                        <GripVerticalIcon aria-hidden="true" />
+                      </Button>
+                      <KindIcon kind={component.kind} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-sm font-medium">
+                            {component.name}
+                          </p>
+                          {tagName(component.tagId) && (
+                            <Badge variant="outline">
+                              {tagName(component.tagId)}
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {sourceName(component) === null
+                            ? `Removed ${kindLabel[component.kind].toLowerCase()}`
+                            : sourceName(component) !== component.name
+                              ? sourceName(component)
+                              : kindLabel[component.kind]}
+                        </p>
+                      </div>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="size-11 md:size-8"
+                            aria-pressed={component.public}
+                            aria-label={`${component.public ? "Hide" : "Show"} ${component.name} on the public page`}
+                            onClick={() =>
+                              updateComponents((list) =>
+                                list.map((c, i) =>
+                                  i === index ? { ...c, public: !c.public } : c,
+                                ),
+                              )
+                            }
+                          >
+                            {component.public ? (
+                              <EyeIcon aria-hidden="true" />
+                            ) : (
+                              <EyeOffIcon
+                                aria-hidden="true"
+                                className="text-muted-foreground"
+                              />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {component.public
+                            ? "Shown on the public page"
+                            : "Hidden from the public page"}
+                        </TooltipContent>
+                      </Tooltip>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="size-11 md:size-8"
+                            aria-label={`Actions for ${component.name}`}
+                          >
+                            <MoreHorizontalIcon aria-hidden="true" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              setComponentForm({
+                                index,
+                                kind: component.kind,
+                                sourceLabel: null,
+                                url:
+                                  component.kind === "url"
+                                    ? component.sourceId
+                                    : "",
+                                name: component.name,
+                                tagId: component.tagId,
+                                public: component.public,
+                                error: "",
+                              })
+                            }
+                          >
+                            <PencilIcon aria-hidden="true" />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={index === 0}
+                            onSelect={() => move(index, index - 1)}
+                          >
+                            <ArrowUpIcon aria-hidden="true" />
+                            Move up
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={index === draft.components.length - 1}
+                            onSelect={() => move(index, index + 1)}
+                          >
+                            <ArrowDownIcon aria-hidden="true" />
+                            Move down
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            variant="destructive"
+                            onSelect={() =>
+                              updateComponents((list) =>
+                                list.filter((_, i) => i !== index),
+                              )
+                            }
+                          >
+                            <Trash2Icon aria-hidden="true" />
+                            Remove
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+          </fieldset>
         </TabsContent>
 
         <TabsContent value="settings" className="mt-4">
@@ -1364,256 +1689,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 </div>
               </Section>
 
-              <Section
-                id="component-setup"
-                title="Targets"
-                action={
-                  canManage && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-                      disabled={available.length === 0}
-                      onClick={() =>
-                        setComponentForm({
-                          index: null,
-                          sourceLabel: null,
-                          name: "",
-                          groupName: "",
-                          public: true,
-                          error: "",
-                        })
-                      }
-                    >
-                      <PlusIcon aria-hidden="true" />
-                      Add target
-                    </Button>
-                  )
-                }
-              >
-                {draft.components.length === 0 ? (
-                  <div className="border-t border-border px-5 py-8 text-center md:px-6">
-                    <p className="text-sm font-medium">No targets yet</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {state.sources.length === 0
-                        ? "Add a game server or machine first, then show it here."
-                        : "Add a target to show it on the page."}
-                    </p>
-                  </div>
-                ) : (
-                  <ul className="divide-y divide-border border-t border-border">
-                    {draft.components.map((component, index) => (
-                      <li
-                        key={`${component.kind}:${component.sourceId}`}
-                        data-component-target={index}
-                        className={cn(
-                          "flex items-center gap-2 px-3 py-2.5 md:px-4",
-                          dropTarget === index &&
-                            "bg-primary/10 outline-2 outline-primary -outline-offset-2",
-                        )}
-                      >
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-sm"
-                          className="size-11 touch-none cursor-grab active:cursor-grabbing md:size-8"
-                          aria-label={`Reorder ${component.name}`}
-                          title="Drag to reorder, or use Arrow Up and Arrow Down"
-                          onPointerDown={(event) => {
-                            if (event.button !== 0) return;
-                            event.preventDefault();
-                            event.currentTarget.focus();
-                            event.currentTarget.setPointerCapture(
-                              event.pointerId,
-                            );
-                            pointerDrag.current = {
-                              index,
-                              pointerId: event.pointerId,
-                              x: event.clientX,
-                              y: event.clientY,
-                              moved: false,
-                              target: null,
-                            };
-                          }}
-                          onPointerMove={(event) => {
-                            const drag = pointerDrag.current;
-                            if (!drag || drag.pointerId !== event.pointerId)
-                              return;
-                            if (
-                              !drag.moved &&
-                              Math.hypot(
-                                event.clientX - drag.x,
-                                event.clientY - drag.y,
-                              ) < 5
-                            )
-                              return;
-                            drag.moved = true;
-                            const value = document
-                              .elementFromPoint(event.clientX, event.clientY)
-                              ?.closest<HTMLElement>("[data-component-target]")
-                              ?.dataset.componentTarget;
-                            const target =
-                              value === undefined ? null : Number(value);
-                            drag.target =
-                              target !== null && target !== drag.index
-                                ? target
-                                : null;
-                            setDropTarget(drag.target);
-                          }}
-                          onPointerUp={(event) => {
-                            const drag = pointerDrag.current;
-                            if (!drag || drag.pointerId !== event.pointerId)
-                              return;
-                            pointerDrag.current = null;
-                            setDropTarget(null);
-                            if (
-                              event.currentTarget.hasPointerCapture(
-                                event.pointerId,
-                              )
-                            )
-                              event.currentTarget.releasePointerCapture(
-                                event.pointerId,
-                              );
-                            if (drag.moved && drag.target !== null)
-                              move(drag.index, drag.target);
-                          }}
-                          onPointerCancel={() => {
-                            pointerDrag.current = null;
-                            setDropTarget(null);
-                          }}
-                          onKeyDown={(event) => {
-                            if (
-                              event.key === "ArrowUp" ||
-                              event.key === "ArrowDown"
-                            ) {
-                              event.preventDefault();
-                              move(
-                                index,
-                                index + (event.key === "ArrowUp" ? -1 : 1),
-                              );
-                            }
-                          }}
-                        >
-                          <GripVerticalIcon aria-hidden="true" />
-                        </Button>
-                        <KindIcon kind={component.kind} />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="truncate text-sm font-medium">
-                              {component.name}
-                            </p>
-                            {component.groupName && (
-                              <Badge variant="outline">
-                                {component.groupName}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {sourceName(component) === null
-                              ? `Removed ${component.kind}`
-                              : sourceName(component) !== component.name
-                                ? sourceName(component)
-                                : component.kind === "server"
-                                  ? "Game server"
-                                  : "Machine"}
-                          </p>
-                        </div>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              className="size-11 md:size-8"
-                              aria-pressed={component.public}
-                              aria-label={`${component.public ? "Hide" : "Show"} ${component.name} on the public page`}
-                              onClick={() =>
-                                updateComponents((list) =>
-                                  list.map((c, i) =>
-                                    i === index
-                                      ? { ...c, public: !c.public }
-                                      : c,
-                                  ),
-                                )
-                              }
-                            >
-                              {component.public ? (
-                                <EyeIcon aria-hidden="true" />
-                              ) : (
-                                <EyeOffIcon
-                                  aria-hidden="true"
-                                  className="text-muted-foreground"
-                                />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {component.public
-                              ? "Shown on the public page"
-                              : "Hidden from the public page"}
-                          </TooltipContent>
-                        </Tooltip>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              className="size-11 md:size-8"
-                              aria-label={`Actions for ${component.name}`}
-                            >
-                              <MoreHorizontalIcon aria-hidden="true" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              onSelect={() =>
-                                setComponentForm({
-                                  index,
-                                  sourceLabel: null,
-                                  name: component.name,
-                                  groupName: component.groupName,
-                                  public: component.public,
-                                  error: "",
-                                })
-                              }
-                            >
-                              <PencilIcon aria-hidden="true" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={index === 0}
-                              onSelect={() => move(index, index - 1)}
-                            >
-                              <ArrowUpIcon aria-hidden="true" />
-                              Move up
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              disabled={index === draft.components.length - 1}
-                              onSelect={() => move(index, index + 1)}
-                            >
-                              <ArrowDownIcon aria-hidden="true" />
-                              Move down
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              variant="destructive"
-                              onSelect={() =>
-                                updateComponents((list) =>
-                                  list.filter((_, i) => i !== index),
-                                )
-                              }
-                            >
-                              <Trash2Icon aria-hidden="true" />
-                              Remove
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </Section>
-
               <Section id="preview" title="Public preview">
                 <div className="border-t border-border">
                   <div className="max-h-[42rem] overflow-y-auto">
@@ -1634,52 +1709,53 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 </div>
               </Section>
             </fieldset>
-
-            {(dirty || saveError) && canManage && (
-              <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-end gap-3 rounded-xl border border-border-strong bg-surface-elevated px-4 py-3 shadow-lg">
-                <p
-                  role={saveError ? "alert" : "status"}
-                  className={cn(
-                    "mr-auto text-sm",
-                    saveError ? "text-destructive" : "text-muted-foreground",
-                  )}
-                >
-                  {saveError || "Unsaved changes"}
-                </p>
-                {saveError.includes("another session") && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-10 px-4"
-                    onClick={reload}
-                  >
-                    Reload
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-                  disabled={saving || !dirty}
-                  onClick={() => {
-                    setDraft(draftOf(state));
-                    setSaveError("");
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-                  disabled={saving || !dirty}
-                >
-                  {saving ? "Saving changes..." : "Save changes"}
-                </Button>
-              </div>
-            )}
           </form>
         </TabsContent>
       </Tabs>
+
+      {(dirty || saveError) && canManage && (
+        <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-end gap-3 rounded-xl border border-border-strong bg-surface-elevated px-4 py-3 shadow-lg">
+          <p
+            role={saveError ? "alert" : "status"}
+            className={cn(
+              "mr-auto text-sm",
+              saveError ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {saveError || "Unsaved changes"}
+          </p>
+          {saveError.includes("another session") && (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 px-4"
+              onClick={reload}
+            >
+              Reload
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+            disabled={saving || !dirty}
+            onClick={() => {
+              setDraft(draftOf(state));
+              setSaveError("");
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+            disabled={saving || !dirty}
+            onClick={() => void save()}
+          >
+            {saving ? "Saving changes..." : "Save changes"}
+          </Button>
+        </div>
+      )}
 
       <Dialog
         open={componentForm !== null}
@@ -1695,13 +1771,76 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               </DialogTitle>
               <DialogDescription>
                 {componentForm?.index === null
-                  ? "Pick a saved server or machine and choose how it appears."
+                  ? "Watch a website, machine, or game server, grouped by your machine tags."
                   : "Change how this target appears on the page."}
               </DialogDescription>
             </DialogHeader>
             {componentForm?.index === null && (
               <div className="space-y-2">
-                <Label htmlFor="component-source">Server or machine</Label>
+                <Label id="component-kind-label">Type</Label>
+                <ToggleGroup
+                  type="single"
+                  value={componentForm.kind}
+                  onValueChange={(kind) => {
+                    if (
+                      kind === "url" ||
+                      kind === "machine" ||
+                      kind === "server"
+                    )
+                      setComponentForm((current) =>
+                        current
+                          ? { ...current, kind, sourceLabel: null, error: "" }
+                          : current,
+                      );
+                  }}
+                  aria-labelledby="component-kind-label"
+                  spacing={0}
+                  className="w-full rounded-lg bg-surface-elevated p-1"
+                >
+                  {(["url", "machine", "server"] as const).map((kind) => (
+                    <ToggleGroupItem
+                      key={kind}
+                      value={kind}
+                      className="h-8 flex-1 gap-1.5 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                    >
+                      {kind === "url" ? (
+                        <GlobeIcon aria-hidden="true" />
+                      ) : kind === "machine" ? (
+                        <HardDriveIcon aria-hidden="true" />
+                      ) : (
+                        <ServerIcon aria-hidden="true" />
+                      )}
+                      {kindLabel[kind]}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              </div>
+            )}
+            {componentForm?.kind === "url" && (
+              <div className="space-y-2">
+                <Label htmlFor="component-url">Address</Label>
+                <Input
+                  id="component-url"
+                  type="url"
+                  maxLength={300}
+                  placeholder="https://play.example.com"
+                  value={componentForm.url}
+                  onChange={(e) =>
+                    setComponentForm((current) =>
+                      current
+                        ? { ...current, url: e.target.value, error: "" }
+                        : current,
+                    )
+                  }
+                  className="h-10"
+                />
+              </div>
+            )}
+            {componentForm?.index === null && componentForm.kind !== "url" && (
+              <div className="space-y-2">
+                <Label htmlFor="component-source">
+                  {kindLabel[componentForm.kind]}
+                </Label>
                 <Popover open={sourceOpen} onOpenChange={setSourceOpen}>
                   <PopoverTrigger asChild>
                     <Button
@@ -1714,7 +1853,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     >
                       {componentForm.sourceLabel ?? (
                         <span className="text-muted-foreground">
-                          Choose a server or machine
+                          {componentForm.kind === "machine"
+                            ? "Choose a machine"
+                            : "Choose a game server"}
                         </span>
                       )}
                       <ChevronsUpDownIcon
@@ -1728,65 +1869,42 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     className="w-[var(--radix-popover-trigger-width)] p-0"
                   >
                     <Command>
-                      <CommandInput placeholder="Search servers and machines" />
+                      <CommandInput
+                        placeholder={
+                          componentForm.kind === "machine"
+                            ? "Search machines"
+                            : "Search game servers"
+                        }
+                      />
                       <CommandList>
                         <CommandEmpty>
-                          No matching servers or machines.
+                          {componentForm.kind === "machine"
+                            ? "No machines left to add."
+                            : "No game servers left to add."}
                         </CommandEmpty>
-                        {(["server", "machine"] as const).map((kind) => {
-                          const options = available.filter(
-                            (s) => s.kind === kind,
-                          );
-                          if (options.length === 0) return null;
-                          return (
-                            <CommandGroup
-                              key={kind}
-                              heading={
-                                kind === "server" ? "Game servers" : "Machines"
-                              }
+                        {available
+                          .filter((s) => s.kind === componentForm.kind)
+                          .map((source) => (
+                            <CommandItem
+                              key={`${source.kind}:${source.id}`}
+                              value={sourceLabel(source)}
+                              onSelect={() => chooseSource(source)}
                             >
-                              {options.map((source) => (
-                                <CommandItem
-                                  key={`${source.kind}:${source.id}`}
-                                  value={sourceLabel(source)}
-                                  onSelect={() => {
-                                    setComponentForm((current) =>
-                                      current
-                                        ? {
-                                            ...current,
-                                            sourceLabel: sourceLabel(source),
-                                            name:
-                                              current.name.trim() === "" ||
-                                              available.some(
-                                                (s) => s.name === current.name,
-                                              )
-                                                ? source.name
-                                                : current.name,
-                                            error: "",
-                                          }
-                                        : current,
-                                    );
-                                    setSourceOpen(false);
-                                  }}
-                                >
-                                  {source.kind === "server" ? (
-                                    <ServerIcon aria-hidden="true" />
-                                  ) : (
-                                    <HardDriveIcon aria-hidden="true" />
-                                  )}
-                                  {source.name}
-                                  {componentForm.sourceLabel ===
-                                    sourceLabel(source) && (
-                                    <CheckIcon
-                                      aria-hidden="true"
-                                      className="ml-auto"
-                                    />
-                                  )}
-                                </CommandItem>
-                              ))}
-                            </CommandGroup>
-                          );
-                        })}
+                              {source.kind === "server" ? (
+                                <ServerIcon aria-hidden="true" />
+                              ) : (
+                                <HardDriveIcon aria-hidden="true" />
+                              )}
+                              {source.name}
+                              {componentForm.sourceLabel ===
+                                sourceLabel(source) && (
+                                <CheckIcon
+                                  aria-hidden="true"
+                                  className="ml-auto"
+                                />
+                              )}
+                            </CommandItem>
+                          ))}
                       </CommandList>
                     </Command>
                   </PopoverContent>
@@ -1808,45 +1926,40 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 }
                 className="h-10"
               />
-              <p className="text-xs leading-5 text-muted-foreground">
-                Players see this name. It does not rename the server.
-              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="component-group">Group</Label>
-              <Input
-                id="component-group"
-                maxLength={80}
-                value={componentForm?.groupName ?? ""}
-                onChange={(e) =>
+              <Select
+                value={componentForm?.tagId || "none"}
+                onValueChange={(value) =>
                   setComponentForm((current) =>
                     current
-                      ? { ...current, groupName: e.target.value }
+                      ? { ...current, tagId: value === "none" ? "" : value }
                       : current,
                   )
                 }
-                placeholder="Optional, such as EU servers"
-                className="h-10"
-              />
-              {existingGroups.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {existingGroups.map((group) => (
-                    <Button
-                      key={group}
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={() =>
-                        setComponentForm((current) =>
-                          current ? { ...current, groupName: group } : current,
-                        )
-                      }
+              >
+                <SelectTrigger
+                  id="component-group"
+                  className="w-full border-border bg-input-background data-[size=default]:h-11 sm:data-[size=default]:h-10 dark:bg-input-background"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper">
+                  <SelectItem value="none" className="min-h-11 sm:min-h-8">
+                    No group
+                  </SelectItem>
+                  {state.tags.map((tag) => (
+                    <SelectItem
+                      key={tag.id}
+                      value={tag.id}
+                      className="min-h-11 sm:min-h-8"
                     >
-                      {group}
-                    </Button>
+                      {tag.name}
+                    </SelectItem>
                   ))}
-                </div>
-              )}
+                </SelectContent>
+              </Select>
             </div>
             <label className="flex items-center gap-3 text-sm">
               <Checkbox

@@ -101,7 +101,9 @@ export function PublicStatusView({
     kind: "server" as const,
     sourceId: "",
     sourceName: null,
+    tagId: "",
     public: true,
+    detail: null,
   }));
   const overall = overallStatus(components, data.maintenance, now);
   const active = activeMaintenance(data.maintenance, now);
