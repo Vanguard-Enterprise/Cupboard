@@ -419,3 +419,29 @@ the existing account flow. Interactive setup steps, product tabs, and FAQ answer
 are public presentation state only. The page reads no private organization data,
 collects no lead information, and introduces no API, persistence, or service.
 Documentation and resource destinations remain the requested placeholder links.
+
+## Maintenance and status page
+
+The status page lives in the existing Rust runtime and PostgreSQL. One page per
+organization stores its name, unique public address, published flag,
+announcement, and support link with a revision for conflict detection. Components
+reference a saved server or machine by kind and id; their health is derived at
+read time from the stored connection checks and agent reports, so no new poller,
+history store, or worker is introduced. Maintenance windows store a title,
+message, time range, completion time, and the affected component ids. Reads need
+`infrastructure.view`; writes need `infrastructure.manage`; both check the page
+organization and tenant ownership in the data path. The public
+`/status/<address>` route reads an unauthenticated API response that only
+includes public targets by display name and recent maintenance; the Next.js
+page renders it on the server and the browser refreshes it. Branding (theme,
+accent color, font, header links, footer text, and the Powered by credit) is
+saved and revisioned with the page. The logo is decoded and re-encoded to a
+PNG of at most 160 pixels per side by the existing logo pipeline and stored in
+PostgreSQL beside the page, since it is too small to justify object storage; it
+is served only while the page is published. Website targets are
+probed by a small loop in the same API process (like the server and Pelican
+monitors): rows in `status_page_url_checks` are claimed with `FOR UPDATE SKIP
+LOCKED`, each URL gets one GET per minute without redirects, and every resolved
+address must be public before the connection is pinned to it. Targets group
+under the existing machine tag catalog instead of free-text groups. Uptime
+history and incident posts are separate follow-ups.

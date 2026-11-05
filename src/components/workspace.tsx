@@ -31,6 +31,7 @@ import {
   rolesPath,
   serversPath,
   machinesPath,
+  maintenancePath,
   filesPath,
   securityAlertsPath,
   usagePath,
@@ -122,7 +123,12 @@ export function Workspace({
             ? ["Machines", "Setup"]
             : ["Machines"],
         }
-      : undefined;
+      : pathname === maintenancePath
+        ? {
+            activeSection: "maintenance",
+            crumbs: ["Infrastructure", "Status page"],
+          }
+        : undefined;
   const page = identity.organization
     ? (machinePage ?? serverPage ?? currentPage ?? teamPage)
     : undefined;

@@ -59,6 +59,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { copyText } from "@/lib/clipboard";
 import {
   Table,
   TableBody,
@@ -480,7 +481,7 @@ export function OrganizationUsers() {
 
   async function copyInvitation() {
     try {
-      await navigator.clipboard.writeText(invitationLink);
+      await copyText(invitationLink);
       setCopyStatus("Link copied.");
     } catch {
       setCopyStatus("Could not copy the link. Select it and copy it manually.");

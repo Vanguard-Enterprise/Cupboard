@@ -430,7 +430,7 @@ changes. Webhook signing secrets appear once in a dialog with a copy action.
 ## Marketing navigation
 
 Marketing pages share a dark-only header. Sign-in, signup, invitation acceptance,
-and dashboard pages retain their existing layouts without this header. Follow the linked Giga capture's
+dashboard, and public status pages retain their existing layouts without this header. Follow the linked Giga capture's
 single integrated navigation row, with the logo alone at the left, Product, Docs,
 and Resources centered, and Pricing, Sign in, and a pale pill Get started action
 at the right. Put a slim dismissible announcement above the row. The user requested
@@ -500,3 +500,74 @@ GameServerKings logos replace the feature strip. Use their actual locally stored
 marks in white/grayscale without customer or endorsement claims. Sources are
 recorded beside the assets. Logo links and their focus targets remain accessible;
 the duplicate marquee group is hidden from assistive technology and keyboard focus.
+
+## Maintenance and status page
+
+The admin page follows [incident.io's status page overview](https://mobbin.com/screens/1c0dbbc8-df9c-408c-9d03-b2ae7be690d0)
+and [components settings](https://mobbin.com/screens/2f54654e-82b2-4664-b483-65fa66ebf0ef):
+a header with the page name, published state, copyable public address, Visit
+status page, and a primary Schedule maintenance action, then Overview and
+Settings tabs. Overview pairs a single status banner with grouped components on
+the left and maintenance windows on the right; past windows collapse. Settings
+keeps page setup, the sortable component list with eye toggles for visibility,
+and a public preview in one form with the shared sticky save bar. The preview
+follows [Better Stack's public page](https://mobbin.com/screens/0d34fbf2-e4c4-451c-ad5d-de3cdf409164)
+composition: a compact name and Contact support header, the announcement, a
+centered status hero with the update time, maintenance in progress, grouped
+targets with status labels, scheduled and past maintenance, and a Powered by
+Cupboard footer. Operators asked for the word "targets" in place of
+"components", for the sidebar entry to read "Status page", and for the
+overview and settings sections, the address field, and the accent field to carry
+no descriptions. Status colors use
+the existing tokens: sage operational, amber degraded, red unavailable, neutral
+for maintenance and unknown, always with a text label. The source picker uses
+the shared Popover and Command components inside the dialog; the base-ui
+Combobox is not used inside modal dialogs because its portal sits outside the
+dialog's pointer-events layer.
+
+The admin header reads "Status" with the published badge beside it and the
+public address below. Branding sits in Settings between page setup and
+targets, modeled on what Uptime Kuma and hosted status pages let customers set:
+a logo, a dark, light, or system theme, an accent color (presets plus a hex field), one of
+a curated set of fonts, up to three header links, footer text, and the Powered
+by Cupboard credit. The accent only colors the top bar, the Contact support
+button, and the initial shown without a logo; status colors never change, so
+players read health the same way on every page. Picking or dropping a logo
+opens an editor dialog instead of uploading the raw file: a 16:9 stage with a
+dimmed crop frame (Original, Square, or Wide), drag or arrow keys to pan, the
+wheel, slider, or plus and minus keys to zoom, snapping within 6 pixels of
+the frame's center lines and edges with a sage guide line (Alt disables it), quarter turns and a flip, and a
+transparent, white, black, or accent background. At zoom 1 the whole image fits
+the frame, so nothing is cut off by default. The browser renders the result to
+a PNG of at most 640 pixels and shows it in a dark and a light header before
+saving. The logo tile is the only entry point (there is no separate upload or
+replace button): it picks a file when empty, opens the editor when set, and
+accepts a dropped file; the editor's Choose another replaces the image. A trash
+button on the tile's corner asks for confirmation in a popover before removing
+it. The settings preview renders
+the real public view, so it shows exactly what visitors get. The light theme is
+a scoped token set (`.theme-light`) that darkens status colors for contrast on
+white, and a full light page also lights the document so the scrollbar gutter
+matches. Dark and Light lock the page to the organization's branding; System
+(`.theme-system`) applies the same light tokens inside a
+`prefers-color-scheme: light` media query. Both share one `status-light`
+utility in `globals.css`, and the choice is pure CSS, so a light-preferring
+visitor never sees a dark first paint.
+
+Targets have their own tab between Overview and Settings, with the shared save
+bar following the editor across tabs. The add dialog starts with a Website,
+Machine, or Game server segmented control; websites take an address, the other
+two use the searchable picker. Groups are a select over the machine tag
+catalog, so the same tags organize machines and the status page.
+
+Copy buttons use `copyText` from `src/lib/clipboard.ts`, which falls back to the
+copy command when the async clipboard is missing on plain-HTTP origins.
+
+## Scrollbars
+
+Every scrollable area uses Cupboard's own scrollbar: a slim rounded thumb in
+`--border-strong` on a clear track, matching the ScrollArea component, with the
+thumb darkening on hover. Chromium and Safari use the scrollbar pseudo-elements;
+Firefox, which has none, gets `scrollbar-width: thin` with the same colors.
+Components that hide their scrollbar on purpose, such as menus and the sidebar,
+keep doing so.

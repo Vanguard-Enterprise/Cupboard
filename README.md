@@ -640,3 +640,53 @@ Already-running databases and applications are left running. Applications that
 are stopped receive fresh reports after they start. Newly created worktrees join
 when their development seed is run. Use `npm run dev:machines` to run the shared
 reporter separately; its repository-wide lock prevents duplicate collectors.
+
+## Maintenance and status page
+
+Open `/dashboard/infrastructure/maintenance` (Status page in the sidebar) to
+manage the organization's status page. Overview shows every target's live
+health, with maintenance windows that are happening now, scheduled, or past.
+Targets lists what the page watches: a website (any public http or https
+address on port 80, 443, 8080, or 8443), a saved machine, or a saved game
+server, each with its own display name, public or hidden visibility, and an
+optional group chosen from the machine tags (a machine starts in its first tag).
+Drag the handle, use Arrow Up and Arrow Down, or the row menu to order them.
+Settings edits the page name, public address under `/status/<address>`,
+announcement, support link, branding, and whether the page is published. A public preview reflects unsaved changes; Save changes applies the
+whole page at once and rejects edits made from an older revision.
+
+Server components are Operational when RCON and A2S both responded, Degraded
+when one did, and Unavailable when neither did; machines are Operational while
+reporting and Unavailable after 90 seconds of silence. The API checks each
+website about once a minute with a single GET that never follows redirects:
+below 400 within 3 seconds is Operational, below 400 but slower is Degraded, and
+anything else is Unavailable. Results older than five minutes show Unknown.
+Addresses that resolve to private, local, or reserved networks are refused, and
+the URL and check details stay on the admin page. Components without a
+check or report show Unknown. Schedule maintenance records a title, message,
+start and end, and the affected components (or all of them). While a window is
+open, its components show Under maintenance instead of their live health. Mark
+complete closes a window early; Delete removes it. Infrastructure viewers can
+read the page; infrastructure managers can change it. Public addresses are
+unique across organizations.
+
+Published pages are served at `/status/<address>` without signing in. Visitors
+see the page name, announcement, support link, the overall status, public
+targets grouped and labeled by status, maintenance in progress, scheduled
+windows, and windows that ended within the last week. Hidden targets, source
+identifiers, and server names never leave the API. The page refreshes every
+minute while open and keeps the last state if a refresh fails. Unpublished or
+unknown addresses return a not-found page.
+
+Branding in Settings makes the public page your own: click or drop onto the
+logo tile to pick a logo (PNG, JPEG, WebP, GIF, or SVG), then crop, zoom, pan,
+rotate, flip, and give it a background in the logo editor. Dragging snaps the
+logo's center and edges to the frame's center lines and edges (hold Alt to move
+freely), and the editor previews the page header in both themes. Saving uploads
+the edited PNG right away; the server re-encodes it to a small PNG. Clicking a
+set logo reopens the editor, where Choose another replaces it, and the trash
+button removes it after a confirmation. Lock the page to a dark or light theme, or choose System so each visitor sees their device preference, then pick an accent color, and a font (Geist, Inter,
+Manrope, IBM Plex Sans, Space Grotesk, Source Serif, or JetBrains Mono), add up
+to three HTTPS header links, set footer text, and turn the Powered by Cupboard
+credit on or off. The accent colors the top bar, the Contact support button, and
+your initial when there is no logo; status colors stay the same.

@@ -46,6 +46,7 @@ async fn run() -> Result<(), &'static str> {
         key.clone(),
         panel_policy.clone(),
     ));
+    let status_monitor = tokio::spawn(cupboard::status_page::monitor(pool.clone()));
     let mut app = cupboard::router_with_auth(pool.clone(), config)
         .layer(axum::Extension(key))
         .layer(axum::Extension(panel_policy));
@@ -67,6 +68,8 @@ async fn run() -> Result<(), &'static str> {
     let _ = panel_monitor.await;
     alert_monitor.abort();
     let _ = alert_monitor.await;
+    status_monitor.abort();
+    let _ = status_monitor.await;
     pool.close().await;
     result
 }

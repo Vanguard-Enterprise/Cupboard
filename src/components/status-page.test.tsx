@@ -1,0 +1,711 @@
+// @vitest-environment jsdom
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { StatusPageAdmin } from "./status-page";
+import { apiRequest, type Identity } from "@/lib/api-client";
+import type { StatusPageState } from "@/lib/status-page";
+import { toast } from "sonner";
+
+vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/status-fonts", () => ({
+  statusFontFamily: {
+    geist: "Geist",
+    inter: "Inter",
+    manrope: "Manrope",
+    "ibm-plex-sans": "IBM Plex Sans",
+    "space-grotesk": "Space Grotesk",
+    "source-serif": "Source Serif 4",
+    "jetbrains-mono": "JetBrains Mono",
+  },
+}));
+
+const identity: Identity = {
+  user: { id: "operator", name: "Operator", email: "operator@example.com" },
+  organization: { id: "org-one", name: "Northstar Games" },
+  organizations: [],
+  membershipId: "member",
+  permissions: ["infrastructure.view", "infrastructure.manage"],
+};
+const empty: StatusPageState = {
+  revision: 0,
+  name: "Northstar Games",
+  slug: "northstar-games",
+  published: false,
+  announcement: "",
+  supportUrl: "",
+  theme: "dark",
+  accentColor: "#7cb58d",
+  font: "geist",
+  links: [],
+  footerText: "",
+  poweredBy: true,
+  logoVersion: null,
+  components: [],
+  maintenance: [],
+  sources: [
+    { id: "server-eu", name: "Rust EU", kind: "server", tags: [] },
+    {
+      id: "machine-1",
+      name: "use1-wings-01",
+      kind: "machine",
+      tags: ["wings"],
+    },
+  ],
+  tags: [
+    { id: "wings", name: "Wings" },
+    { id: "game-server", name: "Game server" },
+  ],
+};
+const now = Date.now();
+const live: StatusPageState = {
+  ...empty,
+  revision: 2,
+  published: true,
+  components: [
+    {
+      id: "c-eu",
+      name: "EU main",
+      kind: "server",
+      sourceId: "server-eu",
+      sourceName: "Rust EU",
+      tagId: "game-server",
+      groupName: "Game server",
+      public: true,
+      health: "operational",
+      observedAt: now - 10_000,
+      detail: null,
+    },
+    {
+      id: "c-host",
+      name: "Wings host",
+      kind: "machine",
+      sourceId: "machine-1",
+      sourceName: "use1-wings-01",
+      tagId: "",
+      groupName: "",
+      public: false,
+      health: "down",
+      observedAt: now - 300_000,
+      detail: null,
+    },
+  ],
+  maintenance: [
+    {
+      id: "w-1",
+      title: "Monthly wipe",
+      message: "Map and blueprints reset.",
+      startsAt: now - 60_000,
+      endsAt: now + 3_600_000,
+      completedAt: null,
+      componentIds: ["c-eu"],
+      createdAt: now - 120_000,
+    },
+  ],
+};
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  vi.mocked(apiRequest).mockReset();
+  vi.mocked(toast.success).mockReset();
+  vi.mocked(toast.error).mockReset();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+const mount = (who = identity) =>
+  render(
+    <TooltipProvider>
+      <StatusPageAdmin identity={who} />
+    </TooltipProvider>,
+  );
+const ready = () =>
+  waitFor(() =>
+    expect(screen.queryByLabelText("Loading status page")).toBeNull(),
+  );
+
+/** jsdom has no image decoding or canvas, so give the logo editor stand-ins. */
+function stubImages() {
+  vi.stubGlobal(
+    "Image",
+    class {
+      naturalWidth = 600;
+      naturalHeight = 300;
+      decoding = "auto";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    },
+  );
+  let next = 0;
+  URL.createObjectURL = vi.fn(() => `blob:logo-${++next}`);
+  URL.revokeObjectURL = vi.fn();
+  const context = new Proxy({}, { get: () => vi.fn() });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+    context as unknown as CanvasRenderingContext2D,
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+    "data:image/png;base64,",
+  );
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(
+    (callback) => callback(new Blob(["png"], { type: "image/png" })),
+  );
+}
+
+describe("Status page admin", () => {
+  it("shows live status, maintenance, and visibility on the overview", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    expect(apiRequest).toHaveBeenCalledWith(
+      "status-page",
+      undefined,
+      "org-one",
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "1 target unavailable",
+    );
+    expect(screen.getByText("Under maintenance")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "Hidden from the public page" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Happening now")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: /Visit status page/ })
+        .getAttribute("href"),
+    ).toBe("/status/northstar-games");
+  });
+
+  it("sends an empty overview to the Targets tab without a manual refresh", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(empty);
+    mount();
+    await ready();
+    expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Add targets" }));
+    expect(
+      screen
+        .getByRole("tab", { name: "Targets" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "Add target" })).toBeTruthy();
+  });
+
+  it("lets viewers read but not change the page", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount({ ...identity, permissions: ["infrastructure.view"] });
+    await ready();
+    expect(
+      screen.queryByRole("button", { name: "Schedule maintenance" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Actions for Monthly wipe" }),
+    ).toBeNull();
+    mount({ ...identity, permissions: ["servers.view"] });
+    expect(screen.getByText("Infrastructure viewing required")).toBeTruthy();
+  });
+
+  it("adds website, machine, and game server targets and saves them", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Targets" }));
+
+    // A website target needs a complete address.
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    let dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog)
+        .getByRole("radio", { name: "Website" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    await user.type(within(dialog).getByLabelText("Address"), "play.example");
+    await user.type(within(dialog).getByLabelText("Display name"), "Website");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "Enter a complete http or https address.",
+    );
+    await user.clear(within(dialog).getByLabelText("Address"));
+    await user.type(
+      within(dialog).getByLabelText("Address"),
+      "https://play.example.com",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // A machine defaults to its first tag as the group.
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: "Machine" }));
+    await user.click(within(dialog).getByLabelText("Machine"));
+    await user.click(
+      await screen.findByRole("option", { name: /use1-wings-01/ }),
+    );
+    expect(within(dialog).getByLabelText("Group").textContent).toContain(
+      "Wings",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // Game servers are searchable and can be hidden from the public page.
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("radio", { name: "Game server" }),
+    );
+    await user.click(within(dialog).getByLabelText("Game server"));
+    await user.type(
+      await screen.findByPlaceholderText("Search game servers"),
+      "rust",
+    );
+    await user.click(await screen.findByRole("option", { name: /Rust EU/ }));
+    expect(within(dialog).getByLabelText("Display name")).toHaveProperty(
+      "value",
+      "Rust EU",
+    );
+    await user.clear(within(dialog).getByLabelText("Display name"));
+    await user.type(within(dialog).getByLabelText("Display name"), "EU main");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(
+      screen.getByRole("button", { name: "Hide EU main on the public page" }),
+    );
+    expect(screen.getByText("https://play.example.com")).toBeTruthy();
+
+    vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({
+          revision: 0,
+          components: [
+            {
+              id: null,
+              kind: "url",
+              name: "Website",
+              sourceId: "https://play.example.com",
+              tagId: "",
+              public: true,
+            },
+            {
+              id: null,
+              kind: "machine",
+              name: "use1-wings-01",
+              sourceId: "machine-1",
+              tagId: "wings",
+              public: true,
+            },
+            {
+              id: null,
+              kind: "server",
+              name: "EU main",
+              sourceId: "server-eu",
+              tagId: "",
+              public: false,
+            },
+          ],
+        }),
+        "org-one",
+      ),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Status page saved.");
+  });
+
+  it("copies the public address without the async clipboard", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    vi.stubGlobal("navigator", { ...navigator, clipboard: undefined });
+    const copy = vi.fn(() => true);
+    document.execCommand = copy;
+    await user.click(
+      screen.getByRole("button", { name: "Copy public address" }),
+    );
+    expect(copy).toHaveBeenCalledWith("copy");
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("titles the page Status with its visibility beside it", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading.textContent).toBe("Status");
+    expect(heading.parentElement?.textContent).toContain("Public");
+  });
+
+  it("lets the page follow each visitor's system theme", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(
+      screen.getByRole("radio", { name: "Dark" }).getAttribute("aria-checked"),
+    ).toBe("true");
+    await user.click(screen.getByRole("radio", { name: "System" }));
+    const preview = screen.getByRole("region", { name: "Public preview" });
+    expect(preview.querySelector(".theme-system")).toBeTruthy();
+    expect(preview.querySelector(".theme-light")).toBeNull();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...empty,
+      revision: 1,
+      theme: "system",
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({ theme: "system" }),
+        "org-one",
+      ),
+    );
+  });
+
+  it("brands the page, previews it, and saves the branding", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(screen.getByRole("radio", { name: "Light" }));
+    await user.click(screen.getByRole("radio", { name: "#e4572e" }));
+    await user.click(screen.getByRole("button", { name: "Add link" }));
+    await user.type(screen.getByLabelText("Link 1 label"), "Website");
+    await user.type(
+      screen.getByLabelText("Link 1 address"),
+      "https://northstar.example",
+    );
+    await user.type(
+      screen.getByLabelText("Footer text"),
+      "Northstar Games LLC",
+    );
+    await user.click(
+      screen.getByRole("switch", { name: "Show Powered by Cupboard" }),
+    );
+    const preview = screen.getByRole("region", { name: "Public preview" });
+    expect(preview.querySelector(".theme-light")).toBeTruthy();
+    expect(
+      within(preview)
+        .getByRole("link", { name: "Website" })
+        .getAttribute("href"),
+    ).toBe("https://northstar.example");
+    expect(within(preview).getByText("Northstar Games LLC")).toBeTruthy();
+    expect(within(preview).queryByText("Powered by")).toBeNull();
+
+    await user.clear(screen.getByLabelText("Accent color"));
+    await user.type(screen.getByLabelText("Accent color"), "#12");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "six-digit hex code",
+    );
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    await user.clear(screen.getByLabelText("Accent color"));
+    await user.type(screen.getByLabelText("Accent color"), "#E4572E");
+    vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({
+          theme: "light",
+          accentColor: "#e4572e",
+          font: "geist",
+          links: [{ label: "Website", url: "https://northstar.example" }],
+          footerText: "Northstar Games LLC",
+          poweredBy: false,
+        }),
+        "org-one",
+      ),
+    );
+  });
+
+  it("crops a picked logo in the editor, then uploads it without touching the draft", async () => {
+    const user = userEvent.setup();
+    stubImages();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    const fetch = vi.fn(async (path: string) =>
+      path === "/app-api/status-page/logo"
+        ? Response.json({ ...empty, logoVersion: 7 })
+        : Response.json({}),
+    );
+    vi.stubGlobal("fetch", fetch);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.type(screen.getByLabelText("Footer text"), "Draft footer");
+    const file = new File(["png"], "logo.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("Logo file"), file);
+    const editor = await screen.findByRole("dialog", { name: "Edit logo" });
+    expect(fetch).not.toHaveBeenCalled();
+    await user.click(within(editor).getByRole("radio", { name: "Square" }));
+    await user.click(within(editor).getByRole("button", { name: "Zoom in" }));
+    await user.click(
+      within(editor).getByRole("button", { name: "Rotate right" }),
+    );
+    expect(within(editor).getByText("125%")).toBeTruthy();
+    await user.click(within(editor).getByRole("button", { name: "Save logo" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/app-api/status-page/logo",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.any(Blob),
+          headers: expect.objectContaining({
+            "Content-Type": "application/octet-stream",
+            "X-Cupboard-Organization": "org-one",
+          }),
+        }),
+      ),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Logo updated.");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Edit logo" })).toBeNull(),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Edit logo" }),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Footer text")).toHaveProperty(
+      "value",
+      "Draft footer",
+    );
+  });
+
+  it("snaps a dragged logo to the frame center and shows the guides", async () => {
+    const user = userEvent.setup();
+    stubImages();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.upload(
+      screen.getByLabelText("Logo file"),
+      new File(["png"], "logo.png", { type: "image/png" }),
+    );
+    const editor = await screen.findByRole("dialog", { name: "Edit logo" });
+    const stage = await within(editor).findByRole("application", {
+      name: "Logo crop area",
+    });
+    vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 225 }),
+    );
+    const image = () =>
+      editor.querySelector<HTMLImageElement>("img.max-w-none");
+    const start = image()!.style.left;
+    const press = { pointerId: 1, button: 0, clientX: 200, clientY: 112 };
+    fireEvent.pointerDown(stage, press);
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 204, clientY: 115 });
+    expect(within(editor).getByTestId("logo-guide-vertical")).toBeTruthy();
+    expect(within(editor).getByTestId("logo-guide-horizontal")).toBeTruthy();
+    expect(image()!.style.left).toBe(start);
+
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 240, clientY: 112 });
+    expect(within(editor).queryByTestId("logo-guide-vertical")).toBeNull();
+    expect(within(editor).getByTestId("logo-guide-horizontal")).toBeTruthy();
+    expect(image()!.style.left).not.toBe(start);
+
+    fireEvent.pointerMove(stage, {
+      pointerId: 1,
+      clientX: 204,
+      clientY: 115,
+      altKey: true,
+    });
+    expect(within(editor).queryByTestId("logo-guide-vertical")).toBeNull();
+    expect(image()!.style.left).not.toBe(start);
+    fireEvent.pointerUp(stage, { pointerId: 1 });
+    expect(within(editor).queryByTestId("logo-guide-horizontal")).toBeNull();
+  });
+
+  it("refuses files that are not images before opening the editor", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    stubImages();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.upload(
+      screen.getByLabelText("Logo file"),
+      new File(["text"], "notes.txt", { type: "text/plain" }),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      "Choose a PNG, JPEG, WebP, GIF, or SVG image.",
+    );
+    expect(screen.queryByRole("dialog", { name: "Edit logo" })).toBeNull();
+  });
+
+  it("removes the logo only after confirming from the trash button", async () => {
+    const user = userEvent.setup();
+    stubImages();
+    vi.mocked(apiRequest).mockImplementation(async (path: string) =>
+      path === "status-page/logo/remove"
+        ? { ...empty, logoVersion: null }
+        : { ...empty, logoVersion: 4 },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Blob(["png"], { type: "image/png" }))),
+    );
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    await user.click(
+      await screen.findByRole("button", { name: "Remove logo" }),
+    );
+    expect(screen.getByText("Remove the logo?")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(apiRequest).not.toHaveBeenCalledWith(
+      "status-page/logo/remove",
+      expect.anything(),
+      expect.anything(),
+    );
+    await user.click(screen.getByRole("button", { name: "Remove logo" }));
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenCalledWith(
+        "status-page/logo/remove",
+        {},
+        "org-one",
+      ),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Logo removed.");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remove logo" })).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "Add logo" })).toBeTruthy();
+  });
+
+  it("reorders components with the keyboard and keeps the draft until saved", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Targets" }));
+    const handle = screen.getByRole("button", { name: "Reorder Wings host" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    const handles = screen.getAllByRole("button", { name: /^Reorder / });
+    expect(handles.map((h) => h.getAttribute("aria-label"))).toEqual([
+      "Reorder Wings host",
+      "Reorder EU main",
+    ]);
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules maintenance for chosen components", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(live);
+    mount();
+    await ready();
+    await user.click(
+      screen.getByRole("button", { name: "Schedule maintenance" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+    );
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "Enter a title for the maintenance window.",
+    );
+    await user.type(within(dialog).getByLabelText("Title"), "Host reboot");
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "All targets" }),
+    );
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: /Wings host/ }),
+    );
+    fireEvent.change(within(dialog).getByLabelText("Starts"), {
+      target: { value: "2030-01-01T10:00" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Ends"), {
+      target: { value: "2030-01-01T09:00" },
+    });
+    await user.click(
+      within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+    );
+    expect(within(dialog).getByRole("alert").textContent).toBe(
+      "The window must end after it starts.",
+    );
+    fireEvent.change(within(dialog).getByLabelText("Ends"), {
+      target: { value: "2030-01-01T11:00" },
+    });
+    vi.mocked(apiRequest).mockResolvedValueOnce(live);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+    );
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page/maintenance",
+        {
+          title: "Host reboot",
+          message: "",
+          startsAt: new Date("2030-01-01T10:00").getTime(),
+          endsAt: new Date("2030-01-01T11:00").getTime(),
+          componentIds: ["c-host"],
+        },
+        "org-one",
+      ),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Maintenance scheduled.");
+  });
+
+  it("completes an active window after confirmation", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValue(live);
+    mount();
+    await ready();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Monthly wipe" }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Mark complete" }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Mark complete" }),
+    );
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page/maintenance/w-1/complete",
+        {},
+        "org-one",
+      ),
+    );
+  });
+});
