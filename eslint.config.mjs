@@ -19,6 +19,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "coverage/**",
+    // Local, gitignored agent artifacts (capture and review scripts).
+    ".dev-stack/**",
     "next-env.d.ts",
   ]),
 ]);

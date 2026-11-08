@@ -32,6 +32,7 @@ impl Client {
             || path.starts_with("integrations/")
             || path.starts_with("servers/")
             || path.starts_with("alerts")
+            || path.starts_with("status-page")
             || path == "organization/export"
         {
             request = request.header("x-cupboard-organization", &self.organization);
@@ -3237,6 +3238,31 @@ async fn machines_reject_a_page_organization_after_another_tab_switches_session(
 }
 
 impl Client {
+    /// Uploads a status page logo; `revision` is the page revision header, if any.
+    async fn status_logo_upload(
+        &self,
+        org: &str,
+        revision: Option<&str>,
+        bytes: Vec<u8>,
+    ) -> axum::response::Response {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/app-api/status-page/logo")
+            .header("origin", "http://localhost:5173")
+            .header("x-cupboard-request", "1")
+            .header("x-cupboard-organization", org)
+            .header("content-type", "application/octet-stream")
+            .header("cookie", &self.cookie);
+        if let Some(revision) = revision {
+            request = request.header("x-cupboard-logo-revision", revision);
+        }
+        self.app
+            .clone()
+            .oneshot(request.body(Body::from(bytes)).unwrap())
+            .await
+            .unwrap()
+    }
+
     async fn logo_upload(&self, org: &str, revision: i64, bytes: Vec<u8>) -> (StatusCode, Value) {
         let response = self
             .app
@@ -5896,4 +5922,1155 @@ async fn alerts_are_scoped_authorized_encrypted_routed_retried_and_exported() {
             })
     }));
     hook_task.abort();
+}
+
+#[tokio::test]
+async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::secrets::SecretKey::parse(&"ef".repeat(32)).unwrap(),
+    ));
+    let suffix = uuid::Uuid::new_v4();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut member = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    assert_eq!(
+        anonymous.request("GET", "status-page", json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    owner
+        .signup(&format!("status-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let org = owner.organization.clone();
+
+    // Defaults come from the organization until the first save.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["revision"], 0);
+    assert_eq!(page["name"], "Test organization");
+    assert_eq!(page["slug"], "test-organization");
+    assert_eq!(page["published"], false);
+    assert_eq!(page["components"], json!([]));
+    assert_eq!(page["sources"], json!([]));
+    owner.organization = other.organization.clone();
+    assert_eq!(
+        owner.request("GET", "status-page", json!(null)).await.0,
+        StatusCode::CONFLICT
+    );
+    owner.organization = org.clone();
+
+    let server_input = json!({"name":"Rust EU","rconHost":"127.0.0.1","rconPort":28016,"rconPassword":"rcon-secret-never-returned","a2sHost":"127.0.0.1","a2sPort":28017});
+    let (status, server) = owner.request("POST", "servers", server_input.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{server}");
+    let server_id = server["id"].as_str().unwrap().to_owned();
+    let (status, machine) = owner.request("POST", "machines", machine_input()).await;
+    assert_eq!(status, StatusCode::OK, "{machine}");
+    let machine_id = machine["id"].as_str().unwrap().to_owned();
+    let (status, foreign) = other.request("POST", "servers", server_input).await;
+    assert_eq!(status, StatusCode::OK, "{foreign}");
+    let foreign_id = foreign["id"].as_str().unwrap().to_owned();
+
+    let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components});
+    let component = |id: Option<&str>, kind: &str, source: &str, public: bool| json!({"id":id,"name":format!("{kind} shown"),"kind":kind,"sourceId":source,"tagId":"","public":public});
+    // Another organization's server cannot be shown, even with a valid id.
+    for (body, expected) in [
+        (
+            save(
+                0,
+                "northstar",
+                json!([component(None, "server", &foreign_id, true)]),
+            ),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            save(
+                0,
+                "northstar",
+                json!([
+                    component(None, "server", &server_id, true),
+                    component(None, "server", &server_id, false)
+                ]),
+            ),
+            StatusCode::BAD_REQUEST,
+        ),
+        (save(0, "North Star", json!([])), StatusCode::BAD_REQUEST),
+        (save(1, "northstar", json!([])), StatusCode::CONFLICT),
+        (
+            json!({"revision":0,"name":"x","slug":"x","published":false,"announcement":"","supportUrl":"http://insecure.example.com","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":[]}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, response) = owner.request("POST", "status-page", body).await;
+        assert_eq!(status, expected, "{response}");
+    }
+    assert_eq!(
+        owner.request("GET", "status-page", json!(null)).await.1["revision"],
+        0
+    );
+
+    let (status, saved) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                0,
+                "northstar",
+                json!([
+                    component(None, "server", &server_id, true),
+                    component(None, "machine", &machine_id, false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["name"], "Northstar status");
+    assert_eq!(saved["published"], true);
+    assert_eq!(saved["components"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["components"][0]["sourceName"], "Rust EU");
+    assert_eq!(saved["components"][0]["health"], "unknown");
+    assert_eq!(saved["components"][1]["kind"], "machine");
+    assert_eq!(saved["components"][1]["public"], false);
+    assert_eq!(saved["sources"].as_array().unwrap().len(), 2);
+    assert!(!saved.to_string().contains("rcon-secret"));
+    let server_component = saved["components"][0]["id"].as_str().unwrap().to_owned();
+    let machine_component = saved["components"][1]["id"].as_str().unwrap().to_owned();
+
+    // A recent server reading is its state; an old one is unknown, never healthy.
+    for (age, health) in [(60_000, "operational"), (10 * 60_000, "unknown")] {
+        sqlx::query("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-$2,rcon_status='connected',a2s_status='connected' WHERE id=$1")
+            .bind(&server_id)
+            .bind(age as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, public) = anonymous
+            .request("GET", "public/status/northstar", json!(null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{public}");
+        assert_eq!(public["components"][0]["health"], health, "{public}");
+        assert!(public["components"][0]["observedAt"].is_i64());
+    }
+    sqlx::query("UPDATE servers SET checked_at=NULL,rcon_status=NULL,a2s_status=NULL WHERE id=$1")
+        .bind(&server_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // The public page needs no session, hides private targets, and omits sources.
+    let (status, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    assert_eq!(public["name"], "Northstar status");
+    assert_eq!(public["components"].as_array().unwrap().len(), 1);
+    assert_eq!(public["components"][0]["name"], "server shown");
+    assert!(public.get("revision").is_none());
+    assert!(!public.to_string().contains("sourceId"));
+    assert!(!public.to_string().contains("Rust EU"));
+    for missing in ["public/status/nobody", "public/status/Northstar"] {
+        assert_eq!(
+            anonymous.request("GET", missing, json!(null)).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // Public addresses are unique across organizations; other tenants see nothing.
+    let (status, response) = other
+        .request("POST", "status-page", save(0, "northstar", json!([])))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+    let (status, response) = other.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["revision"], 0);
+    assert_eq!(response["components"], json!([]));
+
+    // Unpublishing hides the page from visitors.
+    let (status, hidden) = owner
+        .request(
+            "POST",
+            "status-page",
+            json!({"revision":1,"name":"Northstar status","slug":"northstar","published":false,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":[component(Some(&server_component), "server", &server_id, true), component(Some(&machine_component), "machine", &machine_id, false)]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{hidden}");
+    assert_eq!(
+        anonymous
+            .request("GET", "public/status/northstar", json!(null))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, republished) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                2,
+                "northstar",
+                json!([
+                    component(Some(&server_component), "server", &server_id, true),
+                    component(Some(&machine_component), "machine", &machine_id, false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{republished}");
+
+    // Reordering keeps component ids, so maintenance links survive.
+    let (status, reordered) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                3,
+                "northstar",
+                json!([
+                    component(Some(&machine_component), "machine", &machine_id, true),
+                    component(Some(&server_component), "server", &server_id, true)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reordered}");
+    assert_eq!(reordered["revision"], 4);
+    assert_eq!(reordered["components"][0]["id"], machine_component);
+    assert_eq!(reordered["components"][1]["id"], server_component);
+
+    let now = time::OffsetDateTime::now_utc().unix_timestamp() * 1000;
+    let window = |starts: i64, ends: i64, ids: Value| json!({"title":" Monthly wipe ","message":"Map reset.","startsAt":starts,"endsAt":ends,"componentIds":ids});
+    for body in [
+        window(now, now - 1, json!([])),
+        window(now, now + 31 * 86_400_000, json!([])),
+        window(now, now + 1000, json!([uuid::Uuid::new_v4().to_string()])),
+    ] {
+        let (status, response) = owner.request("POST", "status-page/maintenance", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+    }
+    let (status, scheduled) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window(now - 1000, now + 3_600_000, json!([server_component])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{scheduled}");
+    assert_eq!(scheduled["maintenance"].as_array().unwrap().len(), 1);
+    assert_eq!(scheduled["maintenance"][0]["title"], "Monthly wipe");
+    assert_eq!(scheduled["maintenance"][0]["completedAt"], Value::Null);
+    assert_eq!(
+        scheduled["maintenance"][0]["componentIds"],
+        json!([server_component])
+    );
+    let window_id = scheduled["maintenance"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    for path in [
+        format!("status-page/maintenance/{window_id}"),
+        format!("status-page/maintenance/{window_id}/complete"),
+        format!("status-page/maintenance/{window_id}/remove"),
+    ] {
+        let body = if path.ends_with(&window_id) {
+            window(now, now + 1000, json!([]))
+        } else {
+            json!({})
+        };
+        assert_eq!(
+            other.request("POST", &path, body).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        other.request("GET", "status-page", json!(null)).await.1["maintenance"],
+        json!([])
+    );
+
+    let (status, updated) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{window_id}"),
+            json!({"title":"Wipe and host reboot","message":"","startsAt":now - 1000,"endsAt":now + 7_200_000,"componentIds":[]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["maintenance"][0]["title"], "Wipe and host reboot");
+    assert_eq!(updated["maintenance"][0]["componentIds"], json!([]));
+    let (status, completed) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{window_id}/complete"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{completed}");
+    let completed_at = completed["maintenance"][0]["completedAt"].as_i64().unwrap();
+    assert!(completed_at >= now - 1000);
+    assert!(completed["maintenance"][0]["endsAt"].as_i64().unwrap() <= completed_at);
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                &format!("status-page/maintenance/{window_id}"),
+                window(now, now + 1000, json!([]))
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, removed) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{window_id}/remove"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    assert_eq!(removed["maintenance"], json!([]));
+
+    // Branding is validated, saved with the page, and shown to visitors.
+    let branded = |revision: i64, published: bool, branding: Value| {
+        let mut body = save(
+            revision,
+            "northstar",
+            json!([
+                component(Some(&machine_component), "machine", &machine_id, true),
+                component(Some(&server_component), "server", &server_id, true)
+            ]),
+        );
+        body["published"] = json!(published);
+        for (key, value) in branding.as_object().unwrap() {
+            body[key] = value.clone();
+        }
+        body
+    };
+    for branding in [
+        json!({"theme":"neon"}),
+        json!({"theme":"System"}),
+        json!({"font":"comic-sans"}),
+        json!({"accentColor":"#fff"}),
+        json!({"accentColor":"red"}),
+        json!({"links":[{"label":"Site","url":"http://northstar.example"}]}),
+        json!({"links":[{"label":"","url":"https://northstar.example"}]}),
+        json!({"links":[{"label":"a","url":"https://a.example"},{"label":"b","url":"https://b.example"},{"label":"c","url":"https://c.example"},{"label":"d","url":"https://d.example"}]}),
+        json!({"footerText":"Line one\nLine two"}),
+        json!({"footerText":"x".repeat(201)}),
+    ] {
+        let (status, response) = owner
+            .request("POST", "status-page", branded(4, true, branding.clone()))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{branding} {response}");
+    }
+    let (status, styled) = owner
+        .request(
+            "POST",
+            "status-page",
+            branded(
+                4,
+                true,
+                json!({"theme":"system","accentColor":"#E4572E","font":"space-grotesk","links":[{"label":" Website ","url":"https://northstar.example"}],"footerText":"Northstar Games LLC","poweredBy":false}),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{styled}");
+    assert_eq!(styled["revision"], 5);
+    assert_eq!(styled["theme"], "system");
+    assert_eq!(styled["accentColor"], "#e4572e");
+    assert_eq!(styled["font"], "space-grotesk");
+    assert_eq!(
+        styled["links"],
+        json!([{"label":"Website","url":"https://northstar.example"}])
+    );
+    assert_eq!(styled["footerText"], "Northstar Games LLC");
+    assert_eq!(styled["poweredBy"], false);
+    assert_eq!(styled["logoVersion"], Value::Null);
+    let (_, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(public["theme"], "system");
+    assert_eq!(public["accentColor"], "#e4572e");
+    assert_eq!(public["font"], "space-grotesk");
+    assert_eq!(public["links"][0]["label"], "Website");
+    assert_eq!(public["footerText"], "Northstar Games LLC");
+    assert_eq!(public["poweredBy"], false);
+    assert_eq!(public["logoVersion"], Value::Null);
+
+    // Logos are re-encoded, private to the tenant, and public only while published.
+    let body_of = |response: axum::response::Response| async move {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        (status, headers, bytes)
+    };
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(400, 200)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let mut png = png.into_inner();
+    png.extend_from_slice(b"private logo metadata");
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // A logo can't be the first write: the page row (and its unique slug) comes from a save.
+    let (status, _, bytes) = body_of(
+        other
+            .status_logo_upload(&other.organization, Some("0"), png.clone())
+            .await,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert_eq!(
+        other.request("GET", "status-page", json!(null)).await.1["revision"],
+        0
+    );
+    let (status, _, _) = body_of(
+        owner
+            .status_logo_upload(&org, Some("5"), b"not an image".to_vec())
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Logo writes carry the page revision, like a page save.
+    for revision in [None, Some("five"), Some("")] {
+        let (status, _, _) =
+            body_of(owner.status_logo_upload(&org, revision, png.clone()).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{revision:?}");
+    }
+    let (status, _, bytes) =
+        body_of(owner.status_logo_upload(&org, Some("4"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(String::from_utf8_lossy(&bytes).contains("changed in another session"));
+    assert_eq!(
+        owner.request("GET", "status-page", json!(null)).await.1["logoVersion"],
+        Value::Null
+    );
+    // Another tenant can't write this page's logo.
+    let (status, _, _) =
+        body_of(other.status_logo_upload(&org, Some("5"), png.clone()).await).await;
+    assert_ne!(status, StatusCode::OK);
+    let (status, _, bytes) =
+        body_of(owner.status_logo_upload(&org, Some("5"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::OK);
+    let uploaded: Value = serde_json::from_slice(&bytes).unwrap();
+    let version = uploaded["logoVersion"].as_i64().unwrap();
+    assert_eq!(uploaded["revision"], 6);
+    // A settings editor that loaded before the logo changed can no longer save over it.
+    assert_eq!(
+        owner
+            .request("POST", "status-page", branded(5, true, json!({})))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (status, headers, bytes) = body_of(
+        owner
+            .file_request("GET", "status-page/logo", &org, "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    let logo = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((logo.width(), logo.height()), (160, 80));
+    assert!(!String::from_utf8_lossy(&bytes).contains("private logo metadata"));
+    let (status, _, _) = body_of(
+        other
+            .file_request("GET", "status-page/logo", &other.organization, "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, headers, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    assert_eq!(
+        anonymous
+            .request("GET", "public/status/northstar", json!(null))
+            .await
+            .1["logoVersion"],
+        version
+    );
+    // Two logo editors on the same revision: the second one gets a conflict.
+    let (status, _, _) =
+        body_of(owner.status_logo_upload(&org, Some("5"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, replaced, bytes) =
+        body_of(owner.status_logo_upload(&org, Some("6"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::OK, "{replaced:?}");
+    let replaced: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(replaced["revision"], 7);
+    assert!(replaced["logoVersion"].as_i64().unwrap() > version);
+    for body in [
+        json!({}),
+        json!({"revision":"7"}),
+        json!({"revision":7,"extra":true}),
+    ] {
+        assert_eq!(
+            owner
+                .request("POST", "status-page/logo/remove", body.clone())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST,
+            "{body}"
+        );
+    }
+    let (status, stale) = owner
+        .request("POST", "status-page/logo/remove", json!({"revision":6}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert!(stale.to_string().contains("changed in another session"));
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "A stale removal must keep the logo");
+    let (status, cleared) = owner
+        .request("POST", "status-page/logo/remove", json!({"revision":7}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["logoVersion"], Value::Null);
+    assert_eq!(cleared["revision"], 8);
+    // Removing a logo that is already gone changes nothing.
+    let (status, again) = owner
+        .request("POST", "status-page/logo/remove", json!({"revision":8}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["revision"], 8);
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) =
+        body_of(owner.status_logo_upload(&org, Some("8"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, unpublished) = owner
+        .request("POST", "status-page", branded(9, false, json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Infrastructure viewers can read the page but cannot change it.
+    let viewer = owner
+        .create_role("Infrastructure viewer", &["infrastructure.view"])
+        .await;
+    let member_email = format!("status-member-{suffix}@example.com");
+    member.signup(&member_email).await;
+    let (_, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Member","email":member_email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    member.request("GET", "auth/me", json!(null)).await;
+    let (status, visible) = member.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{visible}");
+    assert_eq!(visible["revision"], 10);
+    assert_eq!(
+        member
+            .request("POST", "status-page", save(10, "northstar", json!([])))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, _, _) = body_of(
+        member
+            .file_request("GET", "status-page/logo", &org, "", vec![])
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for revision in [None, Some("10")] {
+        let (status, _, _) =
+            body_of(member.status_logo_upload(&org, revision, png.clone()).await).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{revision:?}");
+    }
+    for body in [json!({}), json!({"revision":10})] {
+        assert_eq!(
+            member
+                .request("POST", "status-page/logo/remove", body.clone())
+                .await
+                .0,
+            StatusCode::FORBIDDEN,
+            "{body}"
+        );
+    }
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "status-page/maintenance",
+                window(now, now + 1000, json!([]))
+            )
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // URL targets are validated, grouped by machine tags, and probed by the monitor.
+    let (_, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert!(
+        page["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"] == "wings" && t["name"] == "Wings")
+    );
+    let url_target = |id: Option<&str>, url: &str, tag: &str| json!({"id":id,"name":"Website","kind":"url","sourceId":url,"tagId":tag,"public":true});
+    let mut bad_tag = component(None, "server", &server_id, true);
+    bad_tag["tagId"] = json!("not-a-tag");
+    for targets in [
+        json!([url_target(None, "http://127.0.0.1/", "")]),
+        json!([url_target(None, "https://status.example.com", "not-a-tag")]),
+        json!([
+            url_target(None, "https://status.example.com", ""),
+            url_target(None, "https://status.example.com/", "")
+        ]),
+        json!([{"id":null,"name":"Database","kind":"database","sourceId":"x","tagId":"","public":true}]),
+        json!([bad_tag]),
+    ] {
+        let (status, response) = owner
+            .request(
+                "POST",
+                "status-page",
+                save(10, "northstar", targets.clone()),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{targets} {response}");
+    }
+    let (status, watched) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                10,
+                "northstar",
+                json!([
+                    url_target(None, " https://status.example.com ", "wings"),
+                    component(Some(&server_component), "server", &server_id, true)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{watched}");
+    assert_eq!(watched["revision"], 11);
+    let website = &watched["components"][0];
+    assert_eq!(website["kind"], "url");
+    assert_eq!(website["sourceId"], "https://status.example.com/");
+    assert_eq!(website["sourceName"], "https://status.example.com/");
+    assert_eq!(website["tagId"], "wings");
+    assert_eq!(website["groupName"], "Wings");
+    assert_eq!(website["health"], "unknown");
+    assert_eq!(website["detail"], Value::Null);
+    let website_id = website["id"].as_str().unwrap().to_owned();
+
+    // Exercise the monitor against a local responder. Saving would reject this
+    // address, so the stored target is pointed at it directly.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let local = format!("http://{}/", listener.local_addr().unwrap());
+    let responder = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/", axum::routing::get(|| async { "ok" })),
+        )
+        .await
+        .unwrap()
+    });
+    for statement in [
+        "UPDATE status_page_components SET source_id=$3 WHERE organization_id=$1 AND id=$2",
+        "UPDATE status_page_url_checks SET url=$3 WHERE organization_id=$1 AND component_id=$2",
+    ] {
+        sqlx::query(statement)
+            .bind(&org)
+            .bind(&website_id)
+            .bind(&local)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    assert!(
+        crate::status_page::check_due(&pool, |_| true)
+            .await
+            .unwrap()
+    );
+    responder.abort();
+    let (_, checked) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(checked["components"][0]["health"], "operational");
+    assert!(
+        checked["components"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("HTTP 200 in ")
+    );
+    assert!(checked["components"][0]["observedAt"].as_i64().is_some());
+    assert_eq!(
+        other.request("GET", "status-page", json!(null)).await.1["components"],
+        json!([])
+    );
+
+    // Editing the address discards the old result; removing the target drops its checks.
+    let (status, edited) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                11,
+                "northstar",
+                json!([url_target(
+                    Some(&website_id),
+                    "https://status.example.org",
+                    ""
+                )]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["components"][0]["id"], website_id);
+    assert_eq!(edited["components"][0]["health"], "unknown");
+    assert_eq!(edited["components"][0]["groupName"], "");
+    let (_, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(public["components"][0]["name"], "Website");
+    assert!(!public.to_string().contains("status.example.org"));
+    let (status, _) = owner
+        .request("POST", "status-page", save(12, "northstar", json!([])))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let checks: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM status_page_url_checks WHERE organization_id=$1")
+            .bind(&org)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(checks, 0);
+
+    // Maintenance on hidden targets is never published, and hidden ids never leave.
+    let (status, mixed) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                13,
+                "northstar",
+                json!([
+                    component(Some(&server_component), "server", &server_id, true),
+                    component(Some(&machine_component), "machine", &machine_id, false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{mixed}");
+    for (title, starts, ids) in [
+        ("Hidden only", now + 3_600_000, json!([machine_component])),
+        (
+            "Both targets",
+            now + 7_200_000,
+            json!([machine_component, server_component]),
+        ),
+        ("Every target", now + 10_800_000, json!([])),
+    ] {
+        let (status, response) = owner
+            .request(
+                "POST",
+                "status-page/maintenance",
+                json!({"title":title,"message":"","startsAt":starts,"endsAt":starts + 3_600_000,"componentIds":ids}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+    let (_, admin) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(admin["maintenance"].as_array().unwrap().len(), 3);
+    let (status, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    let titles: Vec<&str> = public["maintenance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Every target", "Both targets"]);
+    assert_eq!(public["maintenance"][0]["componentIds"], json!([]));
+    assert_eq!(
+        public["maintenance"][1]["componentIds"],
+        json!([server_component])
+    );
+    assert!(!public.to_string().contains(&machine_component));
+    assert!(!public.to_string().contains("Hidden only"));
+}
+
+fn status_page_save(revision: Value, slug: &str, published: bool, components: Value) -> Value {
+    json!({"revision":revision,"name":"Northstar status","slug":slug,"published":published,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components})
+}
+
+async fn status_page_app(pool: &sqlx::PgPool) -> Router {
+    router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::secrets::SecretKey::parse(&"ef".repeat(32)).unwrap(),
+    ))
+}
+
+#[tokio::test]
+async fn removing_a_machine_drops_its_status_target_so_live_actions_still_save() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    owner
+        .signup(&format!("status-removal-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-removal-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let target = |kind: &str, source: &str| json!({"id":null,"name":"EU host","kind":kind,"sourceId":source,"tagId":"","public":true});
+
+    let mut machines = Vec::new();
+    for client in [&mut owner, &mut other] {
+        let (status, machine) = client.request("POST", "machines", machine_input()).await;
+        assert_eq!(status, StatusCode::OK, "{machine}");
+        let machine_id = machine["id"].as_str().unwrap().to_owned();
+        let (status, page) = client
+            .request(
+                "POST",
+                "status-page",
+                status_page_save(
+                    json!(0),
+                    &format!("removal-{}-{}", machines.len(), &suffix[..8]),
+                    true,
+                    json!([
+                        target("machine", &machine_id),
+                        target("url", "https://status.example.com/health")
+                    ]),
+                ),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["revision"], 1);
+        machines.push(machine_id);
+    }
+
+    let (status, removed) = owner
+        .request(
+            "POST",
+            &format!("machines/{}/remove", machines[0]),
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+
+    // The removed machine's target goes with it, and the revision moves so an
+    // editor holding the old list is asked to reload instead of resaving it.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["revision"], 2);
+    let kinds: Vec<&str> = page["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["url"]);
+    let (status, stale) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(json!(1), "anything", false, json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+
+    // Unpublishing resubmits every saved target, as the overview does.
+    let mut saved = status_page_save(
+        page["revision"].clone(),
+        page["slug"].as_str().unwrap(),
+        false,
+        page["components"].clone(),
+    );
+    saved["components"][0]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| {
+            ["id", "name", "kind", "sourceId", "tagId", "public"].contains(&key.as_str())
+        });
+    let (status, unpublished) = owner.request("POST", "status-page", saved).await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    assert_eq!(unpublished["published"], false);
+
+    // Another organization's page keeps its own machine target.
+    let (status, untouched) = other.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{untouched}");
+    assert_eq!(untouched["revision"], 1);
+    assert_eq!(untouched["components"].as_array().unwrap().len(), 2);
+    assert_eq!(untouched["components"][0]["sourceId"], machines[1]);
+}
+
+#[tokio::test]
+async fn deleting_a_tag_clears_status_target_groups_so_live_actions_still_save() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    owner
+        .signup(&format!("status-tag-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-tag-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+
+    let mut groups = Vec::new();
+    for client in [&mut owner, &mut other] {
+        let (status, tags) = client
+            .request(
+                "POST",
+                "machines/tags",
+                json!({"kind":"save","name":"EU region"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{tags}");
+        let tag = tags.as_array().unwrap().last().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, page) = client
+            .request(
+                "POST",
+                "status-page",
+                status_page_save(
+                    json!(0),
+                    &format!("tagged-{}-{}", groups.len(), &suffix[..8]),
+                    true,
+                    json!([{"id":null,"name":"EU site","kind":"url","sourceId":"https://status.example.com/health","tagId":tag,"public":true}]),
+                ),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["components"][0]["groupName"], "EU region");
+        groups.push(tag);
+    }
+
+    let (status, tags) = owner
+        .request(
+            "POST",
+            "machines/tags",
+            json!({"kind":"delete","id":groups[0]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tags}");
+
+    // The target stays, ungrouped, and the revision moves so an editor
+    // holding the old group is asked to reload instead of resaving it.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["revision"], 2);
+    assert_eq!(page["components"].as_array().unwrap().len(), 1);
+    assert_eq!(page["components"][0]["tagId"], "");
+    assert_eq!(page["components"][0]["groupName"], "");
+
+    // Unpublishing resubmits every saved target, as the overview does.
+    let mut saved = status_page_save(
+        page["revision"].clone(),
+        page["slug"].as_str().unwrap(),
+        false,
+        page["components"].clone(),
+    );
+    saved["components"][0]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| {
+            ["id", "name", "kind", "sourceId", "tagId", "public"].contains(&key.as_str())
+        });
+    let (status, unpublished) = owner.request("POST", "status-page", saved).await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    assert_eq!(unpublished["published"], false);
+
+    // Another organization's target keeps its own group.
+    let (status, untouched) = other.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{untouched}");
+    assert_eq!(untouched["revision"], 1);
+    assert_eq!(untouched["components"][0]["tagId"], groups[1]);
+}
+
+#[tokio::test]
+async fn active_maintenance_survives_many_scheduled_and_past_windows() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let slug = format!("windows-{}", &suffix[..8]);
+    let mut owner = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    owner
+        .signup(&format!("status-windows-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    let org = owner.organization.clone();
+    let (status, page) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(json!(0), &slug, true, json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let hour = 3_600_000;
+    let day = 24 * hour;
+    let window = |title: &str, starts_at: i64| json!({"title":title,"message":"","startsAt":starts_at,"endsAt":starts_at + hour,"componentIds":[]});
+    let (status, active) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window("Active now", now - 60_000),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{active}");
+    let active_id = active["maintenance"][0]["id"].as_str().unwrap().to_owned();
+    // A hundred later windows and a long history of finished ones, as an
+    // organization could save before the open-window limit existed.
+    sqlx::query("INSERT INTO status_page_maintenance(organization_id,id,title,starts_at,ends_at,created_at) SELECT $1,gen_random_uuid()::text,'Upcoming '||n,$2+n*$3,$2+n*$3+$4,0 FROM generate_series(1,100) AS n")
+        .bind(&org)
+        .bind(now)
+        .bind(day)
+        .bind(hour)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO status_page_maintenance(organization_id,id,title,starts_at,ends_at,completed_at,created_at) SELECT $1,gen_random_uuid()::text,'Past '||n,$2-n*$3,$2-n*$3+$4,CASE WHEN n%2=0 THEN $2-n*$3+$4 END,0 FROM generate_series(1,150) AS n")
+        .bind(&org)
+        .bind(now)
+        .bind(hour * 2)
+        .bind(hour)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Every open window is listed, plus the hundred most recent finished ones.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let windows = page["maintenance"].as_array().unwrap();
+    assert!(windows.iter().any(|w| w["id"] == active_id.as_str()));
+    let titled = |prefix: &str| {
+        windows
+            .iter()
+            .filter(|w| w["title"].as_str().unwrap().starts_with(prefix))
+            .count()
+    };
+    assert_eq!((titled("Upcoming "), titled("Past ")), (100, 100));
+    assert_eq!(windows.len(), 201);
+    assert!(windows.iter().any(|w| w["title"] == "Past 1"));
+    assert!(!windows.iter().any(|w| w["title"] == "Past 101"));
+
+    // New open windows are refused past the limit, so the list stays bounded.
+    let (status, refused) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window("Upcoming 101", now + 101 * day),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "A status page can hold up to 100 open or upcoming maintenance windows."
+    );
+    // Editing a window that is already open does not count it twice.
+    let (status, edited) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{active_id}"),
+            window("Active now", now - 30_000),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    // A finished window can still be recorded after the fact.
+    let (status, recorded) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window("Recorded late", now - 10 * hour),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recorded}");
+
+    let (status, public) = anonymous
+        .request("GET", &format!("public/status/{slug}"), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    assert!(
+        public["maintenance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["id"] == active_id.as_str()),
+        "{public}"
+    );
 }

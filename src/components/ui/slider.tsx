@@ -10,8 +10,13 @@ function Slider({
   value,
   min = 0,
   max = 100,
+  "aria-label": label,
+  valueText,
   ...props
-}: React.ComponentProps<typeof SliderPrimitive.Root>) {
+}: React.ComponentProps<typeof SliderPrimitive.Root> & {
+  /** Spoken value, such as "150 percent", for each thumb. */
+  valueText?: (value: number) => string;
+}) {
   const _values = React.useMemo(
     () =>
       Array.isArray(value)
@@ -37,7 +42,7 @@ function Slider({
     >
       <SliderPrimitive.Track
         data-slot="slider-track"
-        className="relative grow overflow-hidden rounded-full bg-muted data-horizontal:h-1 data-horizontal:w-full data-vertical:h-full data-vertical:w-1"
+        className="relative grow overflow-hidden rounded-full bg-input data-horizontal:h-1 data-horizontal:w-full data-vertical:h-full data-vertical:w-1"
       >
         <SliderPrimitive.Range
           data-slot="slider-range"
@@ -48,7 +53,15 @@ function Slider({
         <SliderPrimitive.Thumb
           data-slot="slider-thumb"
           key={index}
-          className="relative block size-3 shrink-0 rounded-full border border-ring bg-white ring-ring/50 transition-[color,box-shadow] select-none after:absolute after:-inset-2 hover:ring-3 focus-visible:ring-3 focus-visible:outline-hidden active:ring-3 disabled:pointer-events-none disabled:opacity-50"
+          // Radix puts the root's label on a span with no role; the thumb is
+          // the focusable slider, so it carries the name and spoken value.
+          aria-label={label}
+          aria-valuetext={
+            valueText && _values[index] !== undefined
+              ? valueText(_values[index])
+              : undefined
+          }
+          className="relative block size-3 shrink-0 rounded-full border border-ring bg-white ring-ring/50 transition-[color,box-shadow] select-none after:absolute after:-inset-2 [@media(any-pointer:coarse)]:size-5 [@media(any-pointer:coarse)]:after:-inset-3 hover:ring-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-hidden active:ring-3 disabled:pointer-events-none disabled:opacity-50"
         />
       ))}
     </SliderPrimitive.Root>

@@ -77,7 +77,7 @@ describe("marketing navbar", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(menu);
   });
-  it.each(["/dashboard", "/dashboard/servers"])(
+  it.each(["/dashboard", "/dashboard/servers", "/status/northstar"])(
     "keeps the workspace shell separate at %s",
     (pathname) => {
       route.pathname = pathname;

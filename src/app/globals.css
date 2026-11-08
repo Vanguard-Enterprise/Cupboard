@@ -3,6 +3,9 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+/* Windows too short for a pinned dialog header and footer: a phone on its
+   side, or a laptop at 400% zoom. Dialogs scroll as one there. */
+@custom-variant short (@media (max-height: 480px));
 
 @theme inline {
   --color-input-background: var(--input-background);
@@ -33,8 +36,10 @@
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-input: var(--input);
+  --color-input-hover: var(--input-hover);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-strong: var(--destructive-strong);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -79,11 +84,19 @@
   --accent: #1c1f24;
   --accent-foreground: #f3f4f6;
   --destructive: #d06a6a;
+  /* Destructive text on a destructive tint, such as a highlighted Delete menu
+     item: 5.0:1 on the 20% tint over a popover. */
+  --destructive-strong: #e58a8a;
   --warning: #c9a45d;
   --success: #7cb58d;
   --border: #2a2f36;
   --border-strong: #3a4048;
-  --input: #2a2f36;
+  /* Field and checkbox boundaries: at least 3:1 against card, input, and
+     popover surfaces (WCAG 1.4.11). Card dividers stay on --border. */
+  --input: #616a77;
+  /* Hovered field boundary: stronger than --input, never weaker (4.3:1 on
+     popover), so hover never hides where a field is. */
+  --input-hover: #7a8391;
   --ring: #7cb58d;
   --chart-1: #7cb58d;
   --chart-2: #a3aab5;
@@ -100,17 +113,191 @@
   --sidebar-ring: #7cb58d;
 }
 
+/* Light palette for public status pages. Status colors keep their meaning and
+   are darkened to stay readable on white. Light locks it on; System applies it
+   when the visitor's device prefers light, in CSS so the first paint is right.
+   A full public page also lights the document, so the browser draws its
+   scrollbar light too. */
+@utility status-light {
+  color-scheme: light;
+  --background: #f6f7f8;
+  --foreground: #16181c;
+  --card: #ffffff;
+  --card-foreground: #16181c;
+  --popover: #ffffff;
+  --popover-foreground: #16181c;
+  --surface-elevated: #eef0f2;
+  --input-background: #ffffff;
+  --primary: #2f7a48;
+  --primary-hover: #286b3f;
+  --primary-active: #225c36;
+  --primary-foreground: #ffffff;
+  --secondary: #eef0f2;
+  --secondary-foreground: #16181c;
+  --muted: #eef0f2;
+  --muted-foreground: #565e6b;
+  --text-muted: #6b7380;
+  --accent: #eef0f2;
+  --accent-foreground: #16181c;
+  --destructive: #b23c3c;
+  --destructive-strong: #9a2f2f;
+  --warning: #8a6418;
+  --success: #2f7a48;
+  --border: #e1e4e8;
+  --border-strong: #c8cdd4;
+  --input: #d5d9df;
+  --input-hover: #7a828e;
+}
+
+.theme-light,
+:root:has([data-status-page].theme-light) {
+  @apply status-light;
+}
+
+@media (prefers-color-scheme: light) {
+  .theme-system,
+  :root:has([data-status-page].theme-system) {
+    @apply status-light;
+  }
+}
+
+/* A service row flashes its new state color once after a refresh changes it,
+   so the change is easy to find. Reduced motion skips straight to the end. */
+@theme {
+  --animate-status-flash: status-flash 1.6s ease-out both;
+  @keyframes status-flash {
+    from {
+      opacity: 0.14;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+}
+
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
+  }
+  /* Cupboard's own scrollbar in the workspace: a slim rounded thumb on a
+     clear track, matching the ScrollArea component. Firefox has no
+     pseudo-elements, so it gets the closest standard equivalent. Public
+     status pages keep the browser's own scrollbar: a clear track there is
+     the page's color, so the accent bar looked cut off where it met the
+     scrollbar. The browser's track reads as the window's edge. */
+  @supports not selector(::-webkit-scrollbar) {
+    :where(
+      html:not(:has([data-status-page])),
+      html:not(:has([data-status-page])) *
+    ) {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-strong) transparent;
+    }
+  }
+  :where(
+    html:not(:has([data-status-page])),
+    html:not(:has([data-status-page])) *
+  )::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  :where(
+    html:not(:has([data-status-page])),
+    html:not(:has([data-status-page])) *
+  )::-webkit-scrollbar-track,
+  :where(
+    html:not(:has([data-status-page])),
+    html:not(:has([data-status-page])) *
+  )::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  :where(
+    html:not(:has([data-status-page])),
+    html:not(:has([data-status-page])) *
+  )::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-color: var(--border-strong);
+    background-clip: padding-box;
+  }
+  :where(
+      html:not(:has([data-status-page])),
+      html:not(:has([data-status-page])) *
+    )::-webkit-scrollbar-thumb:hover {
+    background-color: var(--text-muted);
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* Optional motion stops when the visitor asks for less. Spinners keep
+     turning because they mark work that is actually in progress. */
+  @media (prefers-reduced-motion: reduce) {
+    *:not(.animate-spin),
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
   html {
     @apply font-sans;
     @media (min-width: 48rem) {
       scrollbar-gutter: stable;
     }
+  }
+  /* Public status pages reserve no gutter: an empty reserved gutter showed
+     as a strip that cut the accent bar and the footer rule short. A long
+     page gets the browser's scrollbar, and the bar, the rule, the column,
+     and the footer line all center on the area beside it. */
+  html:has([data-status-page]) {
+    scrollbar-gutter: auto;
+  }
+}
+
+/*
+ * Toast close button (a11y D-73): inside the toast's right edge rather than
+ * Sonner's small bubble on its corner, 32 pixels (44 on touch). The doubled
+ * attribute outranks Sonner's own rules, which load after this file.
+ */
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  padding-right: 2.75rem;
+}
+[data-sonner-toaster][data-sonner-theme]
+  [data-sonner-toast][data-styled="true"]
+  [data-close-button][data-close-button] {
+  inset: 50% 0.5rem auto auto;
+  width: 2rem;
+  height: 2rem;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+[data-sonner-toaster][data-sonner-theme]
+  [data-sonner-toast][data-styled="true"]
+  [data-close-button][data-close-button]:hover {
+  background: var(--surface-elevated);
+  color: var(--foreground);
+}
+[data-sonner-toaster][data-sonner-theme]
+  [data-sonner-toast][data-styled="true"]
+  [data-close-button][data-close-button]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 0;
+  box-shadow: none;
+}
+@media (any-pointer: coarse) {
+  [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+    padding-right: 3.25rem;
+  }
+  [data-sonner-toaster][data-sonner-theme]
+    [data-sonner-toast][data-styled="true"]
+    [data-close-button][data-close-button] {
+    right: 0.25rem;
+    width: 2.75rem;
+    height: 2.75rem;
   }
 }

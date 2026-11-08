@@ -10,6 +10,7 @@ import {
   rolesPath,
   usagePath,
   usersPath,
+  maintenancePath,
 } from "./dashboard-navigation";
 
 describe("dashboard navigation", () => {
@@ -22,6 +23,7 @@ describe("dashboard navigation", () => {
     expect(navigationHref("audit-log")).toBe(auditLogPath);
     expect(navigationHref("team-users")).toBe(usersPath);
     expect(navigationHref("team-roles")).toBe(rolesPath);
+    expect(navigationHref("maintenance")).toBe(maintenancePath);
     expect(navigationHref("alerts-data")).toBe(alertsPath);
     // Observability's planned alerts page is separate from alert settings.
     expect(navigationHref("alerts")).toBeUndefined();

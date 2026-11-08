@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { navigateAfterAuth, apiRequest } from "@/lib/api-client";
 import { toast } from "sonner";
+import { useGuardedNavigation } from "@/components/ui/unsaved-changes";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -39,6 +40,7 @@ export function NavUser({
 }) {
   const { isMobile } = useSidebar();
   const [busy, setBusy] = useState(false);
+  const { confirmLeave } = useGuardedNavigation();
   async function logout() {
     setBusy(true);
     try {
@@ -123,7 +125,10 @@ export function NavUser({
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem disabled={busy} onSelect={() => void logout()}>
+            <DropdownMenuItem
+              disabled={busy}
+              onSelect={() => confirmLeave(logout)}
+            >
               <LogOutIcon />
               Log out
             </DropdownMenuItem>

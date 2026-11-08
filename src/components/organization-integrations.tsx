@@ -69,6 +69,7 @@ import {
   type WebhookEndpoint,
   type WebhookEvent,
 } from "@/lib/organization-integrations";
+import { copyText } from "@/lib/clipboard";
 
 type Feedback = { message: string } | null;
 
@@ -615,7 +616,7 @@ export function OrganizationIntegrations() {
   async function copyCredential() {
     if (!createdSecret) return;
     try {
-      await navigator.clipboard.writeText(createdSecret);
+      await copyText(createdSecret);
       setCopyState("copied");
     } catch {
       setCopyState("error");

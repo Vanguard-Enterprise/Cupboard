@@ -255,7 +255,7 @@ pub(crate) fn validate_image(bytes: Vec<u8>) -> ApiResult<Vec<u8>> {
     // Decode a single frame; animation and all original metadata are discarded.
     png(image)
 }
-async fn normalized(request: Request) -> ApiResult<Vec<u8>> {
+pub(crate) async fn normalized(request: Request) -> ApiResult<Vec<u8>> {
     if request
         .headers()
         .get(header::CONTENT_TYPE)
@@ -285,7 +285,7 @@ async fn normalized(request: Request) -> ApiResult<Vec<u8>> {
     .await
     .map_err(|_| internal())?
 }
-fn image_response(data: impl Into<Body>) -> Response {
+pub(crate) fn image_response(data: impl Into<Body>) -> Response {
     let mut response = data.into().into_response();
     response
         .headers_mut()

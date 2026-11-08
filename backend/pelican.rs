@@ -65,7 +65,7 @@ fn private_ip(ip: IpAddr) -> bool {
         IpAddr::V6(ip) => ip.is_unique_local(),
     }
 }
-fn public_ip(ip: IpAddr) -> bool {
+pub(crate) fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();

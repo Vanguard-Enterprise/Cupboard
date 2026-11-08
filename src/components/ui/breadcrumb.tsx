@@ -49,7 +49,10 @@ function BreadcrumbLink({
   return (
     <Comp
       data-slot="breadcrumb-link"
-      className={cn("transition-colors hover:text-foreground", className)}
+      className={cn(
+        "rounded-sm transition-colors outline-none hover:text-foreground focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [@media(any-pointer:coarse)]:inline-flex [@media(any-pointer:coarse)]:min-h-11 [@media(any-pointer:coarse)]:items-center",
+        className,
+      )}
       {...props}
     />
   );
