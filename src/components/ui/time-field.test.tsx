@@ -2,15 +2,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TimeField,
   TimeFieldMessage,
@@ -25,14 +17,8 @@ import {
   type TimeIssue,
 } from "./time-field";
 
-// Daylight saving cases need a zone that has it, whatever the machine uses.
-const zone = process.env.TZ;
-beforeAll(() => {
-  process.env.TZ = "America/New_York";
-});
-afterAll(() => {
-  process.env.TZ = zone;
-});
+// Daylight saving cases rely on the America/New_York zone that
+// vitest.config.mjs pins before any worker starts.
 afterEach(cleanup);
 
 // 2027 in New York: clocks skip 2:00 to 3:00 AM on Sun, Mar 14 and repeat
