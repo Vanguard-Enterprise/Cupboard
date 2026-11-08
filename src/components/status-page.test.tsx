@@ -1745,6 +1745,86 @@ describe("Status page admin data safety", () => {
     }
   });
 
+  it("applies an open target edit to the same target after a poll reorders or removes it (codex)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const user = userEvent.setup();
+      vi.mocked(apiRequest).mockResolvedValueOnce(live);
+      mount();
+      await ready();
+      await user.click(screen.getByRole("tab", { name: "Targets" }));
+      await user.click(
+        screen.getByRole("button", { name: "Actions for Wings host" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+      let dialog = screen.getByRole("dialog");
+      await user.clear(within(dialog).getByLabelText("Display name"));
+      await user.type(
+        within(dialog).getByLabelText("Display name"),
+        "Wings node",
+      );
+      // Another session moved the host first while the editor was open.
+      const reordered = {
+        ...live,
+        revision: 3,
+        components: [live.components[1], live.components[0]],
+      };
+      await poll(reordered);
+      await user.click(
+        within(dialog).getByRole("button", { name: "Update target" }),
+      );
+      vi.mocked(apiRequest).mockResolvedValueOnce({
+        ...reordered,
+        revision: 4,
+      });
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() =>
+        expect(apiRequest).toHaveBeenLastCalledWith(
+          "status-page",
+          expect.objectContaining({
+            revision: 3,
+            components: [
+              expect.objectContaining({
+                sourceId: "machine-1",
+                name: "Wings node",
+                public: false,
+              }),
+              expect.objectContaining({
+                sourceId: "server-eu",
+                name: "EU main",
+                tagId: "game-server",
+                public: true,
+              }),
+            ],
+          }),
+          "org-one",
+        ),
+      );
+
+      // Another session removed the target being edited.
+      await user.click(
+        await screen.findByRole("button", { name: "Actions for EU main" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+      dialog = screen.getByRole("dialog");
+      await user.type(within(dialog).getByLabelText("Display name"), " 2");
+      await poll({
+        ...reordered,
+        revision: 5,
+        components: [{ ...live.components[1], name: "Wings node" }],
+      });
+      await user.click(
+        within(dialog).getByRole("button", { name: "Update target" }),
+      );
+      expect(within(dialog).getByRole("alert").textContent).toContain(
+        "removed in another session",
+      );
+      expect(screen.queryByText("Unsaved changes")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("merges targets one by one when loading the latest version", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValueOnce(live);

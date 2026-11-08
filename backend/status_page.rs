@@ -1048,6 +1048,25 @@ pub(crate) async fn forget_source(
     }
     Ok(())
 }
+/// Ungroups targets whose machine tag was deleted, so saving the page never
+/// resubmits a group that no longer exists.
+pub(crate) async fn forget_group(
+    conn: &mut PgConnection,
+    org: &str,
+    tag_id: &str,
+) -> ApiResult<()> {
+    let cleared = sqlx::query(
+        "UPDATE status_page_components SET tag_id='' WHERE organization_id=$1 AND tag_id=$2",
+    )
+    .bind(org)
+    .bind(tag_id)
+    .execute(&mut *conn)
+    .await?;
+    if cleared.rows_affected() > 0 {
+        advance_revision(conn, org).await?;
+    }
+    Ok(())
+}
 async fn advance_revision(conn: &mut PgConnection, org: &str) -> ApiResult<()> {
     sqlx::query("UPDATE status_pages SET revision=revision+1 WHERE organization_id=$1")
         .bind(org)

@@ -6864,6 +6864,97 @@ async fn removing_a_machine_drops_its_status_target_so_live_actions_still_save()
 }
 
 #[tokio::test]
+async fn deleting_a_tag_clears_status_target_groups_so_live_actions_still_save() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    owner
+        .signup(&format!("status-tag-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-tag-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+
+    let mut groups = Vec::new();
+    for client in [&mut owner, &mut other] {
+        let (status, tags) = client
+            .request(
+                "POST",
+                "machines/tags",
+                json!({"kind":"save","name":"EU region"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{tags}");
+        let tag = tags.as_array().unwrap().last().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (status, page) = client
+            .request(
+                "POST",
+                "status-page",
+                status_page_save(
+                    json!(0),
+                    &format!("tagged-{}-{}", groups.len(), &suffix[..8]),
+                    true,
+                    json!([{"id":null,"name":"EU site","kind":"url","sourceId":"https://status.example.com/health","tagId":tag,"public":true}]),
+                ),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["components"][0]["groupName"], "EU region");
+        groups.push(tag);
+    }
+
+    let (status, tags) = owner
+        .request(
+            "POST",
+            "machines/tags",
+            json!({"kind":"delete","id":groups[0]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tags}");
+
+    // The target stays, ungrouped, and the revision moves so an editor
+    // holding the old group is asked to reload instead of resaving it.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["revision"], 2);
+    assert_eq!(page["components"].as_array().unwrap().len(), 1);
+    assert_eq!(page["components"][0]["tagId"], "");
+    assert_eq!(page["components"][0]["groupName"], "");
+
+    // Unpublishing resubmits every saved target, as the overview does.
+    let mut saved = status_page_save(
+        page["revision"].clone(),
+        page["slug"].as_str().unwrap(),
+        false,
+        page["components"].clone(),
+    );
+    saved["components"][0]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| {
+            ["id", "name", "kind", "sourceId", "tagId", "public"].contains(&key.as_str())
+        });
+    let (status, unpublished) = owner.request("POST", "status-page", saved).await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    assert_eq!(unpublished["published"], false);
+
+    // Another organization's target keeps its own group.
+    let (status, untouched) = other.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{untouched}");
+    assert_eq!(untouched["revision"], 1);
+    assert_eq!(untouched["components"][0]["tagId"], groups[1]);
+}
+
+#[tokio::test]
 async fn active_maintenance_survives_many_scheduled_and_past_windows() {
     let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
         .await

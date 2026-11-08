@@ -940,7 +940,12 @@ type MaintenanceForm = {
 };
 
 type ComponentForm = {
-  index: number | null;
+  /**
+   * The edited target's `componentKey`, or null when adding one. A poll can
+   * reorder or remove targets while the dialog is open, so the target is
+   * found by identity, never by its position when the dialog opened.
+   */
+  targetKey: string | null;
   kind: ComponentKind;
   /** The chosen machine or game server when adding one. */
   source: StatusSource | null;
@@ -2241,7 +2246,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     setSourceSearch("");
     if (index === null) {
       setComponentForm({
-        index: null,
+        targetKey: null,
         kind: "url",
         source: null,
         url: "",
@@ -2254,7 +2259,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     }
     const component = draft!.components[index];
     setComponentForm({
-      index,
+      targetKey: componentKey(component),
       kind: component.kind,
       source: null,
       url: component.kind === "url" ? component.sourceId : "",
@@ -2274,9 +2279,17 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   function suggestedName(form: ComponentForm) {
     if (form.kind === "url") return hostName(form.url);
     if (form.source) return form.source.name;
-    if (form.index !== null)
-      return sourceName(draft!.components[form.index]) ?? "";
+    const edited = editedIndex(form);
+    if (edited >= 0) return sourceName(draft!.components[edited]) ?? "";
     return "";
+  }
+
+  /** Where the edited target sits in the draft now; -1 if it is gone. */
+  function editedIndex(form: ComponentForm) {
+    if (form.targetKey === null || !draft) return -1;
+    return draft.components.findIndex(
+      (c) => componentKey(c) === form.targetKey,
+    );
   }
 
   function chooseKind(kind: string) {
@@ -2299,8 +2312,18 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     if (!componentForm || !draft) return;
     const form = componentForm;
     const name = form.name.trim() || suggestedName(form);
+    const index = form.targetKey === null ? null : editedIndex(form);
+    if (index === -1) {
+      patchComponent({
+        errors: {
+          general:
+            "This target was removed in another session. Close this window to see the current targets.",
+        },
+      });
+      return;
+    }
     const errors: [string, string][] = [];
-    if (form.index === null && draft.components.length >= maxComponents)
+    if (index === null && draft.components.length >= maxComponents)
       errors.push([
         "general",
         `A status page can list up to ${maxComponents} targets. Remove one first.`,
@@ -2316,13 +2339,11 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       else if (
         draft.components.some(
           (c, i) =>
-            i !== form.index &&
-            c.kind === "url" &&
-            sameUrl(c.sourceId, sourceId),
+            i !== index && c.kind === "url" && sameUrl(c.sourceId, sourceId),
         )
       )
         errors.push(["url", "That address is already a target."]);
-    } else if (form.index === null) {
+    } else if (index === null) {
       if (!form.source)
         errors.push([
           "source",
@@ -2332,7 +2353,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         ]);
       else sourceId = form.source.id;
     } else {
-      sourceId = draft.components[form.index].sourceId;
+      sourceId = draft.components[index].sourceId;
     }
     if (!name) errors.push(["name", "Enter the name players will see."]);
     if (errors.length > 0) {
@@ -2342,7 +2363,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     }
     const values = { name, sourceId, tagId: form.tagId, public: form.public };
     const key = componentKey({ kind: form.kind, sourceId });
-    if (form.index === null) {
+    if (index === null) {
       updateComponents((list) => [
         ...list,
         { id: null, kind: form.kind, ...values },
@@ -2350,7 +2371,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       announce(`Added ${name}. Save changes to put it on the page.`);
     } else {
       updateComponents((list) =>
-        list.map((c, i) => (i === form.index ? { ...c, ...values } : c)),
+        list.map((c, i) => (i === index ? { ...c, ...values } : c)),
       );
       announce(`Updated ${name}. Save changes to apply it.`);
     }
@@ -4288,7 +4309,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           <form onSubmit={submitComponent} className="contents" noValidate>
             <DialogHeader>
               <DialogTitle>
-                {componentForm?.index === null ? "Add target" : "Edit target"}
+                {componentForm?.targetKey === null
+                  ? "Add target"
+                  : "Edit target"}
               </DialogTitle>
               <DialogDescription>
                 Players see it after you save changes.
@@ -4296,7 +4319,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             </DialogHeader>
             {componentForm && (
               <DialogBody>
-                {componentForm.index === null && (
+                {componentForm.targetKey === null && (
                   <div className="space-y-2">
                     <Label id="component-kind-label">Type</Label>
                     <ToggleGroup
@@ -4362,7 +4385,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     )}
                   </Field>
                 )}
-                {componentForm.index === null &&
+                {componentForm.targetKey === null &&
                   componentForm.kind !== "url" && (
                     <Field
                       id="component-source"
@@ -4544,7 +4567,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 Cancel
               </Button>
               <Button type="submit" className={cn("h-10 px-4", touch)}>
-                {componentForm?.index === null ? "Add target" : "Update target"}
+                {componentForm?.targetKey === null
+                  ? "Add target"
+                  : "Update target"}
               </Button>
             </DialogFooter>
           </form>

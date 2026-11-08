@@ -646,6 +646,7 @@ async fn tag_change(
         }
         tags.retain(|tag| tag.id != id);
         sqlx::query("UPDATE machines SET tags=tags-$2,revision=revision+1 WHERE organization_id=$1 AND tags ? $2").bind(&org).bind(&id).execute(&mut *tx).await?;
+        crate::status_page::forget_group(&mut tx, &org, &id).await?;
     } else if input.kind == "save" {
         let name = input.name.unwrap_or_default().trim().to_owned();
         if name.is_empty() || name.chars().count() > 32 || name.chars().any(char::is_control) {
