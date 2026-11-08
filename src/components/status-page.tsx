@@ -1344,6 +1344,17 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     currentDraft.current = edit?.draft ?? null;
   }, [edit]);
 
+  // Refreshes are numbered as they are sent. A refresh answers with the page
+  // as it was when it was read, so it is shown only if nothing newer has
+  // been: a later refresh, or any response this session's own actions got
+  // (a save, a live change, a maintenance action), which outdates every
+  // refresh sent before it lands.
+  const refreshesSent = useRef(0);
+  const refreshesOutdated = useRef(0);
+  const outdateRefreshes = () => {
+    refreshesOutdated.current = refreshesSent.current;
+  };
+
   const adopt = useCallback((next: StatusPageState) => {
     setState(next);
     setEdit((value) => {
@@ -1368,14 +1379,17 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   const load = useCallback(async () => {
     if (!canView) return;
     setRefreshing(true);
+    const ticket = ++refreshesSent.current;
     try {
-      adopt(
-        await apiRequest<StatusPageState>(
-          "status-page",
-          undefined,
-          organization.id,
-        ),
+      const next = await apiRequest<StatusPageState>(
+        "status-page",
+        undefined,
+        organization.id,
       );
+      if (ticket > refreshesOutdated.current) {
+        refreshesOutdated.current = ticket;
+        adopt(next);
+      }
       setLoadError("");
       setRefreshFailed(false);
     } catch (cause) {
@@ -1767,6 +1781,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
    * no later edits, nothing is left to protect.
    */
   function settle(next: StatusPageState, sent?: PageDraft) {
+    outdateRefreshes();
     setState(next);
     setEdit((value) => {
       const saved = draftOf(next);
@@ -1930,6 +1945,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         currentDraft.current ?? draft,
         draftOf(latest),
       );
+      outdateRefreshes();
       setEdit({ base: latest, draft: merged.draft });
       setState(latest);
       setCheckedAt(clock());
@@ -1998,6 +2014,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         organization.id,
       );
       const from = state.revision;
+      outdateRefreshes();
       setState(next);
       setEdit((value) => {
         if (
@@ -2125,7 +2142,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       endDate: dayStart(end),
       endTime: timeTextAt(end),
       all: window ? window.componentIds.length === 0 : true,
-      componentIds: window?.componentIds ?? [],
+      // Targets removed since the window was saved can't be shown or saved,
+      // so they leave the selection. The window keeps its specific scope: a
+      // window left with none asks for a target instead of affecting all.
+      componentIds: (window?.componentIds ?? []).filter((id) =>
+        state?.components.some((c) => c.id === id),
+      ),
       search: "",
       errors: {},
     });
@@ -2211,6 +2233,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         },
         organization.id,
       );
+      outdateRefreshes();
       adopt(next);
       setMaintenanceForm(null);
       // The window's row shows it; focus goes back to the opener.
@@ -2229,7 +2252,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     setActionBusy(true);
     setConfirmError("");
     try {
-      adopt(await apiRequest<StatusPageState>(path, {}, organization.id));
+      const next = await apiRequest<StatusPageState>(path, {}, organization.id);
+      outdateRefreshes();
+      adopt(next);
       clear();
       announce(done);
     } catch (cause) {

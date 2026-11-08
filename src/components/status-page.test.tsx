@@ -1578,6 +1578,75 @@ describe("Status page admin", () => {
     );
   });
 
+  it("drops a removed target from a window being edited, keeping its scope (codex)", async () => {
+    const user = userEvent.setup();
+    // The window affected EU main and a target removed since.
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...live,
+      maintenance: [
+        { ...live.maintenance[0], componentIds: ["c-eu", "c-removed"] },
+      ],
+    });
+    mount();
+    await ready();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Monthly wipe" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog)
+        .getByRole("radio", { name: "Specific targets" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(dialog.textContent).toContain("1 of 2 selected");
+    await user.type(within(dialog).getByLabelText("Title"), " and restart");
+    vi.mocked(apiRequest).mockResolvedValueOnce(live);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save window" }),
+    );
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page/maintenance/w-1",
+        expect.objectContaining({
+          title: "Monthly wipe and restart",
+          componentIds: ["c-eu"],
+        }),
+        "org-one",
+      ),
+    );
+  });
+
+  it("asks for a target when every target a window affected was removed (codex)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...live,
+      maintenance: [{ ...live.maintenance[0], componentIds: ["c-removed"] }],
+    });
+    mount();
+    await ready();
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Monthly wipe" }),
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    // Never widened to every target on its own.
+    expect(
+      within(dialog)
+        .getByRole("radio", { name: "Specific targets" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(dialog.textContent).toContain("0 of 2 selected");
+    const calls = vi.mocked(apiRequest).mock.calls.length;
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save window" }),
+    );
+    expect(dialog.textContent).toContain(
+      "Choose at least one affected target.",
+    );
+    expect(apiRequest).toHaveBeenCalledTimes(calls);
+  });
+
   it("confirms deleting a window with a solid destructive action", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValue(live);
@@ -1696,6 +1765,92 @@ describe("Status page admin data safety", () => {
           "org-one",
         ),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a refresh sent before a save that landed first (codex)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const user = userEvent.setup();
+      vi.mocked(apiRequest).mockResolvedValueOnce(live);
+      mount();
+      await ready();
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      const name = screen.getByLabelText("Page name");
+      await user.clear(name);
+      await user.type(name, "Northstar Status");
+      // A poll reads revision 2, and its answer is slow.
+      let answerPoll: (value: StatusPageState) => void = () => {};
+      vi.mocked(apiRequest).mockImplementationOnce(
+        () => new Promise((resolve) => (answerPoll = resolve)),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      const saved = { ...live, revision: 3, name: "Northstar Status" };
+      vi.mocked(apiRequest).mockResolvedValueOnce(saved);
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await savedInBar();
+      await act(async () => answerPoll(live));
+      expect(screen.getByLabelText("Page name")).toHaveProperty(
+        "value",
+        "Northstar Status",
+      );
+      await user.type(screen.getByLabelText("Footer text"), "Hi");
+      vi.mocked(apiRequest).mockResolvedValueOnce({ ...saved, revision: 4 });
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await waitFor(() =>
+        expect(apiRequest).toHaveBeenLastCalledWith(
+          "status-page",
+          expect.objectContaining({
+            revision: 3,
+            name: "Northstar Status",
+            footerText: "Hi",
+          }),
+          "org-one",
+        ),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops a refresh sent before a maintenance action landed (codex)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const user = userEvent.setup();
+      vi.mocked(apiRequest).mockResolvedValueOnce(live);
+      mount();
+      await ready();
+      // A poll reads the window while it is open, and its answer is slow.
+      let answerPoll: (value: StatusPageState) => void = () => {};
+      vi.mocked(apiRequest).mockImplementationOnce(
+        () => new Promise((resolve) => (answerPoll = resolve)),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      await user.click(screen.getByRole("button", { name: "Mark complete" }));
+      const confirm = await screen.findByRole("alertdialog");
+      // Completing a window keeps the page revision: only the order of the
+      // responses says which is newer.
+      vi.mocked(apiRequest).mockResolvedValueOnce({
+        ...live,
+        maintenance: [{ ...live.maintenance[0], completedAt: Date.now() }],
+      });
+      await user.click(
+        within(confirm).getByRole("button", { name: "Mark complete" }),
+      );
+      await said("Maintenance marked complete.");
+      expect(
+        screen.queryByRole("button", { name: "Mark complete" }),
+      ).toBeNull();
+      await act(async () => answerPoll(live));
+      expect(
+        screen.queryByRole("button", { name: "Mark complete" }),
+      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }
