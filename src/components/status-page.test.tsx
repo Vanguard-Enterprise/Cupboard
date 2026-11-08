@@ -512,6 +512,75 @@ describe("Status page admin", () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
+  it("adds the chosen machine by ID when two machines share a name", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...empty,
+      sources: [
+        { id: "machine-1", name: "wings", kind: "machine", tags: [] },
+        { id: "machine-2", name: "wings", kind: "machine", tags: [] },
+      ],
+    });
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Targets" }));
+
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    let dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: "Machine" }));
+    await user.click(within(dialog).getByRole("combobox", { name: "Machine" }));
+    const options = await screen.findAllByRole("option", { name: /wings/ });
+    expect(options).toHaveLength(2);
+    await user.click(options[1]);
+    // Only the second one is marked chosen when the list opens again.
+    await user.click(within(dialog).getByRole("combobox", { name: "Machine" }));
+    const reopened = await screen.findAllByRole("option", { name: /wings/ });
+    expect(
+      reopened[0].querySelector("svg.lucide-check:not(.opacity-0)"),
+    ).toBeNull();
+    expect(
+      reopened[1].querySelector("svg.lucide-check:not(.opacity-0)"),
+    ).not.toBeNull();
+    await user.click(reopened[1]);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Add target" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The first machine is still free to add; the second is taken.
+    await user.click(screen.getByRole("button", { name: "Add target" }));
+    dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("radio", { name: "Machine" }));
+    await user.click(within(dialog).getByRole("combobox", { name: "Machine" }));
+    expect(
+      await screen.findAllByRole("option", { name: /wings/ }),
+    ).toHaveLength(1);
+    await user.keyboard("{Escape}");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({
+          components: [
+            {
+              id: null,
+              kind: "machine",
+              name: "wings",
+              sourceId: "machine-2",
+              tagId: "",
+              public: true,
+            },
+          ],
+        }),
+        "org-one",
+      ),
+    );
+  });
+
   it("returns focus to the opener when a dialog closes", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValue(live);
