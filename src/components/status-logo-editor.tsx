@@ -10,6 +10,7 @@ import {
   type PointerEvent,
 } from "react";
 import {
+  CircleAlertIcon,
   FlipHorizontal2Icon,
   ImageUpIcon,
   RotateCcwIcon,
@@ -23,6 +24,7 @@ import { validColor } from "@/lib/status-page";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -33,6 +35,14 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+/** 44 pixel targets on touch screens. */
+const touch = "[@media(any-pointer:coarse)]:min-h-11";
 
 export type LogoShape = "original" | "square" | "wide";
 export type LogoBackground = "none" | "white" | "black" | "accent";
@@ -195,6 +205,53 @@ export function snap(
   };
 }
 
+const percentOf = (part: number, whole: number) =>
+  Math.round((Math.abs(part) / whole) * 100);
+
+/**
+ * The crop in words, for people who can't see the stage: where the logo sits
+ * against the frame's center, which frame lines it lines up with, and whether
+ * the frame cuts any of it off. Offsets are percentages of the frame's width
+ * and height.
+ */
+export function describeCrop(image: Size, edit: LogoEdit) {
+  const aspect = frameAspect(image, edit);
+  const size = turned(image, edit.rotation);
+  const scale = Math.min(aspect / size.width, 1 / size.height) * edit.zoom;
+  const halfWidth = (size.width * scale) / 2;
+  const halfHeight = (size.height * scale) / 2;
+  // Within a hundredth of a frame height counts as lined up.
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.005;
+
+  const sideways = near(edit.x, 0)
+    ? "centered across"
+    : `${percentOf(edit.x, aspect)}% ${edit.x < 0 ? "left" : "right"} of center`;
+  const upright = near(edit.y, 0)
+    ? "centered up and down"
+    : `${percentOf(edit.y, 1)}% ${edit.y < 0 ? "above" : "below"} center`;
+
+  const edges = [
+    near(edit.x - halfWidth, -aspect / 2) && "left",
+    near(edit.x + halfWidth, aspect / 2) && "right",
+    near(edit.y - halfHeight, -0.5) && "top",
+    near(edit.y + halfHeight, 0.5) && "bottom",
+  ].filter(Boolean) as string[];
+  const lined = edges.length
+    ? ` Lined up with the frame's ${new Intl.ListFormat("en", { type: "conjunction" }).format(edges)} ${edges.length > 1 ? "edges" : "edge"}.`
+    : "";
+
+  const cut =
+    edit.x - halfWidth < -aspect / 2 - 0.005 ||
+    edit.x + halfWidth > aspect / 2 + 0.005 ||
+    edit.y - halfHeight < -0.5 - 0.005 ||
+    edit.y + halfHeight > 0.5 + 0.005;
+  const fit = cut
+    ? "Part of the logo is outside the frame and will be cut off."
+    : "The whole logo is inside the frame.";
+
+  return `Logo ${sideways}, ${upright}, at ${Math.round(edit.zoom * 100)}% zoom.${lined} ${fit}`;
+}
+
 /** Screen pixels within which a drag snaps to a guide. */
 const SNAP_PIXELS = 6;
 
@@ -242,6 +299,7 @@ function exportPng(loaded: Loaded, edit: LogoEdit, accent: string) {
 export function StatusLogoEditor({
   file,
   onOpenChange,
+  onReturnFocus,
   onSave,
   onChooseFile,
   accent,
@@ -250,6 +308,9 @@ export function StatusLogoEditor({
   /** An object URL for the picked file or current logo, or null when closed. */
   file: string | null;
   onOpenChange: (open: boolean) => void;
+  /** Where focus goes when the editor closes; the opener may be gone. */
+  onReturnFocus?: () => void;
+  /** Takes the finished PNG; resolve true to close the editor. */
   onSave: (png: Blob) => Promise<boolean>;
   onChooseFile: () => void;
   accent: string;
@@ -271,6 +332,10 @@ export function StatusLogoEditor({
     y: number;
   } | null>(null);
   const [guides, setGuides] = useState<Guides>({ x: null, y: null });
+  // Keyboard moves are spoken once the keys rest, not on every step.
+  const [spoken, setSpoken] = useState("");
+  const speakTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(speakTimer.current), []);
 
   useEffect(() => {
     if (!file) return;
@@ -382,26 +447,27 @@ export function StatusLogoEditor({
       ArrowDown: [0, step],
     };
     const move = moves[event.key];
+    let next: LogoEdit | null = null;
     if (move) {
-      event.preventDefault();
-      setEdit((current) => ({
-        ...current,
-        x: current.x + move[0],
-        y: current.y + move[1],
-      }));
-    } else if (event.key === "+" || event.key === "=") {
-      event.preventDefault();
-      setEdit((current) => ({
-        ...current,
-        zoom: clampZoom(current.zoom + 0.1),
-      }));
-    } else if (event.key === "-") {
-      event.preventDefault();
-      setEdit((current) => ({
-        ...current,
-        zoom: clampZoom(current.zoom - 0.1),
-      }));
-    }
+      const x = edit.x + move[0];
+      const y = edit.y + move[1];
+      // Keys land exactly on the center and edges they pass within half a
+      // step of, the way a drag snaps, so they can be reached and announced.
+      const snapped = image
+        ? snap(image, edit, x, y, step / 2 - 1e-9)
+        : { x, y };
+      next = { ...edit, x: snapped.x, y: snapped.y };
+    } else if (event.key === "+" || event.key === "=")
+      next = { ...edit, zoom: clampZoom(edit.zoom + 0.1) };
+    else if (event.key === "-")
+      next = { ...edit, zoom: clampZoom(edit.zoom - 0.1) };
+    if (!next) return;
+    event.preventDefault();
+    setEdit(next);
+    if (!image) return;
+    const words = describeCrop(image, next);
+    window.clearTimeout(speakTimer.current);
+    speakTimer.current = window.setTimeout(() => setSpoken(words), 400);
   }
 
   async function save() {
@@ -419,6 +485,7 @@ export function StatusLogoEditor({
     }
   }
 
+  const failed = !!loadError && !image;
   const aspect = image ? frameAspect(image, edit) : 1;
   const frame = layout(aspect);
   const placed = image ? placement(image, edit, frame) : null;
@@ -433,330 +500,412 @@ export function StatusLogoEditor({
 
   return (
     <Dialog open={file !== null} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg">
+      <DialogContent
+        scrollable
+        className="sm:max-w-lg"
+        onCloseAutoFocus={(event) => {
+          if (!onReturnFocus) return;
+          event.preventDefault();
+          onReturnFocus();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>Edit logo</DialogTitle>
           <DialogDescription>
-            Drag to position, scroll to zoom. Hold Alt to move without snapping.
+            {failed
+              ? "This file could not be opened."
+              : "Goes on the page when you save changes."}
           </DialogDescription>
         </DialogHeader>
 
-        {/* The wrapper keeps the grid from squeezing the 16:9 stage. */}
-        <div>
-          <div
-            ref={stage}
-            role="application"
-            aria-label="Logo crop area"
-            aria-roledescription="Crop area. Use the arrow keys to move and plus or minus to zoom."
-            tabIndex={0}
-            onPointerDown={pointerDown}
-            onPointerMove={pointerMove}
-            onPointerUp={pointerUp}
-            onPointerCancel={pointerUp}
-            onKeyDown={keyDown}
-            className="relative aspect-video w-full cursor-grab touch-none overflow-hidden rounded-lg border border-border bg-[conic-gradient(var(--surface-elevated)_25%,var(--background)_0_50%,var(--surface-elevated)_0_75%,var(--background)_0)] bg-[length:16px_16px] outline-none select-none focus-visible:ring-3 focus-visible:ring-ring/50 active:cursor-grabbing"
-          >
-            {!image && !loadError && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Spinner aria-label="Loading image" />
-              </div>
-            )}
-            {loadError && !image && (
-              <p
-                role="alert"
-                className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-destructive"
-              >
-                {loadError}
+        <DialogBody>
+          {failed ? (
+            <div
+              role="alert"
+              className="flex flex-col items-center gap-3 rounded-lg border border-border bg-surface-elevated/50 px-6 py-8 text-center"
+            >
+              <CircleAlertIcon
+                aria-hidden="true"
+                className="size-6 text-destructive"
+              />
+              <p className="text-sm">{loadError}</p>
+              <p className="text-[13px] leading-5 text-muted-foreground">
+                Use a PNG, JPEG, WebP, GIF, or SVG image up to 20 MB.
               </p>
-            )}
-            {image && placed && (
-              <>
-                <div
-                  aria-hidden="true"
-                  className="absolute"
-                  style={{ ...frame.style, background: fill }}
-                />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={loaded?.url}
-                  alt=""
-                  draggable={false}
-                  className="pointer-events-none absolute max-w-none"
-                  style={placed}
-                />
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute rounded-[3px] shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-1 ring-white/70"
-                  style={frame.style}
-                >
-                  <div className="absolute inset-0 bg-[linear-gradient(to_right,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%),linear-gradient(to_bottom,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%)]" />
-                </div>
-                {guides.x !== null && (
-                  <div
-                    aria-hidden="true"
-                    data-testid="logo-guide-vertical"
-                    className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-primary"
-                    style={{
-                      left: `${((STAGE_ASPECT / 2 + guides.x * frame.height) / STAGE_ASPECT) * 100}%`,
-                    }}
-                  />
-                )}
-                {guides.y !== null && (
-                  <div
-                    aria-hidden="true"
-                    data-testid="logo-guide-horizontal"
-                    className="pointer-events-none absolute inset-x-0 h-px -translate-y-1/2 bg-primary"
-                    style={{ top: `${(0.5 + guides.y * frame.height) * 100}%` }}
-                  />
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Zoom out"
-            disabled={!image || edit.zoom <= MIN_ZOOM}
-            onClick={() => change({ zoom: clampZoom(edit.zoom - 0.25) })}
-          >
-            <ZoomOutIcon aria-hidden="true" />
-          </Button>
-          <Slider
-            aria-label="Zoom"
-            min={MIN_ZOOM}
-            max={MAX_ZOOM}
-            step={0.01}
-            value={[edit.zoom]}
-            disabled={!image}
-            onValueChange={([zoom]) => change({ zoom: clampZoom(zoom) })}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Zoom in"
-            disabled={!image || edit.zoom >= MAX_ZOOM}
-            onClick={() => change({ zoom: clampZoom(edit.zoom + 0.25) })}
-          >
-            <ZoomInIcon aria-hidden="true" />
-          </Button>
-          <span className="w-11 text-right text-xs text-muted-foreground tabular-nums">
-            {Math.round(edit.zoom * 100)}%
-          </span>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label id="logo-shape-label">Shape</Label>
-            <ToggleGroup
-              type="single"
-              value={edit.shape}
-              onValueChange={(shape) => {
-                if (
-                  shape === "original" ||
-                  shape === "square" ||
-                  shape === "wide"
-                )
-                  change({ shape, x: 0, y: 0 });
-              }}
-              aria-labelledby="logo-shape-label"
-              spacing={0}
-              className="w-full rounded-lg bg-surface-elevated p-1"
-              disabled={!image}
-            >
-              {(["original", "square", "wide"] as const).map((shape) => (
-                <ToggleGroupItem
-                  key={shape}
-                  value={shape}
-                  className="h-8 flex-1 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
-                >
-                  {shapeLabel[shape]}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
-          <div className="space-y-2">
-            <p className="text-sm leading-none font-medium">Orientation</p>
-            <div className="flex gap-1 rounded-lg bg-surface-elevated p-1">
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 flex-1 [@media(any-pointer:coarse)]:min-h-11"
-                aria-label="Rotate left"
-                disabled={!image}
-                onClick={() =>
-                  change({
-                    rotation: ((edit.rotation + 270) %
-                      360) as LogoEdit["rotation"],
-                    x: 0,
-                    y: 0,
-                  })
-                }
-              >
-                <RotateCcwIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-8 flex-1 [@media(any-pointer:coarse)]:min-h-11"
-                aria-label="Rotate right"
-                disabled={!image}
-                onClick={() =>
-                  change({
-                    rotation: ((edit.rotation + 90) %
-                      360) as LogoEdit["rotation"],
-                    x: 0,
-                    y: 0,
-                  })
-                }
-              >
-                <RotateCwIcon aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className={cn(
-                  "h-8 flex-1 [@media(any-pointer:coarse)]:min-h-11",
-                  edit.flip && "bg-background text-foreground",
-                )}
-                aria-label="Flip horizontally"
-                aria-pressed={edit.flip}
-                disabled={!image}
-                onClick={() => change({ flip: !edit.flip })}
-              >
-                <FlipHorizontal2Icon aria-hidden="true" />
-              </Button>
             </div>
-          </div>
-          <div className="space-y-2 sm:col-span-2">
-            <Label id="logo-background-label">Background</Label>
-            <ToggleGroup
-              type="single"
-              value={edit.background}
-              onValueChange={(background) => {
-                if (background in backgroundLabel)
-                  change({ background: background as LogoBackground });
-              }}
-              aria-labelledby="logo-background-label"
-              spacing={0}
-              className="w-full rounded-lg bg-surface-elevated p-1"
-              disabled={!image}
-            >
-              {(["none", "white", "black", "accent"] as const).map(
-                (background) => (
-                  <ToggleGroupItem
-                    key={background}
-                    value={background}
-                    className="h-8 flex-1 gap-1.5 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "size-3 shrink-0 rounded-full ring-1 ring-foreground/20",
-                        background === "none" &&
-                          "bg-[conic-gradient(#d4d4d8_25%,#fff_0_50%,#d4d4d8_0_75%,#fff_0)] bg-[length:6px_6px]",
+          ) : (
+            <>
+              {/* The wrapper keeps the grid from squeezing the 16:9 stage. */}
+              <div>
+                <div
+                  ref={stage}
+                  role="application"
+                  aria-label="Logo crop area"
+                  aria-roledescription="crop area"
+                  aria-describedby="logo-stage-help logo-stage-position"
+                  tabIndex={0}
+                  onPointerDown={pointerDown}
+                  onPointerMove={pointerMove}
+                  onPointerUp={pointerUp}
+                  onPointerCancel={pointerUp}
+                  onKeyDown={keyDown}
+                  className="relative aspect-video w-full cursor-grab touch-none overflow-hidden rounded-lg border border-border bg-[conic-gradient(var(--surface-elevated)_25%,var(--background)_0_50%,var(--surface-elevated)_0_75%,var(--background)_0)] bg-[length:16px_16px] outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover active:cursor-grabbing"
+                >
+                  {!image && !loadError && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Spinner aria-label="Loading image" />
+                    </div>
+                  )}
+                  {image && placed && (
+                    <>
+                      <div
+                        aria-hidden="true"
+                        className="absolute"
+                        style={{ ...frame.style, background: fill }}
+                      />
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={loaded?.url}
+                        alt=""
+                        draggable={false}
+                        className="pointer-events-none absolute max-w-none"
+                        style={placed}
+                      />
+                      <div
+                        aria-hidden="true"
+                        className="pointer-events-none absolute rounded-[3px] shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-1 ring-white/70"
+                        style={frame.style}
+                      >
+                        <div className="absolute inset-0 bg-[linear-gradient(to_right,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%),linear-gradient(to_bottom,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%)]" />
+                      </div>
+                      {guides.x !== null && (
+                        <div
+                          aria-hidden="true"
+                          data-testid="logo-guide-vertical"
+                          className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-primary"
+                          style={{
+                            left: `${((STAGE_ASPECT / 2 + guides.x * frame.height) / STAGE_ASPECT) * 100}%`,
+                          }}
+                        />
                       )}
-                      style={
-                        background === "none"
-                          ? undefined
-                          : {
-                              background:
-                                background === "white"
-                                  ? "#ffffff"
-                                  : background === "black"
-                                    ? "#000000"
-                                    : accent,
-                            }
-                      }
-                    />
-                    {backgroundLabel[background]}
-                  </ToggleGroupItem>
-                ),
-              )}
-            </ToggleGroup>
-          </div>
-        </div>
+                      {guides.y !== null && (
+                        <div
+                          aria-hidden="true"
+                          data-testid="logo-guide-horizontal"
+                          className="pointer-events-none absolute inset-x-0 h-px -translate-y-1/2 bg-primary"
+                          style={{
+                            top: `${(0.5 + guides.y * frame.height) * 100}%`,
+                          }}
+                        />
+                      )}
+                    </>
+                  )}
+                </div>
+                <p
+                  id="logo-stage-help"
+                  className="mt-2 text-[13px] leading-5 text-muted-foreground"
+                >
+                  <span className="[@media(any-pointer:coarse)]:hidden">
+                    Drag to move, scroll to zoom. Alt skips snapping.
+                  </span>
+                  <span className="hidden [@media(any-pointer:coarse)]:inline">
+                    Drag to move.
+                  </span>
+                  <span className="sr-only">
+                    {" "}
+                    Arrow keys move it, plus and minus zoom.
+                  </span>
+                </p>
+                <p id="logo-stage-position" className="sr-only">
+                  {image ? describeCrop(image, edit) : ""}
+                </p>
+                <p aria-live="polite" className="sr-only">
+                  {spoken}
+                </p>
+              </div>
 
-        <div className="space-y-2">
-          <p className="text-sm leading-none font-medium">On your page</p>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(["dark", "light"] as const).map((theme) => (
-              <div
-                key={theme}
-                data-testid={`logo-preview-${theme}`}
-                className={cn(
-                  "flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2.5 text-foreground",
-                  theme === "light" && "theme-light",
-                )}
-              >
-                {preview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={preview}
-                    alt=""
-                    className="h-9 w-auto max-w-40 shrink-0 object-contain"
-                  />
-                ) : (
-                  <span className="size-9 shrink-0 rounded-lg bg-muted" />
-                )}
-                <span className="truncate text-sm font-semibold">
-                  {pageName || "Status"}
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-9 [@media(any-pointer:coarse)]:size-11"
+                  aria-label="Zoom out"
+                  disabled={!image || edit.zoom <= MIN_ZOOM}
+                  onClick={() => change({ zoom: clampZoom(edit.zoom - 0.25) })}
+                >
+                  <ZoomOutIcon aria-hidden="true" />
+                </Button>
+                <Slider
+                  aria-label="Zoom"
+                  valueText={(zoom) => `${Math.round(zoom * 100)} percent`}
+                  className="min-w-0 flex-1"
+                  min={MIN_ZOOM}
+                  max={MAX_ZOOM}
+                  step={0.01}
+                  value={[edit.zoom]}
+                  disabled={!image}
+                  onValueChange={([zoom]) => change({ zoom: clampZoom(zoom) })}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-9 [@media(any-pointer:coarse)]:size-11"
+                  aria-label="Zoom in"
+                  disabled={!image || edit.zoom >= MAX_ZOOM}
+                  onClick={() => change({ zoom: clampZoom(edit.zoom + 0.25) })}
+                >
+                  <ZoomInIcon aria-hidden="true" />
+                </Button>
+                <span
+                  aria-hidden="true"
+                  className="w-11 shrink-0 text-right text-xs text-muted-foreground tabular-nums"
+                >
+                  {Math.round(edit.zoom * 100)}%
                 </span>
               </div>
-            ))}
-          </div>
-        </div>
 
-        {loadError && image && (
-          <p role="alert" className="text-sm text-destructive">
-            {loadError}
-          </p>
-        )}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label id="logo-shape-label">Shape</Label>
+                  <ToggleGroup
+                    type="single"
+                    value={edit.shape}
+                    onValueChange={(shape) => {
+                      if (
+                        shape === "original" ||
+                        shape === "square" ||
+                        shape === "wide"
+                      )
+                        change({ shape, x: 0, y: 0 });
+                    }}
+                    aria-labelledby="logo-shape-label"
+                    spacing={0}
+                    className="w-full rounded-lg border border-border bg-background/40 p-1"
+                    disabled={!image}
+                  >
+                    {(["original", "square", "wide"] as const).map((shape) => (
+                      <ToggleGroupItem
+                        key={shape}
+                        value={shape}
+                        className="h-8 flex-1 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-border data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                      >
+                        {shapeLabel[shape]}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                </div>
+                <div className="space-y-2">
+                  <p
+                    id="logo-orientation-label"
+                    className="text-sm leading-none font-medium"
+                  >
+                    Orientation
+                  </p>
+                  <div
+                    role="group"
+                    aria-labelledby="logo-orientation-label"
+                    className="flex gap-1 rounded-lg border border-border bg-background/40 p-1"
+                  >
+                    {(
+                      [
+                        [
+                          "Rotate left",
+                          RotateCcwIcon,
+                          () =>
+                            change({
+                              rotation: ((edit.rotation + 270) %
+                                360) as LogoEdit["rotation"],
+                              x: 0,
+                              y: 0,
+                            }),
+                        ],
+                        [
+                          "Rotate right",
+                          RotateCwIcon,
+                          () =>
+                            change({
+                              rotation: ((edit.rotation + 90) %
+                                360) as LogoEdit["rotation"],
+                              x: 0,
+                              y: 0,
+                            }),
+                        ],
+                        [
+                          "Flip horizontally",
+                          FlipHorizontal2Icon,
+                          () => change({ flip: !edit.flip }),
+                        ],
+                      ] as const
+                    ).map(([label, Icon, run]) => (
+                      <Tooltip key={label}>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className={cn(
+                              "h-8 flex-1",
+                              touch,
+                              label === "Flip horizontally" &&
+                                edit.flip &&
+                                "bg-background text-foreground",
+                            )}
+                            aria-label={label}
+                            aria-pressed={
+                              label === "Flip horizontally"
+                                ? edit.flip
+                                : undefined
+                            }
+                            disabled={!image}
+                            onClick={run}
+                          >
+                            <Icon aria-hidden="true" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{label}</TooltipContent>
+                      </Tooltip>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label id="logo-background-label">Background</Label>
+                  <ToggleGroup
+                    type="single"
+                    value={edit.background}
+                    onValueChange={(background) => {
+                      if (background in backgroundLabel)
+                        change({ background: background as LogoBackground });
+                    }}
+                    aria-labelledby="logo-background-label"
+                    spacing={1}
+                    className="grid w-full grid-cols-2 gap-1 rounded-lg border border-border bg-background/40 p-1 sm:flex"
+                    disabled={!image}
+                  >
+                    {(["none", "white", "black", "accent"] as const).map(
+                      (background) => (
+                        <ToggleGroupItem
+                          key={background}
+                          value={background}
+                          className="h-8 min-w-0 flex-1 gap-1.5 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-border data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "size-3 shrink-0 rounded-full ring-1 ring-foreground/20",
+                              background === "none" &&
+                                "bg-[conic-gradient(#d4d4d8_25%,#fff_0_50%,#d4d4d8_0_75%,#fff_0)] bg-[length:6px_6px]",
+                            )}
+                            style={
+                              background === "none"
+                                ? undefined
+                                : {
+                                    background:
+                                      background === "white"
+                                        ? "#ffffff"
+                                        : background === "black"
+                                          ? "#000000"
+                                          : accent,
+                                  }
+                            }
+                          />
+                          {backgroundLabel[background]}
+                        </ToggleGroupItem>
+                      ),
+                    )}
+                  </ToggleGroup>
+                  {edit.background === "accent" && (
+                    <p className="text-[13px] leading-5 text-muted-foreground">
+                      Baked in as {accent}. A later accent change won&apos;t
+                      recolor it.
+                    </p>
+                  )}
+                </div>
+              </div>
 
-        <DialogFooter className="sm:justify-between">
+              <div className="space-y-2">
+                <p className="text-sm leading-none font-medium">On your page</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(["dark", "light"] as const).map((theme) => (
+                    <div
+                      key={theme}
+                      data-testid={`logo-preview-${theme}`}
+                      className={cn(
+                        "flex min-w-0 items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2.5 text-foreground",
+                        theme === "light" && "theme-light",
+                      )}
+                    >
+                      {preview ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={preview}
+                          alt=""
+                          className="h-9 w-auto max-w-40 shrink-0 object-contain"
+                        />
+                      ) : (
+                        <span className="size-9 shrink-0 rounded-lg bg-muted" />
+                      )}
+                      <span className="truncate text-sm font-semibold">
+                        {pageName || "Status"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {loadError && image && (
+                <p role="alert" className="text-sm text-destructive">
+                  {loadError}
+                </p>
+              )}
+            </>
+          )}
+        </DialogBody>
+
+        <DialogFooter className="max-sm:flex-col! sm:justify-between">
           <div className="flex gap-2">
             <Button
               type="button"
-              variant="ghost"
-              className="h-10 px-3"
+              variant={failed ? "default" : "ghost"}
+              className={cn("h-10 flex-1 px-3 sm:flex-none", touch)}
               onClick={onChooseFile}
             >
               <ImageUpIcon aria-hidden="true" />
-              Choose another
+              {failed ? "Choose another image" : "Choose another"}
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-10 px-3"
-              disabled={!image}
-              onClick={() => setEdit(initialEdit)}
-            >
-              <UndoIcon aria-hidden="true" />
-              Reset
-            </Button>
+            {!failed && (
+              <Button
+                type="button"
+                variant="ghost"
+                className={cn("h-10 flex-1 px-3 sm:flex-none", touch)}
+                disabled={!image}
+                onClick={() => setEdit(initialEdit)}
+              >
+                <UndoIcon aria-hidden="true" />
+                Reset
+              </Button>
+            )}
           </div>
           <div className="flex gap-2">
             <Button
               type="button"
               variant="outline"
-              className="h-10 px-4"
+              className={cn("h-10 flex-1 px-4 sm:flex-none", touch)}
               onClick={() => onOpenChange(false)}
             >
               Cancel
             </Button>
-            <Button
-              type="button"
-              className="h-10 px-4"
-              disabled={!image || saving}
-              onClick={() => void save()}
-            >
-              {saving && <Spinner aria-hidden="true" />}
-              Save logo
-            </Button>
+            {!failed && (
+              <Button
+                type="button"
+                className={cn("h-10 flex-1 px-4 sm:flex-none", touch)}
+                disabled={!image || saving}
+                onClick={() => void save()}
+              >
+                {saving && <Spinner aria-hidden="true" />}
+                Use logo
+              </Button>
+            )}
           </div>
         </DialogFooter>
       </DialogContent>

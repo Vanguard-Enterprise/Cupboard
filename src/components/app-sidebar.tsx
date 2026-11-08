@@ -17,6 +17,7 @@ import { Building2Icon } from "lucide-react";
 import { navigateAfterAuth, apiRequest, type Identity } from "@/lib/api-client";
 import { toast } from "sonner";
 import { dashboardNavigation } from "@/lib/dashboard-navigation";
+import { useGuardedNavigation } from "@/components/ui/unsaved-changes";
 
 export function AppSidebar({
   activeSection,
@@ -29,6 +30,7 @@ export function AppSidebar({
   identity: Identity;
 }) {
   const [switching, setSwitching] = React.useState(false);
+  const { confirmLeave } = useGuardedNavigation();
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -41,20 +43,24 @@ export function AppSidebar({
             logo: <Building2Icon />,
             plan: "Organization",
           }))}
-          onChange={async (id) => {
-            setSwitching(true);
-            try {
-              await apiRequest("auth/organization", { id });
-              navigateAfterAuth("/dashboard");
-            } catch (error) {
-              toast.error(
-                error instanceof Error
-                  ? error.message
-                  : "Could not switch organization.",
-              );
-              setSwitching(false);
-            }
-          }}
+          onChange={(id) =>
+            // Ask about unsaved edits before the session moves, so staying
+            // never leaves a draft open against another organization.
+            confirmLeave(async () => {
+              setSwitching(true);
+              try {
+                await apiRequest("auth/organization", { id });
+                navigateAfterAuth("/dashboard");
+              } catch (error) {
+                toast.error(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not switch organization.",
+                );
+                setSwitching(false);
+              }
+            })
+          }
         />
         <OrganizationSearchButton
           onOpen={onSearch}

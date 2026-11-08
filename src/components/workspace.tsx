@@ -13,6 +13,8 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
+import { UnsavedChangesProvider } from "@/components/ui/unsaved-changes";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -139,51 +141,59 @@ export function Workspace({
       organizationId={identity.organization?.id ?? null}
     >
       <OrganizationProvider>
-        <SidebarProvider defaultOpen={defaultOpen}>
-          <AppSidebar
-            identity={identity}
-            activeSection={page?.activeSection}
-            onSearch={() => setSearchOpen(true)}
-          />
-          <SidebarInset>
-            <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4 py-3">
-              <SidebarTrigger />
-              <Breadcrumb>
-                <BreadcrumbList>
-                  <BreadcrumbItem>
-                    {page ? (
-                      <BreadcrumbLink asChild>
-                        <Link href="/dashboard">Dashboard</Link>
-                      </BreadcrumbLink>
-                    ) : (
-                      <BreadcrumbPage>Dashboard</BreadcrumbPage>
-                    )}
-                  </BreadcrumbItem>
-                  {page?.crumbs.map((crumb, index) => (
-                    <Fragment key={crumb}>
-                      <BreadcrumbSeparator />
-                      <BreadcrumbItem>
-                        {index === page.crumbs.length - 1 ? (
-                          <BreadcrumbPage>{crumb}</BreadcrumbPage>
-                        ) : crumb === "Machines" ? (
-                          <BreadcrumbLink asChild>
-                            <Link href={machinesPath}>{crumb}</Link>
-                          </BreadcrumbLink>
-                        ) : (
-                          <span>{crumb}</span>
-                        )}
-                      </BreadcrumbItem>
-                    </Fragment>
-                  ))}
-                </BreadcrumbList>
-              </Breadcrumb>
-            </header>
-            {children}
-          </SidebarInset>
-          {identity.organization && (
-            <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
-          )}
-        </SidebarProvider>
+        {/* Pages register unsaved edits here; links, the command menu,
+            organization switch, sign out, and Back ask before leaving. */}
+        <UnsavedChangesProvider>
+          <SidebarProvider defaultOpen={defaultOpen}>
+            <AppSidebar
+              identity={identity}
+              activeSection={page?.activeSection}
+              onSearch={() => setSearchOpen(true)}
+            />
+            <SidebarInset>
+              <header className="flex min-h-16 shrink-0 items-center gap-3 border-b px-4 py-3">
+                <SidebarTrigger />
+                <Breadcrumb>
+                  <BreadcrumbList>
+                    <BreadcrumbItem>
+                      {page ? (
+                        <BreadcrumbLink asChild>
+                          <Link href="/dashboard">Dashboard</Link>
+                        </BreadcrumbLink>
+                      ) : (
+                        <BreadcrumbPage>Dashboard</BreadcrumbPage>
+                      )}
+                    </BreadcrumbItem>
+                    {page?.crumbs.map((crumb, index) => (
+                      <Fragment key={crumb}>
+                        <BreadcrumbSeparator />
+                        <BreadcrumbItem>
+                          {index === page.crumbs.length - 1 ? (
+                            <BreadcrumbPage>{crumb}</BreadcrumbPage>
+                          ) : crumb === "Machines" ? (
+                            <BreadcrumbLink asChild>
+                              <Link href={machinesPath}>{crumb}</Link>
+                            </BreadcrumbLink>
+                          ) : (
+                            <span>{crumb}</span>
+                          )}
+                        </BreadcrumbItem>
+                      </Fragment>
+                    ))}
+                  </BreadcrumbList>
+                </Breadcrumb>
+              </header>
+              {children}
+            </SidebarInset>
+            {identity.organization && (
+              <OrganizationSearch open={searchOpen} setOpen={setSearchOpen} />
+            )}
+            {/* Toasts belong to signed-in work, so public pages carry no empty
+              Notifications region. Sign-in and sign-up mount their own. */}
+            {/* On tablets toasts sit at the foot of the open sidebar. */}
+            <Toaster />
+          </SidebarProvider>
+        </UnsavedChangesProvider>
       </OrganizationProvider>
     </PreviewStorageProvider>
   );

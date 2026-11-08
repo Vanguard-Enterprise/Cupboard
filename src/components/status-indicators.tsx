@@ -1,7 +1,7 @@
 import {
-  CircleAlertIcon,
   CircleCheckIcon,
-  CircleHelpIcon,
+  CircleDashedIcon,
+  CircleXIcon,
   TriangleAlertIcon,
   WrenchIcon,
 } from "lucide-react";
@@ -10,6 +10,10 @@ import { cn } from "@/lib/utils";
 
 export type Tone = OverallStatus["tone"];
 
+/**
+ * Status text colors. Unknown and maintenance use secondary text so the
+ * glyph and label stay above 3:1 on cards in both themes.
+ */
 export const toneClass: Record<Tone, string> = {
   operational: "text-primary",
   degraded: "text-warning",
@@ -26,6 +30,10 @@ export const toneTile: Record<Tone, string> = {
   unknown: "border-border bg-surface-elevated text-muted-foreground",
 };
 
+/**
+ * Each state has its own shape, so status survives without color: a check,
+ * a triangle, a cross, a wrench, and a dashed circle for "not reported".
+ */
 export function ToneIcon({
   tone,
   className,
@@ -39,10 +47,10 @@ export function ToneIcon({
       : tone === "degraded"
         ? TriangleAlertIcon
         : tone === "down"
-          ? CircleAlertIcon
+          ? CircleXIcon
           : tone === "maintenance"
             ? WrenchIcon
-            : CircleHelpIcon;
+            : CircleDashedIcon;
   return <Icon aria-hidden="true" className={className} />;
 }
 
@@ -55,8 +63,9 @@ export function StatusDot({ status }: { status: ComponentStatus }) {
         status === "operational" && "bg-primary",
         status === "degraded" && "bg-warning",
         status === "down" && "bg-destructive",
-        status === "maintenance" && "bg-foreground/70",
-        status === "unknown" && "bg-border-strong",
+        status === "maintenance" && "bg-muted-foreground",
+        // Hollow, in secondary text color: reads as "no reading" at 3:1 or better.
+        status === "unknown" && "border-[1.5px] border-muted-foreground",
       )}
     />
   );

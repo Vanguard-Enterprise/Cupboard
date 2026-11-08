@@ -3238,6 +3238,31 @@ async fn machines_reject_a_page_organization_after_another_tab_switches_session(
 }
 
 impl Client {
+    /// Uploads a status page logo; `revision` is the page revision header, if any.
+    async fn status_logo_upload(
+        &self,
+        org: &str,
+        revision: Option<&str>,
+        bytes: Vec<u8>,
+    ) -> axum::response::Response {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/app-api/status-page/logo")
+            .header("origin", "http://localhost:5173")
+            .header("x-cupboard-request", "1")
+            .header("x-cupboard-organization", org)
+            .header("content-type", "application/octet-stream")
+            .header("cookie", &self.cookie);
+        if let Some(revision) = revision {
+            request = request.header("x-cupboard-logo-revision", revision);
+        }
+        self.app
+            .clone()
+            .oneshot(request.body(Body::from(bytes)).unwrap())
+            .await
+            .unwrap()
+    }
+
     async fn logo_upload(&self, org: &str, revision: i64, bytes: Vec<u8>) -> (StatusCode, Value) {
         let response = self
             .app
@@ -6026,6 +6051,27 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     let server_component = saved["components"][0]["id"].as_str().unwrap().to_owned();
     let machine_component = saved["components"][1]["id"].as_str().unwrap().to_owned();
 
+    // A recent server reading is its state; an old one is unknown, never healthy.
+    for (age, health) in [(60_000, "operational"), (10 * 60_000, "unknown")] {
+        sqlx::query("UPDATE servers SET checked_at=(EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-$2,rcon_status='connected',a2s_status='connected' WHERE id=$1")
+            .bind(&server_id)
+            .bind(age as i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let (status, public) = anonymous
+            .request("GET", "public/status/northstar", json!(null))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{public}");
+        assert_eq!(public["components"][0]["health"], health, "{public}");
+        assert!(public["components"][0]["observedAt"].is_i64());
+    }
+    sqlx::query("UPDATE servers SET checked_at=NULL,rcon_status=NULL,a2s_status=NULL WHERE id=$1")
+        .bind(&server_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
     // The public page needs no session, hides private targets, and omits sources.
     let (status, public) = anonymous
         .request("GET", "public/status/northstar", json!(null))
@@ -6285,29 +6331,62 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    // A logo can't be the first write: the page row (and its unique slug) comes from a save.
+    let (status, _, bytes) = body_of(
+        other
+            .status_logo_upload(&other.organization, Some("0"), png.clone())
+            .await,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    assert_eq!(
+        other.request("GET", "status-page", json!(null)).await.1["revision"],
+        0
+    );
     let (status, _, _) = body_of(
         owner
-            .file_request(
-                "POST",
-                "status-page/logo",
-                &org,
-                "",
-                b"not an image".to_vec(),
-            )
+            .status_logo_upload(&org, Some("5"), b"not an image".to_vec())
             .await,
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, _, bytes) = body_of(
-        owner
-            .file_request("POST", "status-page/logo", &org, "", png.clone())
-            .await,
-    )
-    .await;
+    // Logo writes carry the page revision, like a page save.
+    for revision in [None, Some("five"), Some("")] {
+        let (status, _, _) =
+            body_of(owner.status_logo_upload(&org, revision, png.clone()).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{revision:?}");
+    }
+    let (status, _, bytes) =
+        body_of(owner.status_logo_upload(&org, Some("4"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(String::from_utf8_lossy(&bytes).contains("changed in another session"));
+    assert_eq!(
+        owner.request("GET", "status-page", json!(null)).await.1["logoVersion"],
+        Value::Null
+    );
+    // Another tenant can't write this page's logo.
+    let (status, _, _) =
+        body_of(other.status_logo_upload(&org, Some("5"), png.clone()).await).await;
+    assert_ne!(status, StatusCode::OK);
+    let (status, _, bytes) =
+        body_of(owner.status_logo_upload(&org, Some("5"), png.clone()).await).await;
     assert_eq!(status, StatusCode::OK);
     let uploaded: Value = serde_json::from_slice(&bytes).unwrap();
     let version = uploaded["logoVersion"].as_i64().unwrap();
-    assert_eq!(uploaded["revision"], 5);
+    assert_eq!(uploaded["revision"], 6);
+    // A settings editor that loaded before the logo changed can no longer save over it.
+    assert_eq!(
+        owner
+            .request("POST", "status-page", branded(5, true, json!({})))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
     let (status, headers, bytes) = body_of(
         owner
             .file_request("GET", "status-page/logo", &org, "", vec![])
@@ -6341,18 +6420,54 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             .1["logoVersion"],
         version
     );
-    let (status, replaced, _) = body_of(
-        owner
-            .file_request("POST", "status-page/logo", &org, "", png.clone())
+    // Two logo editors on the same revision: the second one gets a conflict.
+    let (status, _, _) =
+        body_of(owner.status_logo_upload(&org, Some("5"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, replaced, bytes) =
+        body_of(owner.status_logo_upload(&org, Some("6"), png.clone()).await).await;
+    assert_eq!(status, StatusCode::OK, "{replaced:?}");
+    let replaced: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(replaced["revision"], 7);
+    assert!(replaced["logoVersion"].as_i64().unwrap() > version);
+    for body in [
+        json!({}),
+        json!({"revision":"7"}),
+        json!({"revision":7,"extra":true}),
+    ] {
+        assert_eq!(
+            owner
+                .request("POST", "status-page/logo/remove", body.clone())
+                .await
+                .0,
+            StatusCode::BAD_REQUEST,
+            "{body}"
+        );
+    }
+    let (status, stale) = owner
+        .request("POST", "status-page/logo/remove", json!({"revision":6}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert!(stale.to_string().contains("changed in another session"));
+    let (status, _, _) = body_of(
+        anonymous
+            .file_request("GET", "public/status/northstar/logo", "", "", vec![])
             .await,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{replaced:?}");
+    assert_eq!(status, StatusCode::OK, "A stale removal must keep the logo");
     let (status, cleared) = owner
-        .request("POST", "status-page/logo/remove", json!({}))
+        .request("POST", "status-page/logo/remove", json!({"revision":7}))
         .await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
     assert_eq!(cleared["logoVersion"], Value::Null);
+    assert_eq!(cleared["revision"], 8);
+    // Removing a logo that is already gone changes nothing.
+    let (status, again) = owner
+        .request("POST", "status-page/logo/remove", json!({"revision":8}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["revision"], 8);
     let (status, _, _) = body_of(
         anonymous
             .file_request("GET", "public/status/northstar/logo", "", "", vec![])
@@ -6360,15 +6475,11 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    let (status, _, _) = body_of(
-        owner
-            .file_request("POST", "status-page/logo", &org, "", png.clone())
-            .await,
-    )
-    .await;
+    let (status, _, _) =
+        body_of(owner.status_logo_upload(&org, Some("8"), png.clone()).await).await;
     assert_eq!(status, StatusCode::OK);
     let (status, unpublished) = owner
-        .request("POST", "status-page", branded(5, false, json!({})))
+        .request("POST", "status-page", branded(9, false, json!({})))
         .await;
     assert_eq!(status, StatusCode::OK, "{unpublished}");
     let (status, _, _) = body_of(
@@ -6400,10 +6511,10 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     member.request("GET", "auth/me", json!(null)).await;
     let (status, visible) = member.request("GET", "status-page", json!(null)).await;
     assert_eq!(status, StatusCode::OK, "{visible}");
-    assert_eq!(visible["revision"], 6);
+    assert_eq!(visible["revision"], 10);
     assert_eq!(
         member
-            .request("POST", "status-page", save(6, "northstar", json!([])))
+            .request("POST", "status-page", save(10, "northstar", json!([])))
             .await
             .0,
         StatusCode::FORBIDDEN
@@ -6415,13 +6526,20 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    for (method, path, bytes) in [
-        ("POST", "status-page/logo", png.clone()),
-        ("POST", "status-page/logo/remove", b"{}".to_vec()),
-    ] {
+    for revision in [None, Some("10")] {
         let (status, _, _) =
-            body_of(member.file_request(method, path, &org, "", bytes).await).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+            body_of(member.status_logo_upload(&org, revision, png.clone()).await).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{revision:?}");
+    }
+    for body in [json!({}), json!({"revision":10})] {
+        assert_eq!(
+            member
+                .request("POST", "status-page/logo/remove", body.clone())
+                .await
+                .0,
+            StatusCode::FORBIDDEN,
+            "{body}"
+        );
     }
     assert_eq!(
         member
@@ -6458,7 +6576,11 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         json!([bad_tag]),
     ] {
         let (status, response) = owner
-            .request("POST", "status-page", save(6, "northstar", targets.clone()))
+            .request(
+                "POST",
+                "status-page",
+                save(10, "northstar", targets.clone()),
+            )
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{targets} {response}");
     }
@@ -6467,7 +6589,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             "POST",
             "status-page",
             save(
-                6,
+                10,
                 "northstar",
                 json!([
                     url_target(None, " https://status.example.com ", "wings"),
@@ -6477,7 +6599,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{watched}");
-    assert_eq!(watched["revision"], 7);
+    assert_eq!(watched["revision"], 11);
     let website = &watched["components"][0];
     assert_eq!(website["kind"], "url");
     assert_eq!(website["sourceId"], "https://status.example.com/");
@@ -6538,7 +6660,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             "POST",
             "status-page",
             save(
-                7,
+                11,
                 "northstar",
                 json!([url_target(
                     Some(&website_id),
@@ -6558,7 +6680,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert_eq!(public["components"][0]["name"], "Website");
     assert!(!public.to_string().contains("status.example.org"));
     let (status, _) = owner
-        .request("POST", "status-page", save(8, "northstar", json!([])))
+        .request("POST", "status-page", save(12, "northstar", json!([])))
         .await;
     assert_eq!(status, StatusCode::OK);
     let checks: i64 =
@@ -6568,4 +6690,59 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             .await
             .unwrap();
     assert_eq!(checks, 0);
+
+    // Maintenance on hidden targets is never published, and hidden ids never leave.
+    let (status, mixed) = owner
+        .request(
+            "POST",
+            "status-page",
+            save(
+                13,
+                "northstar",
+                json!([
+                    component(Some(&server_component), "server", &server_id, true),
+                    component(Some(&machine_component), "machine", &machine_id, false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{mixed}");
+    for (title, starts, ids) in [
+        ("Hidden only", now + 3_600_000, json!([machine_component])),
+        (
+            "Both targets",
+            now + 7_200_000,
+            json!([machine_component, server_component]),
+        ),
+        ("Every target", now + 10_800_000, json!([])),
+    ] {
+        let (status, response) = owner
+            .request(
+                "POST",
+                "status-page/maintenance",
+                json!({"title":title,"message":"","startsAt":starts,"endsAt":starts + 3_600_000,"componentIds":ids}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+    }
+    let (_, admin) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(admin["maintenance"].as_array().unwrap().len(), 3);
+    let (status, public) = anonymous
+        .request("GET", "public/status/northstar", json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    let titles: Vec<&str> = public["maintenance"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Every target", "Both targets"]);
+    assert_eq!(public["maintenance"][0]["componentIds"], json!([]));
+    assert_eq!(
+        public["maintenance"][1]["componentIds"],
+        json!([server_component])
+    );
+    assert!(!public.to_string().contains(&machine_component));
+    assert!(!public.to_string().contains("Hidden only"));
 }

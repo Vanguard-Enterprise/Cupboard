@@ -44,6 +44,9 @@ const DEFAULT_ACCENT: &str = "#7cb58d";
 /// URL targets are probed about once a minute; older results count as unknown.
 const URL_INTERVAL_MS: i64 = 60_000;
 const URL_STALE_MS: i64 = 5 * 60_000;
+/// Game servers are checked about every 30 seconds. A reading older than this
+/// is no longer the server's state, so it reads as unknown, not as healthy.
+const SERVER_STALE_MS: i64 = 5 * 60_000;
 const URL_SLOW_MS: u128 = 3_000;
 const URL_PORTS: [u16; 4] = [80, 443, 8080, 8443];
 const READ: &str = "SELECT id FROM organizations WHERE id=$1 FOR SHARE";
@@ -289,7 +292,7 @@ async fn components_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Comp
            WHERE mc.organization_id=c.organization_id AND t->>'id'=c.tag_id AND c.tag_id<>'' LIMIT 1),'') AS group_name,\
          CASE c.kind WHEN 'server' THEN s.name WHEN 'machine' THEN m.name ELSE c.source_id END AS source_name,\
          CASE c.kind WHEN 'server' THEN CASE \
-           WHEN s.id IS NULL OR s.checked_at IS NULL THEN 'unknown' \
+           WHEN s.id IS NULL OR s.checked_at IS NULL OR s.checked_at < $4 THEN 'unknown' \
            WHEN s.rcon_status='connected' AND s.a2s_status='connected' THEN 'operational' \
            WHEN s.rcon_status='connected' OR s.a2s_status='connected' THEN 'degraded' \
            ELSE 'down' END \
@@ -315,6 +318,7 @@ async fn components_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Comp
     .bind(org)
     .bind(now() - STALE_MS)
     .bind(now() - URL_STALE_MS)
+    .bind(now() - SERVER_STALE_MS)
     .fetch_all(conn)
     .await?)
 }
@@ -402,6 +406,55 @@ struct PublicStatus {
 }
 const RECENT_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
+/// Maintenance visitors may see: open, upcoming, or ended within a week, and
+/// touching at least one public target (an empty list means every target).
+/// Hidden target ids are removed, and a window that only affects hidden or
+/// removed targets is not published at all, so it cannot reveal them. The
+/// settings preview applies the same rule (`publicMaintenance` in
+/// `src/lib/status-page.ts`).
+fn public_windows(
+    windows: Vec<Maintenance>,
+    public_ids: &[&str],
+    now: i64,
+) -> Vec<PublicMaintenance> {
+    windows
+        .into_iter()
+        .filter_map(|w| {
+            let ended = w.completed_at.map_or(w.ends_at, |at| at.min(w.ends_at));
+            if ended < now - RECENT_WINDOW_MS {
+                return None;
+            }
+            let ids: Vec<String> = w
+                .component_ids
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let visible: Vec<String> = ids
+                .iter()
+                .filter(|id| public_ids.contains(&id.as_str()))
+                .cloned()
+                .collect();
+            if !ids.is_empty() && visible.is_empty() {
+                return None;
+            }
+            Some(PublicMaintenance {
+                id: w.id,
+                title: w.title,
+                message: w.message,
+                starts_at: w.starts_at,
+                ends_at: w.ends_at,
+                completed_at: w.completed_at,
+                component_ids: Value::from(visible),
+            })
+        })
+        .collect()
+}
+
 async fn public_read(
     State(pool): State<PgPool>,
     Path(slug): Path<String>,
@@ -428,7 +481,7 @@ async fn public_read(
         .await?;
     let branding = branding(&mut conn, &org, &settings).await?;
     let now = now();
-    let components = components_of(&mut conn, &org)
+    let components: Vec<PublicComponent> = components_of(&mut conn, &org)
         .await?
         .into_iter()
         .filter(|c| c.public)
@@ -440,20 +493,8 @@ async fn public_read(
             observed_at: c.observed_at,
         })
         .collect();
-    let maintenance = maintenance_of(&mut conn, &org)
-        .await?
-        .into_iter()
-        .filter(|w| w.ends_at >= now - RECENT_WINDOW_MS)
-        .map(|w| PublicMaintenance {
-            id: w.id,
-            title: w.title,
-            message: w.message,
-            starts_at: w.starts_at,
-            ends_at: w.ends_at,
-            completed_at: w.completed_at,
-            component_ids: w.component_ids,
-        })
-        .collect();
+    let public_ids: Vec<&str> = components.iter().map(|c| c.id.as_str()).collect();
+    let maintenance = public_windows(maintenance_of(&mut conn, &org).await?, &public_ids, now);
     Ok(Json(PublicStatus {
         name: settings.name,
         announcement: settings.announcement,
@@ -911,6 +952,43 @@ async fn public_logo(State(pool): State<PgPool>, Path(slug): Path<String>) -> Ap
     Ok(crate::logos::image_response(data))
 }
 
+/// The page revision a logo write expects. Logo writes are page edits: they
+/// check and advance the same revision as a save, so two editors can't
+/// replace or remove each other's logo silently.
+fn logo_revision(headers: &HeaderMap) -> ApiResult<i64> {
+    headers
+        .get("x-cupboard-logo-revision")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .ok_or_else(|| invalid("Reload the status page before changing the logo."))
+}
+/// Checks the expected revision under the caller's lock. A page that was never
+/// saved has no row (and no slug) yet, so its first write must be a page save.
+async fn check_logo_revision(
+    conn: &mut PgConnection,
+    ctx: &team::Context,
+    expected: i64,
+) -> ApiResult<()> {
+    let current = settings(conn, ctx).await?.revision;
+    if current == 0 {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Save the status page before changing its logo.",
+        ));
+    }
+    if current != expected {
+        return Err(conflict());
+    }
+    Ok(())
+}
+async fn advance_revision(conn: &mut PgConnection, org: &str) -> ApiResult<()> {
+    sqlx::query("UPDATE status_pages SET revision=revision+1 WHERE organization_id=$1")
+        .bind(org)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Logos are decoded and re-encoded as a small PNG before they are stored, so
 /// no uploaded bytes or metadata reach visitors.
 async fn upload_logo(
@@ -920,8 +998,11 @@ async fn upload_logo(
     request: Request,
 ) -> ApiResult<Json<StatusPage>> {
     let headers = request.headers().clone();
-    // Check access before reading the body, without holding the lock while decoding.
-    let (tx, _) = access(&pool, &auth, &session, &headers, READ, MANAGE).await?;
+    // Check access and the revision before reading the body, without holding
+    // the lock while decoding; both are checked again before the write.
+    let (mut tx, ctx) = access(&pool, &auth, &session, &headers, READ, MANAGE).await?;
+    let revision = logo_revision(&headers)?;
+    check_logo_revision(&mut tx, &ctx, revision).await?;
     tx.commit().await?;
     let data = tokio::time::timeout(Duration::from_secs(45), crate::logos::normalized(request))
         .await
@@ -935,28 +1016,43 @@ async fn upload_logo(
         return Err(invalid("Choose a simpler logo image."));
     }
     let (mut tx, ctx) = access(&pool, &auth, &session, &headers, WRITE, MANAGE).await?;
+    check_logo_revision(&mut tx, &ctx, revision).await?;
     sqlx::query("INSERT INTO status_page_logos(organization_id,version,data) VALUES($1,$2,$3) ON CONFLICT(organization_id) DO UPDATE SET version=GREATEST(EXCLUDED.version,status_page_logos.version+1),data=EXCLUDED.data")
         .bind(&ctx.organization_id)
         .bind(now())
         .bind(&data)
         .execute(&mut *tx)
         .await?;
+    advance_revision(&mut tx, &ctx.organization_id).await?;
     let page = state(&mut tx, &ctx).await?;
     tx.commit().await?;
     Ok(Json(page))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveLogoInput {
+    revision: i64,
+}
 async fn remove_logo(
     State(pool): State<PgPool>,
     auth: AuthSession,
     session: Session,
     headers: HeaderMap,
+    input: Result<Json<RemoveLogoInput>, axum::extract::rejection::JsonRejection>,
 ) -> ApiResult<Json<StatusPage>> {
     let (mut tx, ctx) = access(&pool, &auth, &session, &headers, WRITE, MANAGE).await?;
-    sqlx::query("DELETE FROM status_page_logos WHERE organization_id=$1")
+    let Json(input) =
+        input.map_err(|_| invalid("Reload the status page before changing the logo."))?;
+    check_logo_revision(&mut tx, &ctx, input.revision).await?;
+    let removed = sqlx::query("DELETE FROM status_page_logos WHERE organization_id=$1")
         .bind(&ctx.organization_id)
         .execute(&mut *tx)
-        .await?;
+        .await?
+        .rows_affected();
+    if removed > 0 {
+        advance_revision(&mut tx, &ctx.organization_id).await?;
+    }
     let page = state(&mut tx, &ctx).await?;
     tx.commit().await?;
     Ok(Json(page))
@@ -1200,6 +1296,55 @@ mod tests {
             Some("The address resolves to a private or reserved network.")
         );
         server.abort();
+    }
+
+    #[test]
+    fn public_maintenance_never_reveals_hidden_targets() {
+        let now = 10 * RECENT_WINDOW_MS;
+        let window = |id: &str, ids: Value, ends_at: i64, completed_at: Option<i64>| Maintenance {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            message: String::new(),
+            starts_at: ends_at - 3_600_000,
+            ends_at,
+            completed_at,
+            component_ids: ids,
+            created_at: 0,
+        };
+        let shown = public_windows(
+            vec![
+                window("everything", serde_json::json!([]), now + 1, None),
+                window("mixed", serde_json::json!(["eu", "hidden"]), now + 1, None),
+                window("hidden-only", serde_json::json!(["hidden"]), now + 1, None),
+                window("removed", serde_json::json!(["deleted"]), now + 1, None),
+                window(
+                    "old",
+                    serde_json::json!(["eu"]),
+                    now - RECENT_WINDOW_MS - 1,
+                    None,
+                ),
+                window(
+                    "completed-long-ago",
+                    serde_json::json!(["eu"]),
+                    now + 1,
+                    Some(now - RECENT_WINDOW_MS - 1),
+                ),
+                window(
+                    "last-week",
+                    serde_json::json!(["eu"]),
+                    now - RECENT_WINDOW_MS,
+                    None,
+                ),
+            ],
+            &["eu", "us"],
+            now,
+        );
+        let ids: Vec<&str> = shown.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, ["everything", "mixed", "last-week"]);
+        assert_eq!(shown[0].component_ids, serde_json::json!([]));
+        assert_eq!(shown[1].component_ids, serde_json::json!(["eu"]));
+        let body = serde_json::to_string(&shown).unwrap();
+        assert!(!body.contains("hidden") && !body.contains("deleted"));
     }
 
     #[test]

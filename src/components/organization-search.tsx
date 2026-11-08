@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { SearchIcon } from "lucide-react";
 import {
   SidebarMenu,
@@ -25,6 +24,7 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 import { useOrganization } from "@/components/organization-provider";
+import { useGuardedNavigation } from "@/components/ui/unsaved-changes";
 import { organizationSearchEntries } from "@/lib/organization-profile";
 import {
   accessPath,
@@ -69,6 +69,18 @@ export function OrganizationSearchButton({
   );
 }
 
+/**
+ * Whether a modal layer other than this search is open: a confirmation such
+ * as the leave prompt, or any other modal dialog or sheet.
+ */
+function otherModalOpen() {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[role="alertdialog"][data-state="open"], [role="dialog"][data-state="open"]',
+    ),
+  ).some((layer) => !layer.closest("[data-organization-search]"));
+}
+
 export function OrganizationSearch({
   open,
   setOpen,
@@ -77,11 +89,20 @@ export function OrganizationSearch({
   setOpen: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   const { profile } = useOrganization();
-  const router = useRouter();
+  const guard = useGuardedNavigation();
+  // With unsaved edits, the leave prompt waits until this menu has closed and
+  // returned focus, so Keep editing lands back where the operator was.
+  const afterClose = useRef<string | null>(null);
+  // The menu has no trigger to return to (Ctrl+K opens it from anywhere), so
+  // closing puts focus back on whatever the operator was using.
+  const returnTo = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        // A confirmation or another modal dialog owns focus until it is
+        // answered, so the shortcut waits instead of stacking over it.
+        if (otherModalOpen()) return;
         setOpen((value) => !value);
       }
     };
@@ -90,14 +111,34 @@ export function OrganizationSearch({
   }, [setOpen]);
   function navigate(href: string) {
     setOpen(false);
-    router.push(href);
+    if (guard.dirty) afterClose.current = href;
+    else guard.push(href);
   }
   return (
     <>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
+          data-organization-search=""
           className="overflow-hidden p-0 sm:max-w-xl"
           showCloseButton={false}
+          onOpenAutoFocus={() => {
+            returnTo.current =
+              document.activeElement instanceof HTMLElement &&
+              document.activeElement !== document.body
+                ? document.activeElement
+                : null;
+          }}
+          onCloseAutoFocus={(event) => {
+            const target = returnTo.current;
+            returnTo.current = null;
+            if (target?.isConnected) {
+              event.preventDefault();
+              target.focus({ preventScroll: true });
+            }
+            const href = afterClose.current;
+            afterClose.current = null;
+            if (href) window.setTimeout(() => guard.push(href), 0);
+          }}
         >
           <DialogHeader className="sr-only">
             <DialogTitle>Search organization</DialogTitle>

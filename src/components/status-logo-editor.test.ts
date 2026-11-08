@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampZoom,
+  describeCrop,
   drawLogo,
   frameAspect,
   initialEdit,
@@ -135,5 +136,34 @@ describe("logo snapping", () => {
       y: -0.1,
       guides: { x: null, y: null },
     });
+  });
+});
+
+describe("logo crop description", () => {
+  const half = { ...initialEdit, zoom: 0.5 };
+
+  it("says a fresh logo is centered and whole", () => {
+    expect(describeCrop(wide, initialEdit)).toBe(
+      "Logo centered across, centered up and down, at 100% zoom. Lined up with the frame's left, right, top, and bottom edges. The whole logo is inside the frame.",
+    );
+  });
+
+  it("gives offsets as shares of the frame and names the edges it meets", () => {
+    // The 2:1 frame is 2 heights wide: x = -0.5 is 25% of its width.
+    expect(describeCrop(wide, { ...half, x: -0.5, y: 0.25 })).toBe(
+      "Logo 25% left of center, 25% below center, at 50% zoom. Lined up with the frame's left and bottom edges. The whole logo is inside the frame.",
+    );
+    expect(describeCrop(wide, { ...half, x: 0.2, y: -0.1 })).toBe(
+      "Logo 10% right of center, 10% above center, at 50% zoom. The whole logo is inside the frame.",
+    );
+  });
+
+  it("warns when the frame cuts part of the logo off", () => {
+    expect(describeCrop(wide, { ...initialEdit, zoom: 1.5 })).toMatch(
+      /at 150% zoom\. Part of the logo is outside the frame and will be cut off\.$/,
+    );
+    expect(describeCrop(wide, { ...half, x: 0.8 })).toMatch(
+      /40% right of center.*will be cut off\.$/,
+    );
   });
 });
