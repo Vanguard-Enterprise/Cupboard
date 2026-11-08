@@ -24,6 +24,8 @@ use tower_sessions::Session;
 
 const MAX_COMPONENTS: usize = 50;
 const MAX_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const MAX_OPEN_WINDOWS: i64 = 100;
+const MAX_FINISHED_WINDOWS: i64 = 100;
 /// Matches the machine inventory's reporting threshold.
 const STALE_MS: i64 = 90_000;
 const VIEW: &str = "infrastructure.view";
@@ -338,18 +340,35 @@ async fn tags_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Tag>> {
             .await?;
     serde_json::from_value(value).map_err(|_| internal())
 }
-async fn maintenance_of(conn: &mut PgConnection, org: &str) -> ApiResult<Vec<Maintenance>> {
-    Ok(sqlx::query_as("SELECT id,title,message,starts_at,ends_at,completed_at,component_ids,created_at FROM status_page_maintenance WHERE organization_id=$1 ORDER BY starts_at DESC,id LIMIT 100")
-        .bind(org)
-        .fetch_all(conn)
-        .await?)
+/// Every open or upcoming window, plus the most recent finished ones. Open
+/// windows are never cut by the history limit, so active maintenance always
+/// reaches the page; creation keeps their number bounded.
+async fn maintenance_of(
+    conn: &mut PgConnection,
+    org: &str,
+    now: i64,
+) -> ApiResult<Vec<Maintenance>> {
+    Ok(sqlx::query_as(
+        "(SELECT id,title,message,starts_at,ends_at,completed_at,component_ids,created_at FROM status_page_maintenance \
+           WHERE organization_id=$1 AND completed_at IS NULL AND ends_at>$2) \
+         UNION ALL \
+         (SELECT id,title,message,starts_at,ends_at,completed_at,component_ids,created_at FROM status_page_maintenance \
+           WHERE organization_id=$1 AND (completed_at IS NOT NULL OR ends_at<=$2) \
+           ORDER BY starts_at DESC,id LIMIT $3) \
+         ORDER BY starts_at DESC,id",
+    )
+    .bind(org)
+    .bind(now)
+    .bind(MAX_FINISHED_WINDOWS)
+    .fetch_all(conn)
+    .await?)
 }
 async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<StatusPage> {
     let org = &ctx.organization_id;
     let settings = settings(conn, ctx).await?;
     let branding = branding(conn, org, &settings).await?;
     let components = components_of(conn, org).await?;
-    let maintenance = maintenance_of(conn, org).await?;
+    let maintenance = maintenance_of(conn, org, now()).await?;
     let sources = sqlx::query_as("SELECT id,name,kind,tags FROM (SELECT id,name,'server' AS kind,'[]'::jsonb AS tags FROM servers WHERE organization_id=$1 UNION ALL SELECT id,name,'machine',tags FROM machines WHERE organization_id=$1) AS source ORDER BY kind,lower(name),id")
         .bind(org)
         .fetch_all(&mut *conn)
@@ -494,7 +513,11 @@ async fn public_read(
         })
         .collect();
     let public_ids: Vec<&str> = components.iter().map(|c| c.id.as_str()).collect();
-    let maintenance = public_windows(maintenance_of(&mut conn, &org).await?, &public_ids, now);
+    let maintenance = public_windows(
+        maintenance_of(&mut conn, &org, now).await?,
+        &public_ids,
+        now,
+    );
     Ok(Json(PublicStatus {
         name: settings.name,
         announcement: settings.announcement,
@@ -764,9 +787,11 @@ struct MaintenanceValues {
     message: String,
     component_ids: Value,
 }
+/// Checks a window being created (`id` is `None`) or edited.
 async fn maintenance_values(
     conn: &mut PgConnection,
     org: &str,
+    id: Option<&str>,
     input: &MaintenanceInput,
 ) -> ApiResult<MaintenanceValues> {
     let title = bounded(&input.title, 120, "Enter a title of 1 to 120 characters.")?;
@@ -783,6 +808,24 @@ async fn maintenance_values(
     }
     if input.ends_at - input.starts_at > MAX_WINDOW_MS || input.starts_at < 0 {
         return Err(invalid("A maintenance window can last up to 30 days."));
+    }
+    let now = now();
+    if input.ends_at > now {
+        // Every open window is always listed, so their number is bounded here.
+        // Editing a window that is already open never adds one.
+        let (others, already_open): (i64, bool) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE id IS DISTINCT FROM $3),COALESCE(bool_or(id=$3),false) FROM status_page_maintenance WHERE organization_id=$1 AND completed_at IS NULL AND ends_at>$2",
+        )
+        .bind(org)
+        .bind(now)
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?;
+        if !already_open && others >= MAX_OPEN_WINDOWS {
+            return Err(invalid(
+                "A status page can hold up to 100 open or upcoming maintenance windows.",
+            ));
+        }
     }
     let mut ids = input.component_ids.clone();
     ids.sort();
@@ -814,7 +857,7 @@ async fn create_maintenance(
     let (mut tx, ctx) = access(&pool, &auth, &session, &headers, WRITE, MANAGE).await?;
     let org = ctx.organization_id.clone();
     let Json(input) = input.map_err(|_| invalid("Enter valid maintenance details."))?;
-    let values = maintenance_values(&mut tx, &org, &input).await?;
+    let values = maintenance_values(&mut tx, &org, None, &input).await?;
     sqlx::query("INSERT INTO status_page_maintenance(organization_id,id,title,message,starts_at,ends_at,component_ids,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
         .bind(&org)
         .bind(uuid::Uuid::new_v4().to_string())
@@ -842,7 +885,7 @@ async fn update_maintenance(
     let (mut tx, ctx) = access(&pool, &auth, &session, &headers, WRITE, MANAGE).await?;
     let org = ctx.organization_id.clone();
     let Json(input) = input.map_err(|_| invalid("Enter valid maintenance details."))?;
-    let values = maintenance_values(&mut tx, &org, &input).await?;
+    let values = maintenance_values(&mut tx, &org, Some(&id), &input).await?;
     let changed = sqlx::query("UPDATE status_page_maintenance SET title=$3,message=$4,starts_at=$5,ends_at=$6,component_ids=$7 WHERE organization_id=$1 AND id=$2 AND completed_at IS NULL")
         .bind(&org)
         .bind(&id)
@@ -978,6 +1021,30 @@ async fn check_logo_revision(
     }
     if current != expected {
         return Err(conflict());
+    }
+    Ok(())
+}
+/// Drops the targets that show a server or machine being removed. The page
+/// revision moves when any were dropped, so an editor still holding them is
+/// asked to reload instead of saving a source that no longer exists. Callers
+/// hold at least a share lock on the organization row, which a page save's
+/// update lock waits for.
+pub(crate) async fn forget_source(
+    conn: &mut PgConnection,
+    org: &str,
+    kind: &str,
+    source_id: &str,
+) -> ApiResult<()> {
+    let dropped = sqlx::query(
+        "DELETE FROM status_page_components WHERE organization_id=$1 AND kind=$2 AND source_id=$3",
+    )
+    .bind(org)
+    .bind(kind)
+    .bind(source_id)
+    .execute(&mut *conn)
+    .await?;
+    if dropped.rows_affected() > 0 {
+        advance_revision(conn, org).await?;
     }
     Ok(())
 }

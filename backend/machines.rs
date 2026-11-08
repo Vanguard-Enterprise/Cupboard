@@ -255,10 +255,11 @@ async fn remove(
         Some(false) => {}
     }
     sqlx::query("DELETE FROM machines WHERE organization_id=$1 AND id=$2")
-        .bind(org)
-        .bind(id)
+        .bind(&org)
+        .bind(&id)
         .execute(&mut *tx)
         .await?;
+    crate::status_page::forget_source(&mut tx, &org, "machine", &id).await?;
     tx.commit().await?;
     Ok(Json(serde_json::json!({"removed":true})))
 }

@@ -6746,3 +6746,240 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert!(!public.to_string().contains(&machine_component));
     assert!(!public.to_string().contains("Hidden only"));
 }
+
+fn status_page_save(revision: Value, slug: &str, published: bool, components: Value) -> Value {
+    json!({"revision":revision,"name":"Northstar status","slug":slug,"published":published,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components})
+}
+
+async fn status_page_app(pool: &sqlx::PgPool) -> Router {
+    router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(
+        crate::secrets::SecretKey::parse(&"ef".repeat(32)).unwrap(),
+    ))
+}
+
+#[tokio::test]
+async fn removing_a_machine_drops_its_status_target_so_live_actions_still_save() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    owner
+        .signup(&format!("status-removal-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-removal-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let target = |kind: &str, source: &str| json!({"id":null,"name":"EU host","kind":kind,"sourceId":source,"tagId":"","public":true});
+
+    let mut machines = Vec::new();
+    for client in [&mut owner, &mut other] {
+        let (status, machine) = client.request("POST", "machines", machine_input()).await;
+        assert_eq!(status, StatusCode::OK, "{machine}");
+        let machine_id = machine["id"].as_str().unwrap().to_owned();
+        let (status, page) = client
+            .request(
+                "POST",
+                "status-page",
+                status_page_save(
+                    json!(0),
+                    &format!("removal-{}-{}", machines.len(), &suffix[..8]),
+                    true,
+                    json!([
+                        target("machine", &machine_id),
+                        target("url", "https://status.example.com/health")
+                    ]),
+                ),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["revision"], 1);
+        machines.push(machine_id);
+    }
+
+    let (status, removed) = owner
+        .request(
+            "POST",
+            &format!("machines/{}/remove", machines[0]),
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+
+    // The removed machine's target goes with it, and the revision moves so an
+    // editor holding the old list is asked to reload instead of resaving it.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["revision"], 2);
+    let kinds: Vec<&str> = page["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["url"]);
+    let (status, stale) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(json!(1), "anything", false, json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+
+    // Unpublishing resubmits every saved target, as the overview does.
+    let mut saved = status_page_save(
+        page["revision"].clone(),
+        page["slug"].as_str().unwrap(),
+        false,
+        page["components"].clone(),
+    );
+    saved["components"][0]
+        .as_object_mut()
+        .unwrap()
+        .retain(|key, _| {
+            ["id", "name", "kind", "sourceId", "tagId", "public"].contains(&key.as_str())
+        });
+    let (status, unpublished) = owner.request("POST", "status-page", saved).await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    assert_eq!(unpublished["published"], false);
+
+    // Another organization's page keeps its own machine target.
+    let (status, untouched) = other.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{untouched}");
+    assert_eq!(untouched["revision"], 1);
+    assert_eq!(untouched["components"].as_array().unwrap().len(), 2);
+    assert_eq!(untouched["components"][0]["sourceId"], machines[1]);
+}
+
+#[tokio::test]
+async fn active_maintenance_survives_many_scheduled_and_past_windows() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let slug = format!("windows-{}", &suffix[..8]);
+    let mut owner = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    owner
+        .signup(&format!("status-windows-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    let org = owner.organization.clone();
+    let (status, page) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(json!(0), &slug, true, json!([])),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let hour = 3_600_000;
+    let day = 24 * hour;
+    let window = |title: &str, starts_at: i64| json!({"title":title,"message":"","startsAt":starts_at,"endsAt":starts_at + hour,"componentIds":[]});
+    let (status, active) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window("Active now", now - 60_000),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{active}");
+    let active_id = active["maintenance"][0]["id"].as_str().unwrap().to_owned();
+    // A hundred later windows and a long history of finished ones, as an
+    // organization could save before the open-window limit existed.
+    sqlx::query("INSERT INTO status_page_maintenance(organization_id,id,title,starts_at,ends_at,created_at) SELECT $1,gen_random_uuid()::text,'Upcoming '||n,$2+n*$3,$2+n*$3+$4,0 FROM generate_series(1,100) AS n")
+        .bind(&org)
+        .bind(now)
+        .bind(day)
+        .bind(hour)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO status_page_maintenance(organization_id,id,title,starts_at,ends_at,completed_at,created_at) SELECT $1,gen_random_uuid()::text,'Past '||n,$2-n*$3,$2-n*$3+$4,CASE WHEN n%2=0 THEN $2-n*$3+$4 END,0 FROM generate_series(1,150) AS n")
+        .bind(&org)
+        .bind(now)
+        .bind(hour * 2)
+        .bind(hour)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Every open window is listed, plus the hundred most recent finished ones.
+    let (status, page) = owner.request("GET", "status-page", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let windows = page["maintenance"].as_array().unwrap();
+    assert!(windows.iter().any(|w| w["id"] == active_id.as_str()));
+    let titled = |prefix: &str| {
+        windows
+            .iter()
+            .filter(|w| w["title"].as_str().unwrap().starts_with(prefix))
+            .count()
+    };
+    assert_eq!((titled("Upcoming "), titled("Past ")), (100, 100));
+    assert_eq!(windows.len(), 201);
+    assert!(windows.iter().any(|w| w["title"] == "Past 1"));
+    assert!(!windows.iter().any(|w| w["title"] == "Past 101"));
+
+    // New open windows are refused past the limit, so the list stays bounded.
+    let (status, refused) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window("Upcoming 101", now + 101 * day),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"],
+        "A status page can hold up to 100 open or upcoming maintenance windows."
+    );
+    // Editing a window that is already open does not count it twice.
+    let (status, edited) = owner
+        .request(
+            "POST",
+            &format!("status-page/maintenance/{active_id}"),
+            window("Active now", now - 30_000),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    // A finished window can still be recorded after the fact.
+    let (status, recorded) = owner
+        .request(
+            "POST",
+            "status-page/maintenance",
+            window("Recorded late", now - 10 * hour),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recorded}");
+
+    let (status, public) = anonymous
+        .request("GET", &format!("public/status/{slug}"), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    assert!(
+        public["maintenance"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["id"] == active_id.as_str()),
+        "{public}"
+    );
+}
