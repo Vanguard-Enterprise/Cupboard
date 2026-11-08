@@ -310,13 +310,19 @@ const draftLabels: Partial<Record<keyof PageDraft, string>> = {
   poweredBy: "Powered by Cupboard",
 };
 
-function sameUrl(a: string, b: string) {
+/**
+ * An address as the server saves it: parsed and serialized by the URL
+ * standard, so "https://example.com" and "https://example.com/" are one target.
+ */
+function canonicalUrl(value: string) {
   try {
-    return new URL(a.trim()).href === new URL(b.trim()).href;
+    return new URL(value.trim()).href;
   } catch {
-    return a.trim() === b.trim();
+    return value.trim();
   }
 }
+
+const sameUrl = (a: string, b: string) => canonicalUrl(a) === canonicalUrl(b);
 
 function validHttps(value: string) {
   try {
@@ -349,7 +355,7 @@ function withScheme(value: string) {
 }
 
 const componentKey = (c: { kind: ComponentKind; sourceId: string }) =>
-  `${c.kind}:${c.sourceId}`;
+  `${c.kind}:${c.kind === "url" ? canonicalUrl(c.sourceId) : c.sourceId}`;
 
 const sameJson = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);

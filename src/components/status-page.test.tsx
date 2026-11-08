@@ -2733,6 +2733,43 @@ describe("Status page admin data safety", () => {
     expect(quiet.overlaps).toEqual([]);
   });
 
+  it("matches a URL target to its saved, normalized address when rebasing", () => {
+    const base = { ...draftOf(live), components: [] };
+    const typed = {
+      id: null,
+      name: "Forum",
+      kind: "url" as const,
+      sourceId: "https://example.com",
+      tagId: "",
+      public: true,
+    };
+    const sent = { ...base, components: [typed] };
+    // Renamed and grouped while Save was pending.
+    const mine = {
+      ...base,
+      components: [{ ...typed, name: "Community forum", tagId: "wings" }],
+    };
+    // The server saves the address the way it parses it.
+    const saved = {
+      ...base,
+      components: [
+        { ...typed, id: "c-forum", sourceId: "https://example.com/" },
+      ],
+    };
+    const { draft, targets } = rebaseDraft(sent, mine, saved);
+    expect(draft.components).toEqual([
+      {
+        id: "c-forum",
+        name: "Community forum",
+        kind: "url",
+        sourceId: "https://example.com/",
+        tagId: "wings",
+        public: true,
+      },
+    ]);
+    expect(targets).toEqual([]);
+  });
+
   it("names a target both sessions added with different choices (codex D-07)", () => {
     const base = { ...draftOf(live), components: [] };
     const [eu] = draftOf(live).components;
