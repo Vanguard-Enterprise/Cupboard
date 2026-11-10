@@ -109,7 +109,6 @@ export function FileShareDialog({
         <Label htmlFor={id}>{label}</Label>
         <div className="flex gap-2">
           <Input
-            className="h-11 md:h-9"
             id={id}
             value={value}
             readOnly
@@ -117,7 +116,6 @@ export function FileShareDialog({
           />
           <Button
             variant="outline"
-            className="h-11 md:h-9"
             disabled={!value}
             onClick={() => copyLink(value)}
           >
@@ -171,7 +169,7 @@ export function FileShareDialog({
             <div className="space-y-2">
               <Label htmlFor="share-expiry">Expires after</Label>
               <Select value={days} onValueChange={setDays} disabled={busy}>
-                <SelectTrigger id="share-expiry" className="h-11 md:h-9">
+                <SelectTrigger id="share-expiry">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -183,7 +181,6 @@ export function FileShareDialog({
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
-                className="h-11 md:h-9"
                 disabled={busy || !loaded}
                 onClick={() => publicAction(false)}
               >
@@ -196,7 +193,6 @@ export function FileShareDialog({
               {expiresAt && (
                 <Button
                   variant="destructive"
-                  className="h-11 md:h-9"
                   disabled={busy}
                   onClick={() => publicAction(true)}
                 >

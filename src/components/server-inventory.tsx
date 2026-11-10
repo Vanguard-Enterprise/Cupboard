@@ -390,7 +390,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                 }}
               >
                 <DialogTrigger asChild>
-                  <Button className="min-h-11">
+                  <Button>
                     <PlusIcon className="size-4" />
                     Add server
                   </Button>
@@ -423,7 +423,6 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                           <Input
                             id={field}
                             name={field}
-                            className="min-h-11"
                             type={
                               field === "rconPassword" ? "password" : "text"
                             }
@@ -477,7 +476,6 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                       <Button
                         type="button"
                         variant="outline"
-                        className="min-h-11"
                         disabled={saving}
                         onClick={() => {
                           setOpen(false);
@@ -488,7 +486,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                       >
                         Cancel
                       </Button>
-                      <Button className="min-h-11" disabled={saving}>
+                      <Button disabled={saving}>
                         {saving ? "Adding server..." : "Add server"}
                       </Button>
                     </div>
@@ -501,11 +499,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
       )}
       {selected?.panelServerUuid && organization && (
         <div className="space-y-5">
-          <Button
-            variant="ghost"
-            className="min-h-11"
-            onClick={() => setSelected(null)}
-          >
+          <Button variant="ghost" onClick={() => setSelected(null)}>
             <ArrowLeftIcon className="size-4" />
             Back to servers
           </Button>
@@ -522,11 +516,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
       )}
       {selected && !selected.panelServerUuid && (
         <div className="space-y-5">
-          <Button
-            variant="ghost"
-            className="min-h-11"
-            onClick={() => setSelected(null)}
-          >
+          <Button variant="ghost" onClick={() => setSelected(null)}>
             <ArrowLeftIcon className="size-4" />
             Back to servers
           </Button>
@@ -597,7 +587,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                 <div className="relative w-full md:w-72 lg:mr-auto">
                   <SearchIcon className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
                   <Input
-                    className="min-h-11 pl-9"
+                    className="pl-9"
                     aria-label="Search servers"
                     placeholder="Search servers..."
                     value={query}
@@ -606,7 +596,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                 </div>
                 <Select value={filter} onValueChange={setFilter}>
                   <SelectTrigger
-                    className="min-h-11 flex-1 sm:w-44 sm:flex-none"
+                    className="flex-1 sm:w-44 sm:flex-none"
                     aria-label="Server status"
                   >
                     <SelectValue />
@@ -640,7 +630,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                 </Select>
                 <Select value={provider} onValueChange={setProvider}>
                   <SelectTrigger
-                    className="min-h-11 flex-1 sm:w-44 sm:flex-none"
+                    className="flex-1 sm:w-44 sm:flex-none"
                     aria-label="Provider filter"
                   >
                     <SelectValue />
@@ -669,7 +659,6 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                   </p>
                   <Button
                     variant="outline"
-                    className="min-h-11"
                     onClick={() => {
                       setQuery("");
                       setFilter("all");
@@ -869,7 +858,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="min-h-11 min-w-11"
+                                    className="min-w-11"
                                     aria-label={`Actions for ${server.name}`}
                                   >
                                     <MoreHorizontalIcon />

@@ -125,7 +125,6 @@ export function AccountForm({
               <FieldLabel htmlFor="name">Name</FieldLabel>
               <Input
                 id="name"
-                className="h-11"
                 name="name"
                 autoComplete="name"
                 required
@@ -146,7 +145,6 @@ export function AccountForm({
           <FieldLabel htmlFor="email">Email</FieldLabel>
           <Input
             id="email"
-            className="h-11"
             name="email"
             type="email"
             autoComplete="email"
@@ -166,7 +164,6 @@ export function AccountForm({
           <FieldLabel htmlFor="password">Password</FieldLabel>
           <Input
             id="password"
-            className="h-11"
             name="password"
             type="password"
             autoComplete={signup ? "new-password" : "current-password"}
@@ -198,7 +195,6 @@ export function AccountForm({
             <FieldLabel htmlFor="confirm-password">Confirm password</FieldLabel>
             <Input
               id="confirm-password"
-              className="h-11"
               name="confirm-password"
               type="password"
               autoComplete="new-password"
@@ -224,7 +220,7 @@ export function AccountForm({
           </Field>
         )}
         <Field>
-          <Button type="submit" disabled={busy} className="h-11">
+          <Button type="submit" disabled={busy}>
             {busy
               ? signup
                 ? "Creating account..."

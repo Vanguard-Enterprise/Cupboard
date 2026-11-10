@@ -156,7 +156,7 @@
   border-radius: 12px 12px 0 0;
   background: var(--background);
   text-align: left;
-  box-shadow: 0 15px 50px #0004;
+  box-shadow: 0 15px 50px color-mix(in srgb, black 27%, transparent);
 }
 .sceneSidebar {
   display: flex;
@@ -395,7 +395,7 @@
   border: 1px solid var(--border-strong);
   border-radius: 12px;
   background: var(--background);
-  box-shadow: 0 20px 80px #0005;
+  box-shadow: 0 20px 80px color-mix(in srgb, black 33%, transparent);
 }
 .setupCard > img {
   margin: 0 auto 20px;

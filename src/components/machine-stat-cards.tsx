@@ -199,7 +199,7 @@ export function MachineStatCards({
                       ))}
                     </AreaChart>
                   </ChartContainer>
-                  <div className="flex justify-between px-4 pb-4 text-[10px] tabular-nums text-muted-foreground">
+                  <div className="flex justify-between px-4 pb-4 text-2xs tabular-nums text-muted-foreground">
                     <span>{timeLabel(start)}</span>
                     <span>{timeLabel(end)}</span>
                   </div>

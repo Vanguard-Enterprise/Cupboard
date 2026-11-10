@@ -114,14 +114,13 @@ it("creates a real issue-named worktree and leaves the source working tree untou
     [
       new URL("./workflow.mjs", import.meta.url).pathname,
       "worktree",
-      "CUP-34",
       "chore",
       "workflow",
       "main",
     ],
     { cwd: source },
   );
-  const target = join(source, ".worktrees/chore-cup-34-workflow");
+  const target = join(source, ".worktrees/chore-workflow");
   expect(readFileSync(join(target, "file"), "utf8")).toBe("original");
   expect(readFileSync(join(source, "file"), "utf8")).toBe("uncommitted");
   expect(
@@ -129,7 +128,7 @@ it("creates a real issue-named worktree and leaves the source working tree untou
       cwd: target,
       encoding: "utf8",
     }).trim(),
-  ).toBe("chore/cup-34-workflow");
-  expect(() => worktreeBranch("CUP-34", "codex", "workflow")).toThrow("Usage");
-  expect(() => worktreeBranch("CUP-34", "chore", "../bad")).toThrow("Usage");
+  ).toBe("chore/workflow");
+  expect(() => worktreeBranch("codex", "workflow")).toThrow("Usage");
+  expect(() => worktreeBranch("chore", "../bad")).toThrow("Usage");
 });

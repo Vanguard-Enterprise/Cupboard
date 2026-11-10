@@ -170,7 +170,7 @@ function AlertDetail({
       className="flex h-full min-w-0 flex-col outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     >
       <div className="border-b border-border px-4 py-2 xl:hidden">
-        <Button variant="ghost" onClick={onBack} className="min-h-11">
+        <Button variant="ghost" onClick={onBack}>
           <ArrowLeftIcon aria-hidden="true" /> Back to alerts
         </Button>
       </div>
@@ -264,7 +264,6 @@ function AlertDetail({
             type="button"
             variant={acknowledged ? "outline" : "default"}
             onClick={onToggleAcknowledged}
-            className="min-h-11 xl:min-h-10"
           >
             {acknowledged ? "Mark as needs review" : "Acknowledge alert"}
           </Button>
@@ -587,14 +586,14 @@ export function SecurityAlerts() {
             <TabsList
               aria-label="Alert status"
               variant="line"
-              className="h-auto min-h-11 w-full justify-start gap-0 p-0 sm:w-auto sm:gap-2"
+              className="h-auto w-full justify-start gap-0 p-0 sm:w-auto sm:gap-2"
             >
               {statusTabs.map((tab) => (
                 <TabsTrigger
                   key={tab.value}
                   value={tab.value}
                   ref={status === tab.value ? statusFilterRef : undefined}
-                  className="min-h-11 gap-1 px-1 text-xs sm:gap-1.5 sm:px-3 sm:text-sm data-[state=active]:text-foreground dark:data-[state=active]:text-foreground after:bg-primary motion-reduce:transition-none"
+                  className="gap-1 px-1 text-xs sm:gap-1.5 sm:px-3 sm:text-sm data-[state=active]:text-foreground dark:data-[state=active]:text-foreground after:bg-primary motion-reduce:transition-none"
                 >
                   {tab.label}{" "}
                   <span className="text-xs tabular-nums text-muted-foreground">
@@ -616,7 +615,7 @@ export function SecurityAlerts() {
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search by title, server, source or ID"
-                    className="h-11 pl-9 xl:h-10"
+                    className="pl-9"
                   />
                 </span>
               </label>
@@ -634,7 +633,7 @@ export function SecurityAlerts() {
                   }
                 >
                   <SelectTrigger
-                    className="w-full data-[size=default]:h-11 lg:w-40 xl:data-[size=default]:h-10"
+                    className="w-full lg:w-40"
                     aria-label="Filter by severity"
                     aria-describedby="severity-label"
                   >
@@ -673,7 +672,7 @@ export function SecurityAlerts() {
                   <SelectTrigger
                     aria-label="Filter by server"
                     aria-describedby="server-label"
-                    className="w-full data-[size=default]:h-11 lg:w-44 xl:data-[size=default]:h-10"
+                    className="w-full lg:w-44"
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -706,11 +705,7 @@ export function SecurityAlerts() {
                 Highest severity first
               </p>
               {hasFilters && (
-                <Button
-                  variant="ghost"
-                  onClick={clearFilters}
-                  className="min-h-11 xl:min-h-9"
-                >
+                <Button variant="ghost" onClick={clearFilters}>
                   Clear filters
                 </Button>
               )}
@@ -829,11 +824,7 @@ export function SecurityAlerts() {
                       </EmptyDescription>
                     </EmptyHeader>
                     {hasFilters ? (
-                      <Button
-                        variant="outline"
-                        onClick={clearFilters}
-                        className="min-h-11"
-                      >
+                      <Button variant="outline" onClick={clearFilters}>
                         Clear filters
                       </Button>
                     ) : status === "open" ? (
@@ -843,7 +834,6 @@ export function SecurityAlerts() {
                           pendingFocusTarget.current = { id: "status-filter" };
                           setStatus("acknowledged");
                         }}
-                        className="min-h-11"
                       >
                         View acknowledged alerts
                       </Button>

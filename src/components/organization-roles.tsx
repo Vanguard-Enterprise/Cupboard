@@ -175,7 +175,6 @@ function RoleFields({
             errorField === "name" ? "role-name-error" : undefined
           }
           disabled={editingSystemRole || lockPermissions}
-          className="h-11 sm:h-10"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
           autoFocus={!editingSystemRole}
         />
@@ -407,7 +406,7 @@ export function OrganizationRoles() {
       <Button
         variant="ghost"
         size="icon-sm"
-        className="size-11 touch-none cursor-grab active:cursor-grabbing md:size-8"
+        className="touch-none cursor-grab active:cursor-grabbing"
         aria-label={`Reorder ${role.name}`}
         title={
           canMove(role)
@@ -681,7 +680,6 @@ export function OrganizationRoles() {
           </h1>
         </div>
         <Button
-          className="h-11 sm:h-9"
           disabled={saving || !canManage}
           onClick={() => openRoleDialog()}
         >
@@ -723,7 +721,7 @@ export function OrganizationRoles() {
             >
               <SelectTrigger
                 aria-label="Sort roles"
-                className="h-11 w-full bg-input-background sm:w-48"
+                className="w-full bg-input-background sm:w-48"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -966,7 +964,6 @@ export function OrganizationRoles() {
                           <Button
                             variant="outline"
                             size="icon"
-                            className="size-11"
                             aria-label={`Manage ${role.name}`}
                           >
                             <MoreHorizontalIcon />
@@ -1025,7 +1022,7 @@ export function OrganizationRoles() {
               </p>
               <Button
                 variant="outline"
-                className="mt-4 h-11 sm:h-9"
+                className="mt-4"
                 onClick={() => setQuery("")}
               >
                 Clear search
@@ -1195,12 +1192,9 @@ export function OrganizationRoles() {
           />
           <DialogFooter className="sticky -bottom-6 border-t border-border bg-popover py-4">
             <DialogClose asChild>
-              <Button variant="outline" className="h-11 sm:h-9">
-                Cancel
-              </Button>
+              <Button variant="outline">Cancel</Button>
             </DialogClose>
             <Button
-              className="h-11 sm:h-9"
               disabled={
                 saving ||
                 Boolean(

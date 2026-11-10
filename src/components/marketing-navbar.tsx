@@ -105,7 +105,7 @@ export function MarketingNavbar() {
   return (
     <>
       {announcementOpen && (
-        <div className="relative flex min-h-11 items-center justify-center border-b border-border/50 bg-black px-14 py-2 text-center text-xs">
+        <div className="relative flex min-h-11 items-center justify-center border-b border-border/50 bg-background px-14 py-2 text-center text-xs">
           <Link
             href="/#changelog"
             className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
@@ -232,7 +232,7 @@ export function MarketingNavbar() {
             </Link>
             <Button
               asChild
-              className="h-11 rounded-full bg-foreground px-6 text-background hover:bg-foreground/90"
+              className="rounded-full bg-foreground px-6 text-background hover:bg-foreground/90"
             >
               <Link href="/signup">Get started</Link>
             </Button>
@@ -241,7 +241,7 @@ export function MarketingNavbar() {
             <SheetTrigger asChild>
               <Button
                 variant="ghost"
-                className="h-11 gap-2 rounded-full px-4 lg:hidden"
+                className="gap-2 rounded-full px-4 lg:hidden"
               >
                 <Menu aria-hidden="true" />
                 Menu
@@ -304,12 +304,12 @@ export function MarketingNavbar() {
                 ))}
                 <div className="mt-5 flex flex-col gap-2 border-t border-border pt-5">
                   <SheetClose asChild>
-                    <Button asChild variant="outline" className="h-11">
+                    <Button asChild variant="outline">
                       <Link href="/login">Sign in</Link>
                     </Button>
                   </SheetClose>
                   <SheetClose asChild>
-                    <Button asChild className="h-11">
+                    <Button asChild>
                       <Link href="/signup">Get started</Link>
                     </Button>
                   </SheetClose>

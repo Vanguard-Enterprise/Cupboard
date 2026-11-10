@@ -200,7 +200,6 @@ function UserFields({
           aria-describedby={
             errorField === "name" ? "team-user-name-error" : undefined
           }
-          className="h-11 sm:h-10"
           onChange={(event) => onChange({ ...draft, name: event.target.value })}
           autoFocus
         />
@@ -221,7 +220,6 @@ function UserFields({
           aria-describedby={
             errorField === "email" ? "team-user-email-error" : undefined
           }
-          className="h-11 sm:h-10"
           onChange={(event) =>
             onChange({ ...draft, email: event.target.value })
           }
@@ -294,7 +292,7 @@ function UserFields({
               <SelectTrigger
                 id="team-user-status"
                 aria-label="User status"
-                className="h-11 w-full bg-input-background sm:h-10"
+                className="w-full bg-input-background"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -462,7 +460,6 @@ export function OrganizationUsers() {
           <Button
             variant="ghost"
             size="icon"
-            className="size-11 sm:size-9"
             aria-label={`Access restriction for ${user.name}`}
           >
             <LockKeyholeIcon className="size-4 text-muted-foreground" />
@@ -646,7 +643,6 @@ export function OrganizationUsers() {
           </p>
         </div>
         <Button
-          className="h-11 sm:h-9"
           disabled={saving || !canManage}
           onClick={() => {
             clearStorageError();
@@ -676,7 +672,7 @@ export function OrganizationUsers() {
                 key={status}
                 value={status}
                 aria-label={`${status === "all" ? "All" : statusLabels[status]} ${status === "all" ? settings.users.length : settings.users.filter((user) => user.status === status).length}`}
-                className="min-h-11 px-3 data-[state=active]:text-primary dark:data-[state=active]:text-primary after:bg-primary"
+                className="px-3 data-[state=active]:text-primary dark:data-[state=active]:text-primary after:bg-primary"
               >
                 {status === "all" ? "All" : statusLabels[status]}
                 <span className="text-xs tabular-nums text-muted-foreground">
@@ -718,7 +714,7 @@ export function OrganizationUsers() {
                     <Button
                       type="button"
                       variant="outline"
-                      className="h-11 bg-input-background lg:h-9"
+                      className="bg-input-background"
                       aria-label={`Filter by role${roleFilters.size ? `, ${roleFilters.size} active` : ""}`}
                     >
                       <FilterIcon aria-hidden="true" />
@@ -772,7 +768,7 @@ export function OrganizationUsers() {
               >
                 <SelectTrigger
                   aria-label="Sort users"
-                  className="h-11 w-full bg-input-background sm:w-48 md:hidden"
+                  className="w-full bg-input-background sm:w-48 md:hidden"
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -804,7 +800,6 @@ export function OrganizationUsers() {
                     key={id}
                     variant="secondary"
                     size="sm"
-                    className="h-11 sm:h-8"
                     onClick={() => toggleRoleFilter(id)}
                     aria-label={`Remove ${rolesById.get(id)?.name ?? "unknown role"} filter`}
                   >
@@ -995,7 +990,6 @@ export function OrganizationUsers() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                className="size-11"
                                 aria-label={`Manage ${user.name}`}
                                 disabled={
                                   saving || !authority.canManageUser(user)
@@ -1050,7 +1044,7 @@ export function OrganizationUsers() {
                 </p>
                 <Button
                   variant="outline"
-                  className="mt-4 h-11 sm:h-9"
+                  className="mt-4"
                   onClick={() => {
                     setQuery("");
                     clearFilters();
@@ -1143,15 +1137,9 @@ export function OrganizationUsers() {
           />
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline" className="h-11 sm:h-9">
-                Cancel
-              </Button>
+              <Button variant="outline">Cancel</Button>
             </DialogClose>
-            <Button
-              className="h-11 sm:h-9"
-              disabled={saving}
-              onClick={createUser}
-            >
+            <Button disabled={saving} onClick={createUser}>
               {saving ? "Creating invitation..." : "Create invitation link"}
             </Button>
           </DialogFooter>
@@ -1197,15 +1185,9 @@ export function OrganizationUsers() {
           ) : null}
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline" className="h-11 sm:h-9">
-                Cancel
-              </Button>
+              <Button variant="outline">Cancel</Button>
             </DialogClose>
-            <Button
-              className="h-11 sm:h-9"
-              disabled={saving}
-              onClick={updateUser}
-            >
+            <Button disabled={saving} onClick={updateUser}>
               {saving ? "Saving..." : "Save changes"}
             </Button>
           </DialogFooter>

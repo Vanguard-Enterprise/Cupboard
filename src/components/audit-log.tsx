@@ -223,7 +223,7 @@ function OutcomeBadge({ outcome }: { outcome: EventOutcome }) {
     return (
       <Badge
         variant="destructive"
-        className="h-5 gap-1 px-1 text-[11px] [&>svg]:size-2.5!"
+        className="h-5 gap-1 px-1 text-2xs [&>svg]:size-2.5!"
       >
         <CircleXIcon aria-hidden="true" />
         Failed
@@ -233,7 +233,7 @@ function OutcomeBadge({ outcome }: { outcome: EventOutcome }) {
   return (
     <Badge
       variant="outline"
-      className="h-5 gap-1 border-primary/30 bg-primary/10 px-1 text-[11px] text-primary [&>svg]:size-2.5!"
+      className="h-5 gap-1 border-primary/30 bg-primary/10 px-1 text-2xs text-primary [&>svg]:size-2.5!"
     >
       <CheckCircle2Icon aria-hidden="true" />
       Succeeded
@@ -424,7 +424,7 @@ export function AuditLog() {
             >
               <SelectTrigger
                 aria-label={filter.label}
-                className={`max-w-full gap-2 border-transparent px-2.5 shadow-none data-[size=default]:h-11 sm:data-[size=default]:h-9 ${filter.value !== "all" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-surface-elevated"}`}
+                className={`max-w-full gap-2 border-transparent px-2.5 shadow-none ${filter.value !== "all" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-surface-elevated"}`}
               >
                 <SelectValue>
                   {filter.value === "all"
@@ -453,7 +453,7 @@ export function AuditLog() {
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
-                className="h-11 max-w-full gap-2 sm:h-9"
+                className="max-w-full gap-2"
                 aria-label={
                   selectedDates
                     ? `Select date range: ${selectedDates}`
@@ -489,7 +489,7 @@ export function AuditLog() {
             <Button
               variant="ghost"
               onClick={clearFilters}
-              className="h-11 text-muted-foreground sm:h-9"
+              className="text-muted-foreground"
             >
               Clear filters
             </Button>
@@ -512,7 +512,7 @@ export function AuditLog() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search actors, actions, targets…"
-              className="h-11 pl-9 sm:h-9"
+              className="pl-9"
             />
           </div>
         </div>

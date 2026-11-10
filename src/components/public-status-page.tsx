@@ -594,7 +594,7 @@ export function PublicStatusView({
             />
             {/* Free text from the operator: its times are theirs, not
                 converted to the visitor's zone like the rest of the page. */}
-            <p className="min-w-0 text-[0.9375rem] leading-6 break-words whitespace-pre-line">
+            <p className="min-w-0 text-sm leading-6 break-words whitespace-pre-line">
               {data.announcement}
             </p>
           </div>
@@ -898,7 +898,7 @@ function HeroStatement({
       <Heading
         key={titleKey}
         className={cn(
-          "relative text-[1.75rem] leading-[1.12] font-semibold tracking-[-0.025em] text-balance break-words @min-[30rem]:text-[2rem] @min-[40rem]:text-[2.5rem] @min-[48rem]:text-[2.75rem] @min-[48rem]:leading-[1.06]",
+          "relative text-2xl leading-[1.12] font-semibold tracking-[-0.025em] text-balance break-words @min-[30rem]:text-3xl @min-[40rem]:text-4xl @min-[48rem]:text-4xl @min-[48rem]:leading-[1.06]",
           // A new headline settles in; the first paint never moves.
           !!titleKey &&
             "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-300",
@@ -1360,7 +1360,7 @@ function TargetGroup({
           expanded ? "pt-3 pb-0.5" : "py-2",
         )}
       >
-        <Heading className="min-w-0 flex-auto text-[0.8125rem] leading-5 font-semibold text-muted-foreground">
+        <Heading className="min-w-0 flex-auto text-xs leading-5 font-semibold text-muted-foreground">
           {collapsible ? (
             <button
               type="button"

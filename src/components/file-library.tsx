@@ -589,7 +589,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
           <Button
             variant="ghost"
             size="icon"
-            className="size-11 shrink-0 md:size-8"
+            className="shrink-0"
             disabled={disabled}
             aria-label={`Actions for ${file.name}`}
           >
@@ -619,7 +619,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
             >
               <Button
                 variant="ghost"
-                className="h-11 px-0 text-2xl font-semibold tracking-tight"
+                className="px-0 text-2xl font-semibold tracking-tight"
                 onClick={() => openFolder(null)}
               >
                 Files
@@ -629,7 +629,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
                   <Button
                     variant="ghost"
-                    className="h-11 max-w-48"
+                    className="max-w-48"
                     onClick={() => openFolder(item.id)}
                   >
                     <span className="truncate">{item.name}</span>
@@ -650,7 +650,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   variant="outline"
                   size="icon"
                   className={cn(
-                    "relative mr-auto size-11 md:hidden",
+                    "relative mr-auto md:hidden",
                     query && "border-primary text-primary",
                   )}
                   aria-label="Open file search"
@@ -685,7 +685,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   <Input
                     ref={mobileSearch}
                     id="file-search-mobile"
-                    className="h-11 pr-11"
+                    className="pr-11"
                     placeholder="Search files"
                     value={query}
                     onChange={(event) => {
@@ -698,7 +698,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="absolute top-0 right-0 size-11"
+                      className="absolute top-0 right-0"
                       aria-label="Clear search"
                       onClick={() => {
                         setQuery("");
@@ -719,7 +719,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               <Input
                 ref={search}
                 id="file-search"
-                className="h-11 bg-input-background pr-10 pl-10"
+                className="bg-input-background pr-10 pl-10"
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
@@ -731,7 +731,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute top-0 right-0 size-11"
+                  className="absolute top-0 right-0"
                   aria-label="Clear search"
                   onClick={() => {
                     setQuery("");
@@ -748,7 +748,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   variant="outline"
                   size="icon"
                   className={cn(
-                    "relative size-11",
+                    "relative",
                     (type !== "all" || sort !== "newest") &&
                       "border-primary text-primary",
                   )}
@@ -824,7 +824,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 aria-label="File view"
               >
                 <ToggleGroupItem
-                  className="size-11"
                   value="list"
                   aria-label="List view"
                   title="List view"
@@ -832,7 +831,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   <ListIcon />
                 </ToggleGroupItem>
                 <ToggleGroupItem
-                  className="size-11"
                   value="grid"
                   aria-label="Grid view"
                   title="Grid view"
@@ -844,7 +842,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
             <Button
               variant="outline"
               size="icon"
-              className="size-11"
               aria-label="New folder"
               title="New folder"
               disabled={disabled || files === null}
@@ -854,7 +851,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
             </Button>
             <Button
               size="icon"
-              className="size-11 shrink-0"
+              className="shrink-0"
               aria-label="Upload file"
               title="Upload file"
               ref={uploadTrigger}
@@ -878,7 +875,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
-                className="h-11"
                 disabled={disabled}
                 onClick={() => paste()}
               >
@@ -888,7 +884,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-11"
                 aria-label="Cancel copy or cut"
                 onClick={() => setClipboard(null)}
               >
@@ -902,7 +897,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-11 md:size-8"
                   aria-label="Clear selection"
                   onClick={() => setActiveId(null)}
                 >
@@ -911,7 +905,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 <span className="mr-2">1 selected</span>
                 <Button
                   variant="ghost"
-                  className="h-11 md:h-8"
+                  size="sm"
                   disabled={disabled}
                   onClick={() =>
                     active.isFolder ? openFolder(active.id) : download(active)
@@ -922,7 +916,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 </Button>
                 <Button
                   variant="ghost"
-                  className="h-11 md:h-8"
+                  size="sm"
                   disabled={disabled}
                   onClick={() => setDetails(active)}
                 >
@@ -932,7 +926,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-11 md:size-8"
                   disabled={disabled}
                   aria-label={`Delete ${active.name}`}
                   title="Delete"
@@ -1033,7 +1026,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                     {query || type !== "all" ? (
                       <Button
                         variant="outline"
-                        className="mt-5 h-11"
+                        className="mt-5"
                         onClick={() => {
                           setQuery("");
                           setType("all");
@@ -1361,7 +1354,7 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                   <Button
                     type="button"
                     variant="outline"
-                    className="mt-4 h-11"
+                    className="mt-4"
                     disabled={busy}
                     ref={choose}
                     onClick={() => input.current?.click()}

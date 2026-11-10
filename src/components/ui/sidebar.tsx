@@ -270,7 +270,7 @@ function SidebarTrigger({
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon-sm"
-      className={cn("[@media(any-pointer:coarse)]:size-11", className)}
+      className={cn("", className)}
       onClick={(event) => {
         onClick?.(event);
         toggleSidebar();
@@ -331,7 +331,7 @@ function SidebarInput({
     <Input
       data-slot="sidebar-input"
       data-sidebar="input"
-      className={cn("h-8 w-full bg-background shadow-none", className)}
+      className={cn("w-full bg-background shadow-none", className)}
       {...props}
     />
   );

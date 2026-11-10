@@ -61,6 +61,7 @@ it("quick checks skip Docker, Rust database tests, and production builds", async
       ["clippy", "--locked", "--all-targets", "--", "-D", "warnings"],
       ["run", "format:check"],
       ["run", "lint"],
+      ["run", "ui:check"],
       ["run", "typecheck"],
       ["run", "test"],
     ]);
