@@ -39,6 +39,10 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 30
+    env:
+      # Retry crates.io downloads so a brief network failure does not fail CI.
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_TIMEOUT: "60"
     steps:
       - uses: actions/checkout@v5
         with:
