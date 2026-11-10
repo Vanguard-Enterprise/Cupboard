@@ -32,6 +32,13 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci --prefer-offline --no-audit --no-fund
+      # ESLint, Prettier, and tsc skip unchanged files, and Vitest starts the
+      # slowest test files first, when they find their caches from earlier runs.
+      - uses: actions/cache@v4
+        with:
+          path: .cache
+          key: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
       - run: npm run check -- --web
 
   rust:

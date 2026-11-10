@@ -9,6 +9,7 @@ node_modules/
 dist/
 target/
 coverage/
+.cache/
 *.tsbuildinfo
 
 .dev-stack/
