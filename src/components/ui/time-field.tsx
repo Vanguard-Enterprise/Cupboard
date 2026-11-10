@@ -364,7 +364,7 @@ function TimeFieldMessage({ issue }: { issue: TimeIssue }) {
       <p
         id={issue.id}
         className={cn(
-          "flex items-start gap-1.5 text-[13px] leading-5",
+          "flex items-start gap-1.5 text-xs leading-5",
           issue.tone === "error" ? "text-destructive" : "text-muted-foreground",
         )}
       >
@@ -392,10 +392,11 @@ function TimeFieldMessage({ issue }: { issue: TimeIssue }) {
         >
           {choices.map((choice) => (
             <ToggleGroupItem
+              size="sm"
               key={choice.text}
               value={choice.text}
               data-value={choice.text}
-              className="h-8 tabular-nums"
+              className="tabular-nums"
             >
               {choice.label}
             </ToggleGroupItem>

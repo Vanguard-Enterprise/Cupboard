@@ -136,11 +136,7 @@ function BillingDetails() {
             Your organization&apos;s saved billing contact and address.
           </p>
         </div>
-        <Button
-          variant="outline"
-          asChild
-          className="min-h-10 [@media(any-pointer:coarse)]:min-h-11"
-        >
+        <Button variant="outline" asChild>
           <Link href="/dashboard/organization/settings/profile#billing-heading">
             Edit billing details
           </Link>
@@ -263,10 +259,11 @@ export function OrganizationUsage() {
           >
             {timeframes.map((option) => (
               <ToggleGroupItem
+                size="sm"
                 key={option.value}
                 value={option.value}
                 aria-label={option.label}
-                className="h-8 rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                className="rounded-md px-3 text-xs text-muted-foreground data-[state=on]:bg-background data-[state=on]:text-foreground"
               >
                 {option.label}
               </ToggleGroupItem>
@@ -362,7 +359,7 @@ export function OrganizationUsage() {
             <CollapsibleTrigger asChild>
               <Button
                 variant="ghost"
-                className="group h-11 w-full justify-between rounded-t-none px-5 text-xs text-muted-foreground"
+                className="group w-full justify-between rounded-t-none px-5 text-xs text-muted-foreground"
               >
                 Show daily activity
                 <ChevronDownIcon

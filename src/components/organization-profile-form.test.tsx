@@ -105,9 +105,7 @@ describe("Organization profile persistence", () => {
     )!;
     const trigger = inputGroup.querySelector('[aria-label="Show options"]')!;
 
-    expect(inputGroup.className).toContain(
-      "[@media(any-pointer:coarse)]:min-h-12",
-    );
+    expect(inputGroup.className).toContain("any-pointer-coarse:min-h-11");
     expect(inputAddon.className).toContain("[@media(any-pointer:coarse)]:py-0");
     expect(trigger.className).toContain("[@media(any-pointer:coarse)]:size-11");
 

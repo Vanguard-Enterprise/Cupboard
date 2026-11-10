@@ -75,9 +75,7 @@ function ComboboxInput({
   showClear?: boolean;
 }) {
   return (
-    <InputGroup
-      className={cn("w-auto [@media(any-pointer:coarse)]:min-h-12", className)}
-    >
+    <InputGroup className={cn("w-auto", className)}>
       <ComboboxPrimitive.Input
         render={<InputGroupInput disabled={disabled} />}
         {...props}
@@ -274,7 +272,7 @@ function ComboboxChip({
       {showRemove && (
         <ComboboxPrimitive.ChipRemove
           render={<Button variant="ghost" size="icon-xs" />}
-          className="-ml-1 opacity-50 hover:opacity-100"
+          className="-ml-1 opacity-50 hover:opacity-100 any-pointer-coarse:min-h-0 any-pointer-coarse:min-w-0"
           data-slot="combobox-chip-remove"
         >
           <XIcon className="pointer-events-none" />

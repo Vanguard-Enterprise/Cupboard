@@ -223,7 +223,7 @@ function AccessEditor({
                       <SelectTrigger
                         id={`${rule.id}-approvers`}
                         aria-label={`Approvals required for ${rule.title}`}
-                        className="mt-3 w-full border-border bg-input-background data-[size=default]:h-11 sm:data-[size=default]:h-10"
+                        className="mt-3 w-full border-border bg-input-background"
                       >
                         <SelectValue />
                       </SelectTrigger>
@@ -285,7 +285,7 @@ function AccessEditor({
           <Button
             type="button"
             variant="outline"
-            className="h-11 w-full px-4 sm:h-9 sm:w-auto"
+            className="w-full px-4 sm:w-auto"
             disabled={!dirty || conflict}
             onClick={cancelChanges}
           >
@@ -293,7 +293,7 @@ function AccessEditor({
           </Button>
           <Button
             type="submit"
-            className="h-11 w-full px-4 sm:h-9 sm:w-auto"
+            className="w-full px-4 sm:w-auto"
             disabled={(!dirty && !needsReplacement) || conflict}
           >
             Save changes

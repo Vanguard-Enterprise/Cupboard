@@ -47,7 +47,7 @@ export function PublicFileDownload() {
         <p className="text-sm text-muted-foreground">
           Download the file shared with you through Cupboard.
         </p>
-        <Button className="h-11" disabled={busy} onClick={download}>
+        <Button disabled={busy} onClick={download}>
           <DownloadIcon />
           {busy ? "Downloading..." : "Download file"}
         </Button>

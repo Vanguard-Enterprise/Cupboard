@@ -15,25 +15,22 @@ function capture(command, args, options = {}) {
   }).trim();
 }
 
-export function worktreeBranch(issue, type, description) {
+export function worktreeBranch(type, description) {
   if (
-    !/^CUP-[1-9]\d*$/i.test(issue ?? "") ||
     !/^(feat|fix|refactor|docs|test|perf|chore)$/.test(type ?? "") ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(description ?? "")
   )
     throw new Error(
-      "Usage: npm run worktree -- CUP-34 chore development-workflow [base-ref]. Use a lowercase description with hyphens.",
+      "Usage: npm run worktree -- chore development-workflow [base-ref]. Use a lowercase description with hyphens.",
     );
-  return `${type}/${issue.toLowerCase()}-${description}`;
+  return `${type}/${description}`;
 }
 
 function createWorktree(args) {
-  const [issue, type, description, base = "origin/main"] = args;
-  if (args.length > 4 || base.startsWith("-"))
-    throw new Error(
-      "Supply an issue, type, description, and optional base ref.",
-    );
-  const branch = worktreeBranch(issue, type, description);
+  const [type, description, base = "origin/main"] = args;
+  if (args.length > 3 || base.startsWith("-"))
+    throw new Error("Supply a type, description, and optional base ref.");
+  const branch = worktreeBranch(type, description);
   capture("git", ["rev-parse", "--verify", `${base}^{commit}`]);
   const common = resolve(capture("git", ["rev-parse", "--git-common-dir"]));
   const destination = join(

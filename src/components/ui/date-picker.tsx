@@ -215,7 +215,7 @@ function DatePicker({
       aria-expanded={open}
       onClick={sheet ? () => openChange(true) : undefined}
       className={cn(
-        "h-10 w-full justify-start gap-2 border-input px-3 font-normal hover:border-input-hover dark:border-input dark:bg-input-background dark:hover:border-input-hover [@media(any-pointer:coarse)]:h-11",
+        "w-full justify-start gap-2 border-input px-3 font-normal hover:border-input-hover dark:border-input dark:bg-input-background dark:hover:border-input-hover",
         "aria-invalid:border-destructive",
         className,
       )}

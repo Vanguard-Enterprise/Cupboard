@@ -661,7 +661,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
             <Button
               type="button"
               variant="outline"
-              className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+              className="px-4"
               disabled={channels.length >= 10}
               onClick={() => openForm(null)}
             >
@@ -722,7 +722,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
                       <Button
                         type="button"
                         variant="outline"
-                        className="hidden h-9 px-3 sm:inline-flex"
+                        className="hidden px-3 sm:inline-flex"
                         disabled={testing !== null}
                         onClick={() => void test(channel)}
                       >
@@ -734,7 +734,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
                           <Button
                             type="button"
                             variant="ghost"
-                            className="size-11"
+                            size="icon"
                             aria-label={`${channel.name} actions`}
                           >
                             <MoreHorizontalIcon aria-hidden="true" />
@@ -971,7 +971,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
                 <SelectTrigger
                   id="alert-retention"
                   aria-describedby="alert-retention-description"
-                  className="w-full border-border bg-input-background data-[size=default]:h-11 sm:w-40 sm:data-[size=default]:h-10 dark:bg-input-background"
+                  className="w-full border-border bg-input-background sm:w-40 dark:bg-input-background"
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -1008,7 +1008,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
               <Button
                 type="button"
                 variant="outline"
-                className="h-10 shrink-0 px-4 [@media(any-pointer:coarse)]:min-h-11"
+                className="shrink-0 px-4"
                 disabled={exporting || !canExport}
                 onClick={() => void download()}
               >
@@ -1033,7 +1033,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
             <Button
               type="button"
               variant="outline"
-              className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
+              className="px-4"
               disabled={saving || !dirty}
               onClick={() => {
                 setDraft((_, current) => draftOf(current));
@@ -1042,11 +1042,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              className="h-10 px-4 [@media(any-pointer:coarse)]:min-h-11"
-              disabled={saving || !dirty}
-            >
+            <Button type="submit" className="px-4" disabled={saving || !dirty}>
               {saving ? "Saving changes..." : "Save changes"}
             </Button>
           </div>
@@ -1124,7 +1120,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
                   placeholder={
                     form.kind === "discord" ? "#server-alerts" : "On-call pager"
                   }
-                  className="h-10 bg-input-background"
+                  className="bg-input-background"
                   onChange={(event) =>
                     setForm({ ...form, name: event.target.value, error: "" })
                   }
@@ -1151,7 +1147,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
                   }
                   aria-describedby="channel-url-help"
                   aria-invalid={form.error ? true : undefined}
-                  className="h-10 bg-input-background font-mono text-xs"
+                  className="bg-input-background font-mono text-xs"
                   onChange={(event) =>
                     setForm({ ...form, url: event.target.value, error: "" })
                   }
@@ -1175,13 +1171,13 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 px-4"
+                    className="px-4"
                     disabled={formBusy}
                   >
                     Cancel
                   </Button>
                 </DialogClose>
-                <Button type="submit" className="h-10 px-4" disabled={formBusy}>
+                <Button type="submit" className="px-4" disabled={formBusy}>
                   {form.channel
                     ? formBusy
                       ? "Saving changes..."
@@ -1221,13 +1217,13 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
               readOnly
               aria-label="Signing secret"
               value={secret?.value ?? ""}
-              className="h-10 bg-input-background font-mono text-xs"
+              className="bg-input-background font-mono text-xs"
               onFocus={(event) => event.target.select()}
             />
             <Button
               type="button"
               variant="outline"
-              className="h-10 px-3"
+              className="px-3"
               onClick={() => {
                 if (!secret) return;
                 if (!navigator.clipboard) {
@@ -1256,7 +1252,7 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
           </p>
           <DialogFooter>
             <DialogClose asChild>
-              <Button type="button" className="h-10 px-4">
+              <Button type="button" className="px-4">
                 Done
               </Button>
             </DialogClose>

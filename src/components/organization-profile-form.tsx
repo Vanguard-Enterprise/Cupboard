@@ -184,7 +184,7 @@ function ProfileEditor({
               aria-invalid={common["aria-invalid"]}
               aria-describedby={common["aria-describedby"]}
               showClear={Boolean(draft[key])}
-              className="h-10 w-full border-input bg-input-background hover:border-border-strong dark:bg-input-background"
+              className="w-full border-input bg-input-background hover:border-border-strong dark:bg-input-background"
             />
             <ComboboxContent className="border border-border">
               <ComboboxEmpty>
@@ -215,7 +215,7 @@ function ProfileEditor({
             {...common}
             type={type}
             placeholder={placeholder}
-            className={`h-10 border-input hover:border-border-strong focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring dark:bg-input-background ${key === "website" ? "placeholder:text-text-muted" : ""}`}
+            className={`border-input hover:border-border-strong focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring dark:bg-input-background ${key === "website" ? "placeholder:text-text-muted" : ""}`}
           />
         )}
         {helper && (
@@ -415,7 +415,7 @@ function ProfileEditor({
         <Button
           type="button"
           variant="outline"
-          className="min-h-11 px-4 sm:h-10 sm:min-h-0 [@media(any-pointer:coarse)]:min-h-11"
+          className="px-4 sm:min-h-0"
           disabled={saving || (!dirty && !conflict)}
           onClick={() => {
             logo.cancel();
@@ -429,7 +429,7 @@ function ProfileEditor({
         </Button>
         <Button
           type="submit"
-          className="min-h-11 px-4 sm:h-10 sm:min-h-0 [@media(any-pointer:coarse)]:min-h-11"
+          className="px-4 sm:min-h-0"
           disabled={
             saving ||
             !dirty ||

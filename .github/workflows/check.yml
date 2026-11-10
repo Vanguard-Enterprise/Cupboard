@@ -53,6 +53,25 @@ jobs:
       - run: npm ci --prefer-offline --no-audit --no-fund
       - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check
 
+  # Fast, named feedback for UI rules: design-token class names, shared
+  # control sizes, native menus, and raw colors or stale fonts in stylesheets.
+  ui:
+    name: UI consistency
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, ve-runner]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run ui:check
+
   images:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, ve-runner]
@@ -92,15 +111,16 @@ jobs:
   # Preserve the existing required check name and include both parallel jobs.
   check:
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [verify, images]
+    needs: [verify, ui, images]
     runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 5
     steps:
       - name: Require checks and release smoke to pass
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
+          UI_RESULT: ${{ needs.ui.result }}
           IMAGES_RESULT: ${{ needs.images.result }}
-        run: test "$VERIFY_RESULT" = success && test "$IMAGES_RESULT" = success
+        run: test "$VERIFY_RESULT" = success && test "$UI_RESULT" = success && test "$IMAGES_RESULT" = success
 
   publish:
     needs: check

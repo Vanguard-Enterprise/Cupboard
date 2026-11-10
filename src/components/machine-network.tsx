@@ -117,7 +117,7 @@ export function MachineNetwork({
       className="space-y-1 py-1"
       title={`Combined network traffic across non-loopback interfaces · Last ${Math.ceil(span / 60000)} minutes`}
     >
-      <div className="flex flex-wrap gap-x-3 text-[10px] tabular-nums">
+      <div className="flex flex-wrap gap-x-3 text-2xs tabular-nums">
         <span className="text-primary">↓ In {receive}</span>
         <span className="text-chart-2">↑ Out {send}</span>
       </div>
@@ -147,7 +147,7 @@ export function MachineNetwork({
           />
         </svg>
       ) : (
-        <div className="flex h-8 items-center text-[10px] text-muted-foreground">
+        <div className="flex h-8 items-center text-2xs text-muted-foreground">
           {failed ? "History unavailable" : "Waiting for network history"}
         </div>
       )}

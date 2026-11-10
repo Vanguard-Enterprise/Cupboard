@@ -144,6 +144,7 @@ try {
   for (const script of [
     "format:check",
     "lint",
+    "ui:check",
     "typecheck",
     "test",
     ...(quick ? [] : ["build"]),

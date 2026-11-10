@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { SearchIcon } from "lucide-react";
+import { CommandIcon, SearchIcon } from "lucide-react";
 import {
   SidebarMenu,
   SidebarMenuItem,
@@ -60,8 +60,9 @@ export function OrganizationSearchButton({
         >
           <SearchIcon />
           <span>Search organization</span>
-          <kbd className="ml-auto text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-            ⌘/Ctrl K
+          <kbd className="inline-flex items-center gap-0.5 font-sans ml-auto text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+            <CommandIcon aria-hidden="true" className="size-3" />
+            <span className="sr-only">Command or</span>/Ctrl K
           </kbd>
         </SidebarMenuButton>
       </SidebarMenuItem>

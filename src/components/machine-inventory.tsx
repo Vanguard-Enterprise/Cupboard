@@ -351,7 +351,11 @@ export function MachineInventory({ identity }: { identity: Identity }) {
           </div>
           <div className="flex gap-2">
             {manage && (
-              <Button className="size-11 p-0 md:w-auto md:px-2.5" asChild>
+              <Button
+                size="icon"
+                className="p-0 md:w-auto md:gap-1.5 md:px-3"
+                asChild
+              >
                 <Link href="/dashboard/infrastructure/machines/setup">
                   <PlusIcon className="size-4" />
                   <span className="sr-only md:not-sr-only">Add machine</span>
@@ -389,7 +393,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                           <div className="relative min-w-0 flex-1">
                             <SearchIcon className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
                             <Input
-                              className="min-h-11 pl-9"
+                              className="pl-9"
                               aria-label="Search machines"
                               placeholder="Search machines..."
                               value={query}
@@ -399,7 +403,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                           {manage && (
                             <Button
                               size="icon"
-                              className="size-11 shrink-0 md:hidden"
+                              className="shrink-0 md:hidden"
                               aria-label="Add machine"
                               asChild
                             >
@@ -414,7 +418,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                         </div>
                         <Select value={filter} onValueChange={setFilter}>
                           <SelectTrigger
-                            className="min-h-11 flex-1 sm:w-44 sm:flex-none"
+                            className="flex-1 sm:w-44 sm:flex-none"
                             aria-label="Connection status"
                           >
                             <SelectValue />
@@ -445,7 +449,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                         </Select>
                         <Select value={provider} onValueChange={setProvider}>
                           <SelectTrigger
-                            className="min-h-11 flex-1 sm:w-44 sm:flex-none"
+                            className="flex-1 sm:w-44 sm:flex-none"
                             aria-label="Provider filter"
                           >
                             <SelectValue />
@@ -477,7 +481,6 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                           </p>
                           <Button
                             variant="outline"
-                            className="min-h-11"
                             onClick={() => {
                               setQuery("");
                               setFilter("all");
@@ -574,7 +577,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                                           <Button
                                             variant="link"
                                             asChild
-                                            className="min-h-11 text-foreground"
+                                            className="text-foreground"
                                           >
                                             <Link
                                               href={`/dashboard/infrastructure/machines/setup?machine=${machine.id}`}
@@ -630,7 +633,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                                         <Button
                                           variant="ghost"
                                           size="icon"
-                                          className="min-h-11 min-w-11"
+                                          className="min-w-11"
                                           aria-label={`Actions for ${machine.name}`}
                                         >
                                           <MoreHorizontalIcon />
@@ -722,11 +725,7 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  <Button
-                    variant="ghost"
-                    className="min-h-11"
-                    onClick={() => setDetails(null)}
-                  >
+                  <Button variant="ghost" onClick={() => setDetails(null)}>
                     <ArrowLeftIcon className="size-4" />
                     Back to machines
                   </Button>
@@ -804,7 +803,6 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                 ) : (
                   <Input
                     id={`machine-${field}`}
-                    className="min-h-11"
                     value={draft[field]}
                     disabled={saving}
                     autoComplete="off"
@@ -845,13 +843,12 @@ export function MachineInventory({ identity }: { identity: Identity }) {
               <Button
                 type="button"
                 variant="outline"
-                className="min-h-11"
                 disabled={saving}
                 onClick={() => setEditor(null)}
               >
                 Cancel
               </Button>
-              <Button className="min-h-11" disabled={saving}>
+              <Button disabled={saving}>
                 {saving ? "Saving..." : "Save changes"}
               </Button>
             </div>
@@ -939,7 +936,6 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                 </div>
               </div>
               <Button
-                className="min-h-11"
                 onClick={() => {
                   if (enrolling) inspect(enrolling);
                   setAction(null);
@@ -972,7 +968,6 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                   {expired && (
                     <Button
                       variant="outline"
-                      className="min-h-11"
                       disabled={acting}
                       onClick={() => void runAction()}
                     >
@@ -1057,7 +1052,6 @@ export function MachineInventory({ identity }: { identity: Identity }) {
               <div className="flex flex-wrap justify-end gap-2">
                 <Button
                   variant="outline"
-                  className="min-h-11"
                   disabled={refreshing}
                   onClick={() => {
                     setRefreshing(true);
@@ -1067,7 +1061,6 @@ export function MachineInventory({ identity }: { identity: Identity }) {
                   {refreshing ? "Checking..." : "Check for report"}
                 </Button>
                 <Button
-                  className="min-h-11"
                   disabled={acting}
                   onClick={() => {
                     setAction(null);
@@ -1095,14 +1088,12 @@ export function MachineInventory({ identity }: { identity: Identity }) {
               <div className="flex justify-end gap-2">
                 <Button
                   variant="outline"
-                  className="min-h-11"
                   disabled={acting}
                   onClick={() => setAction(null)}
                 >
                   Cancel
                 </Button>
                 <Button
-                  className="min-h-11"
                   variant={
                     action?.kind !== "enroll" ? "destructive" : "default"
                   }

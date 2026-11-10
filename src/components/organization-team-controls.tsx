@@ -40,7 +40,7 @@ export function TeamSearch({
         value={value}
         placeholder={label}
         onChange={(event) => onChange(event.target.value)}
-        className="h-11 pr-3 pl-9 placeholder:text-text-muted focus:placeholder:text-transparent lg:h-9"
+        className="pr-3 pl-9 placeholder:text-text-muted focus:placeholder:text-transparent"
       />
     </div>
   );
@@ -67,7 +67,7 @@ export function SortButton({
       type="button"
       variant="ghost"
       size="sm"
-      className="-ml-2 h-8 px-2 text-xs text-text-muted hover:text-foreground"
+      className="-ml-2 px-2 text-xs text-text-muted hover:text-foreground"
       onClick={onClick}
       aria-label={`Sort by ${label}${active ? `, ${direction === "asc" ? "ascending" : "descending"}` : ""}`}
     >

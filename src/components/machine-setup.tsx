@@ -356,7 +356,7 @@ export function MachineSetup({
                   {error}
                 </p>
               )}
-              <Button disabled={busy} className="min-h-11">
+              <Button disabled={busy}>
                 {busy ? "Saving…" : "Save and continue"}
               </Button>
             </form>
@@ -377,14 +377,10 @@ export function MachineSetup({
                 First setup complete. Latest report:{" "}
                 {observed(machine.lastSeenAt)}.
               </p>
-              <Button asChild className="min-h-11">
+              <Button asChild>
                 <Link href={base}>View machines</Link>
               </Button>
-              <Button
-                variant="ghost"
-                className="min-h-11"
-                onClick={startAnother}
-              >
+              <Button variant="ghost" onClick={startAnother}>
                 Set up another machine
               </Button>
             </div>
@@ -419,11 +415,7 @@ export function MachineSetup({
                       Token expired. Generate a new token.
                     </p>
                   )}
-                  <Button
-                    disabled={busy}
-                    className="min-h-11"
-                    onClick={() => void generate()}
-                  >
+                  <Button disabled={busy} onClick={() => void generate()}>
                     {busy
                       ? "Generating…"
                       : token || machine.enrollmentExpiresAt
@@ -438,7 +430,7 @@ export function MachineSetup({
                   Linux with Python 3.10 or later. Use your Cupboard HTTPS
                   address and paste the token at the hidden prompt.
                 </p>
-                <Button variant="outline" asChild className="min-h-11">
+                <Button variant="outline" asChild>
                   <a href="/agent/cupboard-agent.py" download>
                     <DownloadIcon className="size-4" />
                     Download agent

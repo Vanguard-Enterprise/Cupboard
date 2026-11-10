@@ -529,7 +529,7 @@ export function StatusLogoEditor({
                 className="size-6 text-destructive"
               />
               <p className="text-sm">{loadError}</p>
-              <p className="text-[13px] leading-5 text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 Use a PNG, JPEG, WebP, GIF, or SVG image up to 20 MB.
               </p>
             </div>
@@ -573,7 +573,7 @@ export function StatusLogoEditor({
                       />
                       <div
                         aria-hidden="true"
-                        className="pointer-events-none absolute rounded-[3px] shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-1 ring-white/70"
+                        className="pointer-events-none absolute rounded-xs shadow-[0_0_0_9999px_rgb(0_0_0/0.55)] ring-1 ring-foreground/70"
                         style={frame.style}
                       >
                         <div className="absolute inset-0 bg-[linear-gradient(to_right,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%),linear-gradient(to_bottom,transparent_33.2%,rgb(255_255_255/0.18)_33.3%,rgb(255_255_255/0.18)_33.4%,transparent_33.5%,transparent_66.5%,rgb(255_255_255/0.18)_66.6%,rgb(255_255_255/0.18)_66.7%,transparent_66.8%)]" />
@@ -603,7 +603,7 @@ export function StatusLogoEditor({
                 </div>
                 <p
                   id="logo-stage-help"
-                  className="mt-2 text-[13px] leading-5 text-muted-foreground"
+                  className="mt-2 text-xs leading-5 text-muted-foreground"
                 >
                   <span className="[@media(any-pointer:coarse)]:hidden">
                     Drag to move, scroll to zoom. Alt skips snapping.
@@ -629,7 +629,6 @@ export function StatusLogoEditor({
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  className="size-9 [@media(any-pointer:coarse)]:size-11"
                   aria-label="Zoom out"
                   disabled={!image || edit.zoom <= MIN_ZOOM}
                   onClick={() => change({ zoom: clampZoom(edit.zoom - 0.25) })}
@@ -651,7 +650,6 @@ export function StatusLogoEditor({
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  className="size-9 [@media(any-pointer:coarse)]:size-11"
                   aria-label="Zoom in"
                   disabled={!image || edit.zoom >= MAX_ZOOM}
                   onClick={() => change({ zoom: clampZoom(edit.zoom + 0.25) })}
@@ -687,9 +685,10 @@ export function StatusLogoEditor({
                   >
                     {(["original", "square", "wide"] as const).map((shape) => (
                       <ToggleGroupItem
+                        size="sm"
                         key={shape}
                         value={shape}
-                        className="h-8 flex-1 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-border data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                        className="flex-1 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-border data-[state=on]:text-foreground"
                       >
                         {shapeLabel[shape]}
                       </ToggleGroupItem>
@@ -742,10 +741,11 @@ export function StatusLogoEditor({
                       <Tooltip key={label}>
                         <TooltipTrigger asChild>
                           <Button
+                            size="sm"
                             type="button"
                             variant="ghost"
                             className={cn(
-                              "h-8 flex-1",
+                              "flex-1",
                               touch,
                               label === "Flip horizontally" &&
                                 edit.flip &&
@@ -785,9 +785,10 @@ export function StatusLogoEditor({
                     {(["none", "white", "black", "accent"] as const).map(
                       (background) => (
                         <ToggleGroupItem
+                          size="sm"
                           key={background}
                           value={background}
-                          className="h-8 min-w-0 flex-1 gap-1.5 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-border data-[state=on]:text-foreground [@media(any-pointer:coarse)]:min-h-11"
+                          className="min-w-0 flex-1 gap-1.5 rounded-md px-2 text-xs text-muted-foreground data-[state=on]:bg-border data-[state=on]:text-foreground"
                         >
                           <span
                             aria-hidden="true"
@@ -815,7 +816,7 @@ export function StatusLogoEditor({
                     )}
                   </ToggleGroup>
                   {edit.background === "accent" && (
-                    <p className="text-[13px] leading-5 text-muted-foreground">
+                    <p className="text-xs leading-5 text-muted-foreground">
                       Baked in as {accent}. A later accent change won&apos;t
                       recolor it.
                     </p>
@@ -867,7 +868,7 @@ export function StatusLogoEditor({
             <Button
               type="button"
               variant={failed ? "default" : "ghost"}
-              className={cn("h-10 flex-1 px-3 sm:flex-none", touch)}
+              className={cn("flex-1 px-3 sm:flex-none", touch)}
               onClick={onChooseFile}
             >
               <ImageUpIcon aria-hidden="true" />
@@ -877,7 +878,7 @@ export function StatusLogoEditor({
               <Button
                 type="button"
                 variant="ghost"
-                className={cn("h-10 flex-1 px-3 sm:flex-none", touch)}
+                className={cn("flex-1 px-3 sm:flex-none", touch)}
                 disabled={!image}
                 onClick={() => setEdit(initialEdit)}
               >
@@ -890,7 +891,7 @@ export function StatusLogoEditor({
             <Button
               type="button"
               variant="outline"
-              className={cn("h-10 flex-1 px-4 sm:flex-none", touch)}
+              className={cn("flex-1 px-4 sm:flex-none", touch)}
               onClick={() => onOpenChange(false)}
             >
               Cancel
@@ -898,7 +899,7 @@ export function StatusLogoEditor({
             {!failed && (
               <Button
                 type="button"
-                className={cn("h-10 flex-1 px-4 sm:flex-none", touch)}
+                className={cn("flex-1 px-4 sm:flex-none", touch)}
                 disabled={!image || saving}
                 onClick={() => void save()}
               >

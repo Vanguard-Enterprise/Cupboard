@@ -38,7 +38,7 @@ export function MachineTagBadges({
           <Badge
             key={tag.id}
             variant="outline"
-            className="max-w-40 rounded-full text-[10px] font-normal"
+            className="max-w-40 rounded-full text-2xs font-normal"
           >
             <span className="truncate">{tag.name}</span>
           </Badge>
@@ -182,7 +182,7 @@ export function MachineTagsDialog({
         )}
         <Button
           variant="ghost"
-          className="min-h-11 justify-start"
+          className="justify-start"
           disabled={busy || catalog === null}
           onClick={() => setManaging((value) => !value)}
         >
@@ -208,7 +208,7 @@ export function MachineTagsDialog({
               <div className="flex gap-2">
                 <Input
                   id="machine-tag-name"
-                  className="h-11 min-w-0"
+                  className="min-w-0"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   maxLength={32}
@@ -245,7 +245,7 @@ export function MachineTagsDialog({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="min-h-11 min-w-11"
+                  className="min-w-11"
                   aria-label={`Rename ${tag.name}`}
                   disabled={busy}
                   onClick={() => {
@@ -258,7 +258,7 @@ export function MachineTagsDialog({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="min-h-11 min-w-11"
+                  className="min-w-11"
                   aria-label={`Delete ${tag.name}`}
                   disabled={busy}
                   onClick={() => setDeleting(tag)}

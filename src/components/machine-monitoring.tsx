@@ -64,11 +64,7 @@ export function MachineMonitoring({
               {Math.floor((health.uptimeSeconds % 3600) / 60)}m uptime
             </span>
           )}
-          <Button
-            variant="outline"
-            className="min-h-11"
-            onClick={() => setDetailsOpen(true)}
-          >
+          <Button variant="outline" onClick={() => setDetailsOpen(true)}>
             Machine details
           </Button>
         </div>
@@ -165,7 +161,6 @@ export function MachineMonitoring({
               <div className="flex flex-wrap gap-2 border-t pt-4">
                 <Button
                   variant="outline"
-                  className="min-h-11"
                   onClick={() => {
                     setDetailsOpen(false);
                     onEdit();
@@ -175,7 +170,6 @@ export function MachineMonitoring({
                 </Button>
                 <Button
                   variant={machine.enrolled ? "ghost" : "default"}
-                  className="min-h-11"
                   onClick={() => {
                     setDetailsOpen(false);
                     onEnroll();

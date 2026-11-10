@@ -226,7 +226,7 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
 }
 function Action({ children = "Get started" }: { children?: React.ReactNode }) {
   return (
-    <Button asChild className="h-11 gap-3 rounded-full px-5">
+    <Button asChild className="gap-3 rounded-full px-5">
       <Link href="/signup">
         {children}
         <ArrowRight aria-hidden="true" className="size-4" />
@@ -797,13 +797,13 @@ export function MarketingLanding() {
         </div>
         <Tabs defaultValue="servers" className={styles.productTabs}>
           <TabsList className="h-auto flex-wrap bg-transparent p-0">
-            <TabsTrigger value="servers" className="min-h-11 px-5">
+            <TabsTrigger value="servers" className="px-5">
               Servers
             </TabsTrigger>
-            <TabsTrigger value="machines" className="min-h-11 px-5">
+            <TabsTrigger value="machines" className="px-5">
               Machines
             </TabsTrigger>
-            <TabsTrigger value="files" className="min-h-11 px-5">
+            <TabsTrigger value="files" className="px-5">
               Files
             </TabsTrigger>
           </TabsList>

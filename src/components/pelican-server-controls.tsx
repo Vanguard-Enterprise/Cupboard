@@ -97,11 +97,7 @@ export function PelicanServerImport({
     ) ?? [];
   return (
     <>
-      <Button
-        variant="outline"
-        className="min-h-11"
-        onClick={() => void browse()}
-      >
+      <Button variant="outline" onClick={() => void browse()}>
         From Pelican
       </Button>
       <Dialog
@@ -474,7 +470,6 @@ export function PelicanServerControls({
       {active === undefined && (
         <Button
           variant="outline"
-          className="min-h-11"
           onClick={() => {
             setTab("resources");
             setOpen(true);

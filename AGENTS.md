@@ -4,9 +4,10 @@ This repository is a clean rebuild for one developer working with coding agents.
 
 ## Before changing code
 
-- Read `README.md` and `docs/REBUILD.md`.
-- Before changing a user-facing interface, read `docs/DESIGN.md` and follow its
-  visual, interaction, accessibility, and writing direction.
+- Read `README.md`.
+- Before changing a user-facing interface, read `docs/DESIGN.md`. `npm run lint`
+  and `npm run ui:check` enforce its checkable rules; fix what they report
+  instead of disabling them.
 - Treat the old implementation as reference material only. Do not restore or copy
   it unless the user asks for a specific piece.
 - Preserve unrelated user changes already in the working tree.
@@ -21,6 +22,9 @@ This repository is a clean rebuild for one developer working with coding agents.
   split. A product feature name is not a reason to create a service or package.
 - Prefer direct calls within the application. Do not introduce internal HTTP,
   queues, or duplicated transport types between modules.
+- PostgreSQL is the only application data store. Page views never start RCON or
+  A2S checks: background work in the Rust application stores health snapshots
+  and pages read them.
 - Never use browser-native menus in the product interface. Use the source-owned
   select, combobox, dropdown, context-menu, command-menu, and popover components
   in `src/components/ui`; add a missing shared component there before using it.
@@ -36,14 +40,12 @@ This repository is a clean rebuild for one developer working with coding agents.
 
 - Name branches for the work using `<type>/<short-description>`, such as `feat`,
   `fix`, `refactor`, `docs`, `test`, `perf`, or `chore`. Do not use an agent or
-  author name as the prefix. When work has a Linear issue, include its lowercase
-  identifier after the slash, such as `feat/cup-123-server-health`.
+  author name as the prefix, for example `feat/server-health`.
 - Provide one root command for local development and one root command for all
   required checks.
 - Keep setup reproducible from a fresh clone.
-- Follow `docs/WORKFLOW.md` for all new work. Start each nontrivial task in an
-  issue-named worktree using `npm run worktree`, or reuse the isolated worktree
-  provided for the current task. Never switch another task's working tree.
+- Start each nontrivial task in its own worktree using `npm run worktree` (see
+  the README), or reuse the isolated worktree provided for the current task. Never switch another task's working tree.
 - Run `npm run doctor` before starting a new environment. Use `npm ci` for
   dependencies and `npm run dev` for the complete stack. Let the dev command
   select and save ports and a worktree-specific database; do not share a
@@ -55,7 +57,7 @@ This repository is a clean rebuild for one developer working with coding agents.
 - When working on a PR, use `npm run review -- <number>` to collect checks,
   reviews, and threads. Register the PR with the current T3 thread when its
   linking tools are available. Repeat collection after every push.
-- Finish with the issue and branch, a short description of the change, checks
+- Finish with the branch, a short description of the change, checks
   and their results, the PR state when applicable, and any remaining blocker.
   Include the clickable NetBird URL when the server was started.
 - Preserve worktrees and database volumes after handoff. Stop only processes and
@@ -63,32 +65,12 @@ This repository is a clean rebuild for one developer working with coding agents.
   request.
 - Tests must cover tenant isolation, authorization, secret handling, and the main
   success path of each slice.
-- Update `docs/REBUILD.md` when a decision changes the repository shape or launch
-  scope.
+- Update `AGENTS.md` or `README.md` when a decision changes the repository shape.
 - Do not claim completion until the relevant checks pass.
 - Bind every local web development server to `0.0.0.0` so it is reachable through
   NetBird. The root development command must print the active NetBird URL.
 - Whenever a user asks an agent to start the development server, include the
   clickable NetBird URL in the response. Do not provide only a localhost URL.
-
-## Linear workflow
-
-- Use the Linear `Cupboard` team and `Cupboard rebuild` project as the source of
-  truth for planned product work. Do not mirror the backlog into GitHub issues.
-- Before starting a nontrivial change, find its `CUP` issue. Create one in Backlog
-  if the work is not tracked yet, using the repository requirements and user
-  request as its acceptance criteria.
-- Moving an issue from Backlog to Todo means the work is approved to start. Move
-  it to In Progress when implementation begins and to In Review when its pull
-  request is ready for review.
-- Put the issue identifier in the branch name and pull request title. Add
-  `Fixes CUP-N` to the pull request description so Linear links the pull request
-  and can update the issue from GitHub activity.
-- Post implementation progress, material decisions, and blockers as comments on
-  the Linear issue. Do not leave the only record in local notes or chat.
-- Move an issue to Done only after its pull request is merged and required checks
-  pass. Prefer the configured GitHub automation for status changes and correct
-  the Linear status directly if the integration misses an event.
 
 ## Pull request completion
 
@@ -122,6 +104,14 @@ through the full review cycle:
 
 - Never log credentials, session tokens, RCON passwords, API keys, or raw secrets.
 - Enforce tenant ownership in the data-access path, not only in UI or route code.
+  Never accept a tenant identifier from a request as proof of ownership.
+- Next.js renders and forwards requests to the Rust API. It never connects to
+  PostgreSQL, RCON, or A2S. Rust enforces authentication, authorization, and
+  tenant rules; a rendered control is never proof that an operator may act.
+- Keep business rules in shared Rust functions, not route handlers. Every API
+  request must be safe when called directly, repeated, or sent out of the
+  expected UI order.
+- Never put authenticated tenant data in a shared cache.
 - Use maintained authentication and cryptography libraries. Do not invent either.
 - Keep migrations forward-only once a migration has been used outside local
   development.

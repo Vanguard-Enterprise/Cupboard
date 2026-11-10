@@ -720,7 +720,7 @@ function Field({
         (warning ? (
           <p
             id={`${id}-hint`}
-            className="flex items-start gap-1.5 text-[13px] leading-5 text-warning"
+            className="flex items-start gap-1.5 text-xs leading-5 text-warning"
           >
             <TriangleAlertIcon
               aria-hidden="true"
@@ -732,7 +732,7 @@ function Field({
           <p
             id={`${id}-hint`}
             className={cn(
-              "text-[13px] leading-5 text-muted-foreground",
+              "text-xs leading-5 text-muted-foreground",
               quietHint && "sr-only",
             )}
           >
@@ -757,7 +757,7 @@ function FieldMessage({
     <p
       id={id}
       role={alert ? "alert" : undefined}
-      className="flex items-start gap-1.5 text-[13px] leading-5 text-destructive"
+      className="flex items-start gap-1.5 text-xs leading-5 text-destructive"
     >
       <CircleAlertIcon
         aria-hidden="true"
@@ -876,7 +876,7 @@ function Tag({
   return (
     <span
       className={cn(
-        "inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full border px-2 text-[13px] leading-none font-medium",
+        "inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full border px-2 text-xs leading-none font-medium",
         tone === "muted" && "border-border-strong text-muted-foreground",
         tone === "draft" && "border-primary/50 text-primary",
       )}
@@ -1670,7 +1670,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">{loadError}</p>
         <Button
-          className={cn("mt-5 h-10 px-4", touch)}
+          className={cn("mt-5 px-4", touch)}
           disabled={refreshing}
           onClick={() => void load()}
         >
@@ -2807,7 +2807,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         <div className="flex items-center gap-1 border-b border-border sm:gap-2">
           <TabsList
             variant="line"
-            className="h-10 min-w-0 flex-1 justify-start gap-0 rounded-none p-0 [@media(any-pointer:coarse)]:h-[45px]"
+            className="min-w-0 flex-1 justify-start gap-0 rounded-none p-0"
           >
             {(
               [
@@ -2858,7 +2858,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               variant="ghost"
               data-focus-key="preview-page"
               className={cn(
-                "h-9 shrink-0 px-3 max-sm:size-11 max-sm:px-0",
+                "shrink-0 px-3 max-sm:px-0",
                 touch,
                 tab === "settings" && "xl:hidden",
               )}
@@ -2895,7 +2895,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     variant="ghost"
                     data-focus-key="schedule"
                     aria-label="Schedule maintenance"
-                    className={cn("h-9 px-3", touch)}
+                    className={cn("px-3", touch)}
                     onClick={() => openSchedule(null, "schedule")}
                   >
                     <PlusIcon aria-hidden="true" />
@@ -2927,7 +2927,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       type="button"
                       variant="outline"
                       data-focus-key="schedule-empty"
-                      className={cn("mt-3 h-9 px-3", touch)}
+                      className={cn("mt-3 px-3", touch)}
                       onClick={() => openSchedule(null, "schedule-empty")}
                     >
                       <PlusIcon aria-hidden="true" />
@@ -3011,7 +3011,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         ? "Edit announcement"
                         : "Post an announcement"
                     }
-                    className={cn("h-9 px-3", touch)}
+                    className={cn("px-3", touch)}
                     onClick={() => {
                       returnFocus.current = "announcement";
                       setAnnouncing({
@@ -3064,7 +3064,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   type="button"
                   variant="outline"
                   data-focus-key="add-target"
-                  className={cn("h-10 px-4", touch)}
+                  className={cn("px-4", touch)}
                   onClick={() => openComponent(null, "add-target")}
                 >
                   <PlusIcon aria-hidden="true" />
@@ -3189,7 +3189,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                       type="button"
                                       variant="ghost"
                                       size="icon-sm"
-                                      className="hidden size-8 shrink-0 cursor-grab touch-none text-muted-foreground active:cursor-grabbing md:inline-flex [@media(any-pointer:coarse)]:size-11"
+                                      className="hidden shrink-0 cursor-grab touch-none text-muted-foreground active:cursor-grabbing md:inline-flex"
                                       aria-label={`Reorder ${component.name}`}
                                       aria-describedby="reorder-hint"
                                       onPointerDown={(event) => {
@@ -3290,7 +3290,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                   {!component.public && <Tag>Hidden</Tag>}
                                   {changed && <Tag tone="draft">{changed}</Tag>}
                                 </div>
-                                <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[13px] leading-5 text-muted-foreground">
+                                <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground">
                                   <span
                                     className={cn(
                                       "shrink-0 font-medium md:hidden",
@@ -3329,7 +3329,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                   beside the row's actions. */}
                               <span
                                 className={cn(
-                                  "hidden w-28 shrink-0 text-right text-[13px] font-medium md:block",
+                                  "hidden w-28 shrink-0 text-right text-xs font-medium md:block",
                                   status
                                     ? toneClass[status]
                                     : "text-muted-foreground",
@@ -3344,7 +3344,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                     variant="ghost"
                                     size="icon"
                                     className={cn(
-                                      "size-11 shrink-0 md:size-9",
+                                      "shrink-0",
                                       touchIcon,
                                       !component.public &&
                                         "text-muted-foreground",
@@ -3384,10 +3384,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                     variant="ghost"
                                     size="icon"
                                     data-focus-key={`actions-${key}`}
-                                    className={cn(
-                                      "size-11 shrink-0 md:size-9",
-                                      touchIcon,
-                                    )}
+                                    className={cn("shrink-0", touchIcon)}
                                     aria-label={`Actions for ${component.name}`}
                                   >
                                     <MoreHorizontalIcon aria-hidden="true" />
@@ -3486,7 +3483,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           onChange={(e) =>
                             updateDraft({ name: e.target.value }, "name")
                           }
-                          className="h-10"
                         />
                       )}
                     </Field>
@@ -3547,7 +3543,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                             )
                           }
                           placeholder="https://discord.gg/your-server"
-                          className="h-10"
                         />
                       )}
                     </Field>
@@ -3644,7 +3639,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                       size="icon-sm"
                                       aria-label="Remove logo"
                                       className={cn(
-                                        "absolute -top-2.5 -right-2.5 size-8 rounded-full bg-popover text-muted-foreground shadow-sm hover:text-destructive dark:bg-popover",
+                                        "absolute -top-2.5 -right-2.5 rounded-full bg-popover text-muted-foreground shadow-sm hover:text-destructive dark:bg-popover",
                                         touchIcon,
                                       )}
                                     >
@@ -3662,7 +3657,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                   <p className="text-sm font-medium">
                                     Remove the logo?
                                   </p>
-                                  <p className="text-[13px] leading-5 text-muted-foreground">
+                                  <p className="text-xs leading-5 text-muted-foreground">
                                     Your page shows its initial instead.
                                   </p>
                                 </div>
@@ -3670,7 +3665,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                   <Button
                                     type="button"
                                     variant="outline"
-                                    className={cn("h-9 px-3", touch)}
+                                    className={cn("px-3", touch)}
                                     onClick={() => setLogoRemoveOpen(false)}
                                   >
                                     Cancel
@@ -3678,7 +3673,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                   <Button
                                     type="button"
                                     variant="destructive-solid"
-                                    className={cn("h-9 px-3", touch)}
+                                    className={cn("px-3", touch)}
                                     onClick={() => {
                                       setPendingLogo(
                                         state.logoVersion === null
@@ -3759,7 +3754,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         ))}
                       </ToggleGroup>
                       {draft.theme === "system" && (
-                        <p className="text-[13px] leading-5 text-muted-foreground">
+                        <p className="text-xs leading-5 text-muted-foreground">
                           Matches each visitor&apos;s device.
                         </p>
                       )}
@@ -3784,7 +3779,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       >
                         <SelectTrigger
                           id="status-font"
-                          className="w-full bg-input-background data-[size=default]:h-10 dark:bg-input-background [@media(any-pointer:coarse)]:data-[size=default]:h-11"
+                          className="w-full bg-input-background dark:bg-input-background"
                         >
                           <SelectValue />
                         </SelectTrigger>
@@ -3824,7 +3819,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           type="button"
                           variant="outline"
                           data-focus-key="add-link"
-                          className={cn("h-9 px-3", touch)}
+                          className={cn("px-3", touch)}
                           disabled={draft.links.length >= maxLinks}
                           onClick={() => {
                             updateDraft({
@@ -3896,7 +3891,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                       `link-${index}-${part}`,
                                     )
                                   }
-                                  className="h-10"
                                 />
                                 {error && (
                                   <FieldMessage id={`${id}-error`}>
@@ -3911,7 +3905,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                             variant="ghost"
                             size="icon"
                             className={cn(
-                              "col-start-2 row-start-1 mt-6 size-10 sm:col-start-auto sm:row-start-auto",
+                              "col-start-2 row-start-1 mt-6 sm:col-start-auto sm:row-start-auto",
                               touchIcon,
                             )}
                             aria-label={`Remove link ${index + 1}`}
@@ -3943,7 +3937,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           updateDraft({ footerText: e.target.value })
                         }
                         placeholder={`© ${organization.name}`}
-                        className="h-10"
                       />
                     </div>
                     <div className="flex items-center justify-between gap-4">
@@ -4041,7 +4034,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   />
                   Saved<span className="sr-only">.</span>
                 </span>{" "}
-                <span className="text-[13px] leading-5 text-muted-foreground">
+                <span className="text-xs leading-5 text-muted-foreground">
                   {state.published
                     ? "Visitors see it now."
                     : "Visitors see it once the page is published."}
@@ -4081,7 +4074,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         />
                         Changed in another session
                       </p>
-                      <p className="text-[13px] leading-5 text-muted-foreground">
+                      <p className="text-xs leading-5 text-muted-foreground">
                         Your edits aren&apos;t saved yet.
                       </p>
                     </>
@@ -4121,7 +4114,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       or restores another session's work. One decision per
                       line, so each can be checked. */}
                       {notice.text && (
-                        <p className="text-[13px] leading-5 text-pretty text-muted-foreground">
+                        <p className="text-xs leading-5 text-pretty text-muted-foreground">
                           {notice.text}
                         </p>
                       )}
@@ -4135,7 +4128,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         const list = (
                           <ul
                             id="merge-decisions"
-                            className="mt-1 list-disc space-y-0.5 pl-5 text-[0.8125rem] text-pretty text-muted-foreground marker:text-warning"
+                            className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-pretty text-muted-foreground marker:text-warning"
                           >
                             {(open ? items : items.slice(0, 3)).map((item) => (
                               <li key={item}>{item}</li>
@@ -4153,7 +4146,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                                 aria-expanded={open}
                                 aria-controls="merge-decisions"
                                 className={cn(
-                                  "mt-1 h-10 shrink-0 self-start px-0 text-sm",
+                                  "mt-1 shrink-0 self-start px-0 text-sm",
                                   touch,
                                 )}
                                 onClick={() =>
@@ -4170,13 +4163,13 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       })()}
                     </>
                   ) : notice?.text ? (
-                    <p className="text-[13px] leading-5 text-pretty text-muted-foreground">
+                    <p className="text-xs leading-5 text-pretty text-muted-foreground">
                       {notice.text}
                     </p>
                   ) : null}
                 </div>
                 {quietBar && !notice?.text && changes.length > 0 && (
-                  <p className="text-[13px] leading-5 text-pretty text-muted-foreground">
+                  <p className="text-xs leading-5 text-pretty text-muted-foreground">
                     {`${sentenceCase(joinList(changes))}.`}
                   </p>
                 )}
@@ -4186,7 +4179,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   <Button
                     type="button"
                     variant="ghost"
-                    className={cn("h-10 px-3", touch)}
+                    className={cn("px-3", touch)}
                     onClick={() => {
                       const first = validate()[0];
                       setTab("settings");
@@ -4202,7 +4195,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       type="button"
                       variant="outline"
                       className={cn(
-                        "h-10 flex-1 px-4 sm:flex-none",
+                        "flex-1 px-4 sm:flex-none",
                         touch,
                         busyLook,
                       )}
@@ -4216,7 +4209,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     <Button
                       type="button"
                       className={cn(
-                        "h-10 flex-1 px-4 sm:flex-none",
+                        "flex-1 px-4 sm:flex-none",
                         touch,
                         busyLook,
                       )}
@@ -4235,7 +4228,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       type="button"
                       variant="outline"
                       className={cn(
-                        "h-10 flex-1 px-4 sm:flex-none",
+                        "flex-1 px-4 sm:flex-none",
                         touch,
                         busyLook,
                       )}
@@ -4250,7 +4243,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     <Button
                       type="button"
                       className={cn(
-                        "h-10 flex-1 px-4 sm:flex-none",
+                        "flex-1 px-4 sm:flex-none",
                         touch,
                         busyLook,
                       )}
@@ -4365,10 +4358,11 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         const Glyph = kindIcon[kind];
                         return (
                           <ToggleGroupItem
+                            size="sm"
                             key={kind}
                             value={kind}
                             data-value={kind}
-                            className="h-8 gap-1.5"
+                            className="gap-1.5"
                           >
                             <Glyph aria-hidden="true" />
                             {kindLabel[kind]}
@@ -4386,7 +4380,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     aside={
                       // The probe schedule, as a glanceable fact beside the
                       // label; screen readers hear it whole.
-                      <span className="inline-flex items-center gap-1 text-[13px] leading-5 text-muted-foreground tabular-nums">
+                      <span className="inline-flex items-center gap-1 text-xs leading-5 text-muted-foreground tabular-nums">
                         <TimerIcon aria-hidden="true" className="size-3.5" />
                         <span aria-hidden="true">{WEBSITE_CHECK_SECONDS}s</span>
                         <span className="sr-only">
@@ -4411,7 +4405,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           const url = withScheme(e.target.value);
                           if (url !== e.target.value) patchComponent({ url });
                         }}
-                        className="h-10"
                       />
                     )}
                   </Field>
@@ -4440,7 +4433,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                               data-focus-key="component-source"
                               aria-expanded={sourceOpen}
                               className={cn(
-                                "h-10 w-full justify-between border-input px-3 font-normal dark:border-input",
+                                "w-full justify-between border-input px-3 font-normal dark:border-input",
                                 touch,
                               )}
                             >
@@ -4517,7 +4510,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                       onChange={(e) =>
                         patchComponent({ name: e.target.value }, "name")
                       }
-                      className="h-10"
                     />
                   )}
                 </Field>
@@ -4531,7 +4523,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   >
                     <SelectTrigger
                       id="component-group"
-                      className="w-full bg-input-background data-[size=default]:h-10 dark:bg-input-background [@media(any-pointer:coarse)]:data-[size=default]:h-11"
+                      className="w-full bg-input-background dark:bg-input-background"
                     >
                       <SelectValue />
                     </SelectTrigger>
@@ -4557,7 +4549,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         <SelectItem
                           value="no-tags"
                           disabled
-                          className="min-h-9 text-[13px] whitespace-normal text-muted-foreground [@media(any-pointer:coarse)]:min-h-11"
+                          className="min-h-9 text-xs whitespace-normal text-muted-foreground [@media(any-pointer:coarse)]:min-h-11"
                         >
                           Add tags on Machines to make groups.
                         </SelectItem>
@@ -4592,12 +4584,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               <Button
                 type="button"
                 variant="outline"
-                className={cn("h-10 px-4", touch)}
+                className={cn("px-4", touch)}
                 onClick={() => setComponentForm(null)}
               >
                 Cancel
               </Button>
-              <Button type="submit" className={cn("h-10 px-4", touch)}>
+              <Button type="submit" className={cn("px-4", touch)}>
                 {componentForm?.targetKey === null
                   ? "Add target"
                   : "Update target"}
@@ -4699,7 +4691,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 />
                 <p
                   id="status-announcement-count"
-                  className="text-right text-[13px] text-muted-foreground tabular-nums"
+                  className="text-right text-xs text-muted-foreground tabular-nums"
                 >
                   {announcing?.text.length ?? 0} of 500
                 </p>
@@ -4710,7 +4702,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     type="button"
                     variant="ghost"
                     className={cn(
-                      "-ml-3 h-10 px-3 text-destructive hover:text-destructive",
+                      "-ml-3 px-3 text-destructive hover:text-destructive",
                       touch,
                     )}
                     disabled={liveBusy}
@@ -4744,7 +4736,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               <Button
                 type="button"
                 variant="outline"
-                className={cn("h-10 px-4", touch)}
+                className={cn("px-4", touch)}
                 disabled={liveBusy}
                 onClick={() => setAnnouncing(null)}
               >
@@ -4752,7 +4744,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               </Button>
               <Button
                 type="submit"
-                className={cn("h-10 px-4", touch, busyLook)}
+                className={cn("px-4", touch, busyLook)}
                 aria-disabled={liveBusy || undefined}
                 disabled={!announcing?.text.trim()}
               >
@@ -5076,7 +5068,7 @@ function PublicationPill({
             aria-label={`${word}, ${canManage ? "address and publishing" : "address"}`}
             className={cn(
               shape,
-              "gap-0 px-[5px]",
+              "gap-0 px-1",
               "group/pill relative justify-self-start transition-colors outline-none [grid-area:1/1] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
               // A 44 pixel tall target on touch screens.
               "[@media(any-pointer:coarse)]:before:absolute [@media(any-pointer:coarse)]:before:-inset-x-1 [@media(any-pointer:coarse)]:before:-inset-y-2.5",
@@ -5096,7 +5088,7 @@ function PublicationPill({
               data-fold={published || undefined}
               className={cn(published && fold)}
             >
-              <span className="inline-flex items-center gap-1 pr-[3px] pl-1">
+              <span className="inline-flex items-center gap-1 pr-1 pl-1">
                 <span>{word}</span>
                 <ChevronDownIcon
                   aria-hidden="true"
@@ -5137,7 +5129,7 @@ function PublicationPill({
             variant="outline"
             size="icon"
             aria-label="Copy public address"
-            className={cn("size-9 shrink-0", touchIcon)}
+            className={cn("shrink-0", touchIcon)}
             onClick={onCopy}
           >
             {copied ? (
@@ -5150,7 +5142,7 @@ function PublicationPill({
         {copyFailed && (
           <p
             role="alert"
-            className="flex items-start gap-1.5 text-[13px] leading-5 text-destructive"
+            className="flex items-start gap-1.5 text-xs leading-5 text-destructive"
           >
             <CircleAlertIcon
               aria-hidden="true"
@@ -5166,7 +5158,7 @@ function PublicationPill({
                 type="button"
                 variant="ghost"
                 className={cn(
-                  "-ml-2 h-9 px-2 text-destructive hover:text-destructive",
+                  "-ml-2 px-2 text-destructive hover:text-destructive",
                   touch,
                 )}
                 onClick={onUnpublish}
@@ -5178,7 +5170,7 @@ function PublicationPill({
           )
         ) : (
           <>
-            <p className="text-[13px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               Players see a not-found page at this address.
             </p>
             {canManage && (
@@ -5186,7 +5178,7 @@ function PublicationPill({
               // popover's one filled button (claude D-52).
               <Button
                 type="button"
-                className={cn("h-9 w-full px-3", touch, busyLook)}
+                className={cn("w-full px-3", touch, busyLook)}
                 aria-disabled={busy || undefined}
                 aria-describedby={publishError ? "publish-error" : undefined}
                 onClick={() => {
@@ -5234,7 +5226,7 @@ function SetupCard({
         <Button
           type="button"
           data-focus-key="setup-add"
-          className={cn("h-9 px-3", touch)}
+          className={cn("px-3", touch)}
           onClick={onAdd}
         >
           <PlusIcon aria-hidden="true" />
@@ -5249,7 +5241,7 @@ function SetupCard({
         <Button
           type="button"
           variant="outline"
-          className={cn("h-9 px-3", touch)}
+          className={cn("px-3", touch)}
           onClick={onSettings}
         >
           Open settings
@@ -5379,7 +5371,7 @@ function TargetHealth({
             </Tag>
           )}
         </div>
-        <p className="mt-0.5 text-[13px] leading-5 break-words text-muted-foreground">
+        <p className="mt-0.5 text-xs leading-5 break-words text-muted-foreground">
           {component.detail ??
             (component.sourceName === null
               ? `Removed ${kindLabel[component.kind].toLowerCase()}`
@@ -5389,16 +5381,14 @@ function TargetHealth({
         </p>
       </div>
       <div className="shrink-0 text-right">
-        <p
-          className={cn("text-[13px] leading-5 font-medium", toneClass[health])}
-        >
+        <p className={cn("text-xs leading-5 font-medium", toneClass[health])}>
           {statusLabel[health]}
         </p>
         {component.observedAt !== null && (
           <Time
             at={component.observedAt}
             now={now}
-            className="text-[13px] leading-5 text-muted-foreground"
+            className="text-xs leading-5 text-muted-foreground"
           />
         )}
       </div>
@@ -5433,7 +5423,7 @@ function TargetHealth({
           <p role="status" className="sr-only">
             {heard.spoken}
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[13px] leading-5 text-muted-foreground sm:pl-[2.125rem]">
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-5 text-muted-foreground sm:pl-8.5">
             <span className="tabular-nums">
               {plural(rows.length, "target")}
               {hidden ? `, ${hidden} hidden` : ""}.
@@ -5471,7 +5461,7 @@ function TargetHealth({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className={cn("h-7 px-2", touch)}
+                    className={cn("px-2", touch)}
                     disabled={refreshing}
                     onClick={onRetry}
                   >
@@ -5497,7 +5487,7 @@ function TargetHealth({
           <Button
             type="button"
             variant="ghost"
-            className={cn("-mt-1 h-9 shrink-0 px-3", touch)}
+            className={cn("-mt-1 shrink-0 px-3", touch)}
             onClick={onManage}
           >
             Manage targets
@@ -5623,29 +5613,27 @@ function MaintenanceRow({
           {phase === "active" && (
             <Badge
               variant="outline"
-              className="h-[22px] border-foreground/40 text-[13px] text-foreground"
+              className="h-[22px] border-foreground/40 text-xs text-foreground"
             >
               In progress
             </Badge>
           )}
           {privateOnly && <Tag>Hidden</Tag>}
         </div>
-        <p className="mt-0.5 text-[13px] leading-5 text-foreground/80">
-          {timing}
-        </p>
-        <p className="text-[13px] leading-5 text-muted-foreground">
+        <p className="mt-0.5 text-xs leading-5 text-foreground/80">{timing}</p>
+        <p className="text-xs leading-5 text-muted-foreground">
           <time dateTime={new Date(window.startsAt).toISOString()}>
             {rangeText}
           </time>
         </p>
-        <p className="text-[13px] leading-5 break-words text-muted-foreground">
+        <p className="text-xs leading-5 break-words text-muted-foreground">
           {affectedNames(window, components)}
         </p>
         {canManage && phase === "active" && onComplete && (
           <Button
             type="button"
             variant="outline"
-            className={cn("mt-2.5 h-9 px-3", touch)}
+            className={cn("mt-2.5 px-3", touch)}
             onClick={onComplete}
           >
             <CheckIcon aria-hidden="true" />
@@ -5661,7 +5649,7 @@ function MaintenanceRow({
               variant="ghost"
               size="icon"
               data-focus-key={`window-${window.id}`}
-              className={cn("size-9 shrink-0", touchIcon)}
+              className={cn("shrink-0", touchIcon)}
               aria-label={`Actions for ${window.title}`}
             >
               <MoreHorizontalIcon aria-hidden="true" />
@@ -5729,7 +5717,7 @@ function SourcePicker({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className={cn("h-8", touch)}
+                className={cn("", touch)}
                 onClick={() => onSearch("")}
               >
                 Clear search
@@ -5876,7 +5864,6 @@ function MaintenanceFields({
             {...aria("title")}
             onChange={(e) => onChange({ title: e.target.value }, "title")}
             placeholder="Monthly wipe"
-            className="h-10"
           />
           {err("title") && (
             <FieldMessage id="maintenance-title-error">
@@ -5982,11 +5969,12 @@ function MaintenanceFields({
                   const value = preset.ms === -1 ? "custom" : String(preset.ms);
                   return (
                     <ToggleGroupItem
+                      size="sm"
                       key={preset.label}
                       value={value}
                       data-value={value}
                       aria-label={preset.ms === -1 ? "Custom end" : undefined}
-                      className="h-8 px-1"
+                      className="px-1"
                     >
                       {preset.label}
                     </ToggleGroupItem>
@@ -6071,7 +6059,7 @@ function MaintenanceFields({
             </p>
             <p
               id="maintenance-zone"
-              className="mt-0.5 text-[13px] leading-5 text-muted-foreground"
+              className="mt-0.5 text-xs leading-5 text-muted-foreground"
             >
               Your time zone, {zone}. Players see theirs.
             </p>
@@ -6108,7 +6096,7 @@ function MaintenanceFields({
             </label>
           </RadioGroup>
           {components.length === 0 && (
-            <p className="text-[13px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               Save targets first to pick them here.
             </p>
           )}
@@ -6122,7 +6110,7 @@ function MaintenanceFields({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p
                   id="maintenance-targets-count"
-                  className="text-[13px] text-muted-foreground tabular-nums"
+                  className="text-xs text-muted-foreground tabular-nums"
                 >
                   {form.componentIds.length} of {components.length} selected
                 </p>
@@ -6136,7 +6124,7 @@ function MaintenanceFields({
                       aria-label="Search targets"
                       value={form.search}
                       onChange={(e) => onChange({ search: e.target.value })}
-                      className="h-8 pl-8 text-sm [@media(any-pointer:coarse)]:h-11"
+                      className="pl-8 text-sm"
                       placeholder="Search targets"
                     />
                   </div>
@@ -6150,7 +6138,7 @@ function MaintenanceFields({
                 </FieldMessage>
               )}
               {affectsHiddenOnly && (
-                <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-[13px] leading-5 text-warning">
+                <p className="flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-xs leading-5 text-warning">
                   <EyeOffIcon
                     aria-hidden="true"
                     className="mt-0.5 size-3.5 shrink-0"
@@ -6229,7 +6217,7 @@ function MaintenanceFields({
             </div>
           )}
           {unsavedTargets && (
-            <p className="text-[13px] leading-5 text-muted-foreground">
+            <p className="text-xs leading-5 text-muted-foreground">
               Unsaved targets show here once saved.
             </p>
           )}
@@ -6251,17 +6239,13 @@ function MaintenanceFields({
         <Button
           type="button"
           variant="outline"
-          className={cn("h-10 px-4", touch)}
+          className={cn("px-4", touch)}
           disabled={busy}
           onClick={onCancel}
         >
           Cancel
         </Button>
-        <Button
-          type="submit"
-          className={cn("h-10 px-4", touch)}
-          disabled={busy}
-        >
+        <Button type="submit" className={cn("px-4", touch)} disabled={busy}>
           {busy && <Spinner aria-hidden="true" />}
           {busy
             ? "Saving window..."
@@ -6377,7 +6361,7 @@ function AccentField({
                   // Highlight edge and a HighlightText check on Highlight,
                   // and focus is a CanvasText outline (claude D-64, codex
                   // D-40, a11y D-70).
-                  className="size-8 min-w-0 rounded-full border border-border-strong p-0 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card aria-checked:shadow-[inset_0_0_0_2px_var(--color-card)] aria-checked:border-foreground [@media(any-pointer:coarse)]:size-11 forced-color-adjust-none forced-colors:border-[CanvasText] forced-colors:aria-checked:border-2 forced-colors:aria-checked:border-[Highlight] forced-colors:aria-checked:shadow-none forced-colors:focus-visible:ring-0 forced-colors:focus-visible:ring-offset-0 forced-colors:focus-visible:outline-2 forced-colors:focus-visible:outline-solid forced-colors:focus-visible:outline-offset-2 forced-colors:focus-visible:outline-[color:CanvasText]"
+                  className="min-w-0 rounded-full border border-border-strong p-0 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card aria-checked:shadow-[inset_0_0_0_2px_var(--color-card)] aria-checked:border-foreground forced-color-adjust-none forced-colors:border-[CanvasText] forced-colors:aria-checked:border-2 forced-colors:aria-checked:border-[Highlight] forced-colors:aria-checked:shadow-none forced-colors:focus-visible:ring-0 forced-colors:focus-visible:ring-offset-0 forced-colors:focus-visible:outline-2 forced-colors:focus-visible:outline-solid forced-colors:focus-visible:outline-offset-2 forced-colors:focus-visible:outline-[color:CanvasText]"
                   style={{ background: swatch }}
                 >
                   {preset === swatch && (
@@ -6436,7 +6420,7 @@ function AccentField({
               <p
                 id="status-accent-contrast"
                 className={cn(
-                  "flex items-start gap-1.5 text-[13px] leading-5",
+                  "flex items-start gap-1.5 text-xs leading-5",
                   weak.length > 0 ? "text-warning" : "text-muted-foreground",
                 )}
               >
@@ -6464,16 +6448,13 @@ function AccentField({
                     variant="ghost"
                     size="sm"
                     aria-label="Contrast ratios"
-                    className={cn(
-                      "h-7 px-2 text-[13px] text-muted-foreground",
-                      touch,
-                    )}
+                    className={cn("px-2 text-xs text-muted-foreground", touch)}
                   >
                     Ratios
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent align="start" className="w-60 p-3">
-                  <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-[13px] leading-5">
+                  <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-xs leading-5">
                     {checks.map(({ background, ratio: r }) => (
                       <Fragment key={background}>
                         <dt className="text-muted-foreground">
@@ -6494,7 +6475,7 @@ function AccentField({
                       {ratio(accentTextContrast(color))}
                     </dd>
                   </dl>
-                  <p className="mt-2 border-t border-border pt-2 text-[13px] leading-5 text-muted-foreground">
+                  <p className="mt-2 border-t border-border pt-2 text-xs leading-5 text-muted-foreground">
                     The top bar and button need 3:1.
                   </p>
                 </PopoverContent>
@@ -6533,10 +6514,11 @@ function WidthToggle({
         ] as const
       ).map(([value, label, Icon]) => (
         <ToggleGroupItem
+          size="sm"
           key={value}
           value={value}
           data-value={value}
-          className="h-7 gap-1.5 px-2.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-surface-elevated"
+          className="gap-1.5 px-2.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-surface-elevated"
         >
           <Icon aria-hidden="true" className="size-3.5" />
           {label}
@@ -6560,7 +6542,7 @@ function PreviewHeader({ id, onExpand }: { id: string; onExpand: () => void }) {
         variant="outline"
         size="sm"
         data-focus-key="preview-full"
-        className={cn("h-8 px-2.5 text-xs", touch)}
+        className={cn("px-2.5 text-xs", touch)}
         onClick={onExpand}
       >
         <MonitorIcon aria-hidden="true" />

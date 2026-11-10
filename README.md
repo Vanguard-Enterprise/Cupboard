@@ -1,22 +1,45 @@
 # Cupboard
 
-This repository contains the in-progress application rebuild.
+This repository contains the Cupboard application: a Next.js web runtime in
+`src/` and a Rust API monolith in `backend/` backed by PostgreSQL and S3 storage.
+Contributors should follow [AGENTS.md](AGENTS.md).
 
-Read the [rebuild plan](docs/REBUILD.md) for the current product scope,
-architecture, and acceptance criteria. Contributors should also follow
-[AGENTS.md](AGENTS.md).
+## UI consistency
 
-## Design direction
+Design tokens live in `src/app/globals.css` and shared controls in
+`src/components/ui`. [docs/DESIGN.md](docs/DESIGN.md) lists the values and
+common mistakes. `npm run lint` runs the `cupboard-ui` rules in
+`eslint/cupboard-ui.mjs`: raw or palette colors, arbitrary font sizes, radii,
+and spacing, heavy weights, all-caps text, height overrides on shared
+controls, and native menus. `npx eslint --fix` applies the mechanical fixes.
+`npm run ui:check` rejects raw colors and unloaded fonts in stylesheets. Both
+run in `npm run check` and in CI's UI consistency job.
 
-Read the [design direction](docs/DESIGN.md) before changing the interface. It
-records Cupboard's product character, visual system, interaction rules,
-accessibility bar, and writing style.
+## Worktrees and review
 
-## Development workflow
+Run each task in its own worktree. `npm run worktree -- feat server-health`
+creates branch `feat/server-health` in `.worktrees/feat-server-health` from the
+local `origin/main` (fetch first for the latest; pass a base ref as a third
+argument). Reuse a worktree T3 already provides instead of nesting another. In a
+new worktree run `npm ci`, `npm run doctor`, then `npm run dev`. Doctor checks
+the toolchain, Docker, GitHub access, NetBird, saved ports, and any dev lock.
 
-Follow [the development workflow](docs/WORKFLOW.md) for issue-named worktrees,
-isolated databases and ports, fast checks, PR review, and agent handoffs. These
-are the defaults for all new Cupboard work.
+Each worktree gets its own ports, Compose database and storage volumes, and
+browser session cookie name, so signing in or out in one worktree does not affect
+another. The worktree's absolute path is its identity: moving it starts a fresh
+database and leaves the old volume intact. For a task-specific hostname, set
+`CUPBOARD_DEV_ORIGINS` and add its full origin to `CUPBOARD_WEB_ORIGINS`.
+
+`.dev-stack/dev.lock` blocks a second `npm run dev` in the same worktree. After a
+hard kill, run doctor, confirm the recorded PID has exited, and remove only that
+lock file.
+
+`npm run check:quick` runs formatting, Clippy, lint, type checks, and Vitest,
+skipping database-backed Rust tests and the production build. Run `npm run check`
+before handoff. `npm run review -- <PR>` prints a PR's head commit, checks,
+reviews, comments, and all review threads without changing GitHub. Keep
+worktrees and their volumes after handoff; removing them is a separate, explicit
+request.
 
 ## Local development
 

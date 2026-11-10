@@ -1,19 +1,19 @@
 .showcase {
   position: relative;
   isolation: isolate;
-  color: #eee;
-  font-family: var(--font-geist), sans-serif;
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), sans-serif;
   container-type: inline-size;
 }
 .window {
   overflow: hidden;
   min-height: 52cqw;
-  border: 1px solid #ffffff14;
+  border: 1px solid color-mix(in srgb, var(--foreground) 8%, transparent);
   border-radius: 14px 14px 0 0;
-  background: linear-gradient(125deg, #0d0e0f, #08090a 65%);
+  background: linear-gradient(125deg, var(--background), var(--background) 65%);
   box-shadow:
-    0 -1px 0 #ffffff08,
-    0 0 80px #ffffff03;
+    0 -1px 0 color-mix(in srgb, var(--foreground) 3%, transparent),
+    0 0 80px color-mix(in srgb, var(--foreground) 1%, transparent);
   transition:
     filter 900ms cubic-bezier(0.2, 0.7, 0.2, 1),
     transform 900ms cubic-bezier(0.2, 0.7, 0.2, 1),
@@ -33,23 +33,23 @@
   height: 4.5cqw;
   min-height: 52px;
   padding: 0 1cqw;
-  border-bottom: 1px solid #ffffff08;
-  background: #050606;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 3%, transparent);
+  background: var(--background);
   font-size: clamp(9px, 0.85cqw, 15px);
 }
 .workspace {
   display: flex;
   align-items: center;
   gap: 0.8cqw;
-  color: #b4b5b7;
+  color: var(--muted-foreground);
   white-space: nowrap;
 }
 .workspace strong {
-  color: #eee;
+  color: var(--foreground);
   font-weight: 500;
 }
 .workspace > span:not(.environment) {
-  color: #535457;
+  color: var(--border-strong);
 }
 .workspace svg,
 .workspaceAction svg {
@@ -71,8 +71,8 @@
   gap: 5px;
   padding: 0.2cqw 0.5cqw;
   border-radius: 4px;
-  background: #7cb58d12;
-  color: #83ac91;
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+  color: var(--primary);
   font-size: 0.65cqw;
 }
 .environment i {
@@ -86,8 +86,8 @@
   align-items: center;
   gap: 8px;
   padding: 0.5cqw 0.6cqw;
-  background: #171819;
-  border: 1px solid #ffffff08;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 3%, transparent);
   border-radius: 5px;
   font-size: 0.7cqw;
 }
@@ -98,7 +98,7 @@
   flex: 0 0 max(150px, 12.6%);
   padding: 0.6cqw 0.5cqw;
   font-size: 0.73cqw;
-  color: #96989b;
+  color: var(--text-muted);
 }
 .sidebar > div {
   display: flex;
@@ -114,12 +114,12 @@
   flex-shrink: 0;
 }
 .sidebar .active {
-  background: #ffffff0d;
-  color: #e8e9ea;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  color: var(--foreground);
 }
 .sidebar p {
   margin: 1.1cqw 0.5cqw 0.45cqw;
-  color: #5f6266;
+  color: var(--border-strong);
   font-size: 0.65cqw;
 }
 .sidebar .console {
@@ -128,8 +128,8 @@
   padding: 3px;
   margin-bottom: 0.8cqw;
   gap: 3px;
-  background: #18191b;
-  border: 1px solid #ffffff06;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 2%, transparent);
   border-radius: 6px;
   font-size: clamp(9px, 0.65cqw, 12px);
 }
@@ -156,10 +156,10 @@
   inset: 3px auto 3px 3px;
   width: calc(50% - 4.5px);
   border-radius: 3px;
-  background: #ffffff0d;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
   box-shadow:
-    inset 0 0 0 1px #ffffff05,
-    0 1px 3px #0003;
+    inset 0 0 0 1px color-mix(in srgb, var(--foreground) 2%, transparent),
+    0 1px 3px color-mix(in srgb, black 20%, transparent);
   transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .console:has(span:last-child:hover)::before {
@@ -169,7 +169,7 @@
   position: relative;
   z-index: 1;
   min-height: 44px;
-  color: #8f9296;
+  color: var(--text-muted);
   cursor: pointer;
   border: 0;
   border-radius: 3px;
@@ -178,11 +178,11 @@
     background 180ms;
 }
 .console span:first-child {
-  color: #eee;
+  color: var(--foreground);
 }
 .console span:hover {
   color: white;
-  background: #ffffff07;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
 
 .plus {
@@ -192,7 +192,7 @@
   min-width: 0;
   flex: 1;
   margin: 0.4cqw 0.5cqw 0 0;
-  border: 1px solid #ffffff06;
+  border: 1px solid color-mix(in srgb, var(--foreground) 2%, transparent);
   border-radius: 7px 7px 0 0;
 }
 .toolbar {
@@ -202,8 +202,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 1cqw;
-  border-bottom: 1px solid #ffffff06;
-  color: #999b9e;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 2%, transparent);
+  color: var(--muted-foreground);
   font-size: 0.73cqw;
 }
 .toolbar > span {
@@ -218,8 +218,8 @@
 .ranges {
   display: flex;
   padding: 3px;
-  background: #141517;
-  border: 1px solid #ffffff05;
+  background: var(--card);
+  border: 1px solid color-mix(in srgb, var(--foreground) 2%, transparent);
   border-radius: 5px;
 }
 .ranges button {
@@ -228,14 +228,14 @@
   padding: 0.3cqw 0.5cqw;
   border: 0;
   border-radius: 3px;
-  color: #777a7e;
+  color: var(--text-muted);
   font-size: 0.66cqw;
   cursor: pointer;
 }
 .ranges button[aria-pressed="true"] {
-  color: #e7e8e9;
-  background: #303133;
-  box-shadow: 0 1px 4px #0006;
+  color: var(--foreground);
+  background: var(--border);
+  box-shadow: 0 1px 4px color-mix(in srgb, black 40%, transparent);
 }
 .ranges button:focus-visible {
   outline: 2px solid var(--ring);
@@ -260,7 +260,7 @@
   align-items: center;
   gap: 0.3cqw;
   font-size: 0.7cqw;
-  color: #a99bd1;
+  color: var(--primary);
 }
 .reportTitle svg {
   width: 0.8cqw;
@@ -270,7 +270,7 @@
   display: flex;
   gap: 1.2cqw;
   margin: 0.5cqw 0 1.2cqw;
-  color: #84868a;
+  color: var(--text-muted);
   font-size: 0.66cqw;
 }
 .summary {
@@ -286,8 +286,12 @@
   position: relative;
   min-width: 11cqw;
   padding: 0.6cqw 1cqw 0.8cqw;
-  border: 1px solid #ffffff05;
-  background: linear-gradient(120deg, #ffffff03, transparent);
+  border: 1px solid color-mix(in srgb, var(--foreground) 2%, transparent);
+  background: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--foreground) 1%, transparent),
+    transparent
+  );
 }
 .metrics > div + div {
   border-left: 0;
@@ -296,7 +300,7 @@
   display: block;
   font-size: 0.58cqw;
   letter-spacing: 0.05em;
-  color: #707477;
+  color: var(--text-muted);
 }
 .metrics strong {
   display: inline-block;
@@ -308,7 +312,7 @@
 }
 .metrics small {
   font-size: 0.8cqw;
-  color: #aaa;
+  color: var(--muted-foreground);
   letter-spacing: 0;
 }
 .metrics em {
@@ -319,7 +323,7 @@
   padding: 0.2cqw 0.4cqw;
   font-style: normal;
   font-size: 0.62cqw;
-  background: #7cb58d12;
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
   color: var(--primary);
   border-radius: 3px;
 }
@@ -329,9 +333,9 @@
 }
 .monitor {
   padding: 0.7cqw 0.8cqw;
-  border: 1px solid #ffffff07;
+  border: 1px solid color-mix(in srgb, var(--foreground) 3%, transparent);
   border-radius: 6px;
-  background: #18191a;
+  background: var(--card);
   font-size: 0.72cqw;
 }
 .monitor > div {
@@ -346,8 +350,8 @@
   cursor: pointer;
 }
 .monitorSwitch[data-state="checked"] {
-  background: #8371cb;
-  box-shadow: 0 0 10px #8371cb33;
+  background: var(--primary);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--primary) 20%, transparent);
 }
 .monitorSwitch:hover {
   filter: brightness(1.2);
@@ -366,7 +370,7 @@
 .monitor p {
   margin: 0.4cqw 0 0;
   font-size: 0.62cqw;
-  color: #76797d;
+  color: var(--text-muted);
 }
 .chart {
   position: relative;
@@ -388,7 +392,7 @@
   border-radius: 5px;
 }
 .goalLine {
-  stroke: #ffffff40;
+  stroke: color-mix(in srgb, var(--foreground) 25%, transparent);
   stroke-width: 1;
   stroke-dasharray: 1 5;
   vector-effect: non-scaling-stroke;
@@ -419,20 +423,20 @@
   }
 }
 .inspection path {
-  stroke: #ffffff1a;
+  stroke: color-mix(in srgb, var(--foreground) 10%, transparent);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 .inspection circle {
   fill: var(--primary);
-  stroke: #08090a;
+  stroke: var(--background);
   stroke-width: 2;
 }
 .target {
   position: absolute;
   top: 17%;
   right: 1%;
-  color: #797c80;
+  color: var(--text-muted);
   font: 0.6cqw var(--font-geist-mono);
 }
 .tooltip {
@@ -442,17 +446,17 @@
   gap: 3px;
   padding: 0.5cqw 0.7cqw;
   pointer-events: none;
-  border: 1px solid #ffffff12;
+  border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent);
   border-radius: 5px;
-  background: #151719ed;
+  background: color-mix(in srgb, var(--card) 93%, transparent);
   font-size: 0.8cqw;
-  box-shadow: 0 6px 20px #0004;
+  box-shadow: 0 6px 20px color-mix(in srgb, black 27%, transparent);
 }
 .tooltip strong {
   font-weight: 450;
 }
 .tooltip span {
-  color: #81868b;
+  color: var(--text-muted);
   font-size: 0.6cqw;
 }
 .axis {
@@ -462,7 +466,7 @@
   right: 2%;
   display: flex;
   justify-content: space-between;
-  color: #6d7278;
+  color: var(--text-muted);
   font: 0.55cqw var(--font-geist-mono);
 }
 .details {
@@ -470,11 +474,11 @@
   gap: 1cqw;
   margin-top: 1cqw;
   font-size: 0.7cqw;
-  color: #70767d;
+  color: var(--text-muted);
 }
 .details span:first-child {
   padding: 0.2cqw 0.8cqw;
-  background: #ffffff0b;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
   border-radius: 12px;
 }
 .fade,
@@ -494,7 +498,11 @@
 }
 .blur {
   backdrop-filter: blur(2px);
-  mask-image: linear-gradient(transparent 48%, #0008 78%, black);
+  mask-image: linear-gradient(
+    transparent 48%,
+    color-mix(in srgb, black 53%, transparent) 78%,
+    black
+  );
 }
 @keyframes chart-draw {
   from {
@@ -651,8 +659,8 @@
     transform 180ms;
 }
 .sidebar > div:not(.console):hover {
-  color: #f3f4f6;
-  background: #ffffff0a;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
   transform: translateX(2px);
 }
 .ranges button {
@@ -662,7 +670,7 @@
     box-shadow 180ms;
 }
 .ranges button:hover {
-  background: #ffffff0c;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
   color: white;
 }
 .metrics > div {
@@ -672,8 +680,8 @@
     transform 200ms;
 }
 .metrics > div:hover {
-  border-color: #ffffff18;
-  background: #ffffff05;
+  border-color: color-mix(in srgb, var(--foreground) 9%, transparent);
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
   transform: translateY(-2px);
 }
 .monitor {
@@ -683,8 +691,8 @@
 }
 .monitor:hover,
 .monitor:focus-within {
-  border-color: #ffffff20;
-  box-shadow: 0 4px 20px #0003;
+  border-color: color-mix(in srgb, var(--foreground) 13%, transparent);
+  box-shadow: 0 4px 20px color-mix(in srgb, black 20%, transparent);
 }
 .tooltip {
   transition:
@@ -753,8 +761,8 @@
     border-color 180ms;
 }
 .workspaceAction:hover {
-  background: #242628;
-  border-color: #ffffff20;
+  background: var(--surface-elevated);
+  border-color: color-mix(in srgb, var(--foreground) 13%, transparent);
 }
 .workspaceAction:focus-visible {
   outline: 2px solid var(--ring);

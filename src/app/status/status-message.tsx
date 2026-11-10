@@ -46,7 +46,7 @@ export function StatusMessage({
       {/* Like the status page: a rule across the window, one line centered
           under it, its link's hit box reaching into the padding. */}
       <footer className="border-t border-border">
-        <p className="flex items-center justify-center gap-1 px-4 py-5 text-[0.8125rem] leading-5 text-muted-foreground">
+        <p className="flex items-center justify-center gap-1 px-4 py-5 text-xs leading-5 text-muted-foreground">
           <span>Status pages by</span>
           <Link
             href="/"

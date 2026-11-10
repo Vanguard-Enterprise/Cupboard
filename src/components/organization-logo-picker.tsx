@@ -48,7 +48,6 @@ export function OrganizationLogoPicker({
         <Button
           type="button"
           variant="outline"
-          className="min-h-11"
           disabled={disabled}
           onClick={() => input.current?.click()}
         >
@@ -61,7 +60,6 @@ export function OrganizationLogoPicker({
                 type="button"
                 variant="destructive"
                 size="icon"
-                className="size-11"
                 disabled={disabled}
                 aria-label="Remove logo"
                 onClick={onRemove}

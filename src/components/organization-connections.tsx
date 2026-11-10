@@ -316,7 +316,6 @@ export function OrganizationConnections({ identity }: { identity: Identity }) {
         </div>
         <Button
           variant="outline"
-          className="min-h-11"
           ref={browseRef}
           onClick={() => {
             setQuery("");
@@ -394,7 +393,7 @@ export function OrganizationConnections({ identity }: { identity: Identity }) {
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
-                      className="size-11"
+                      size="icon"
                       aria-label={
                         busy && !editing && !removing
                           ? "Checking Pelican..."
@@ -526,7 +525,7 @@ export function OrganizationConnections({ identity }: { identity: Identity }) {
               requirements.
             </DialogDescription>
           </DialogHeader>
-          <InputGroup className="h-11 w-full bg-input-background">
+          <InputGroup className="w-full bg-input-background">
             <InputGroupAddon>
               <SearchIcon aria-hidden="true" />
             </InputGroupAddon>
@@ -573,7 +572,6 @@ export function OrganizationConnections({ identity }: { identity: Identity }) {
                     <div className="max-sm:col-start-2 max-sm:col-end-4">
                       <Button
                         variant="outline"
-                        className="min-h-11"
                         disabled={loading || busy || Boolean(error)}
                         aria-label={
                           service.id === "pelican"
@@ -604,7 +602,7 @@ export function OrganizationConnections({ identity }: { identity: Identity }) {
                 </p>
                 <Button
                   variant="secondary"
-                  className="mt-4 min-h-11"
+                  className="mt-4"
                   onClick={() => {
                     setQuery("");
                     searchRef.current?.focus();

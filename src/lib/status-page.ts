@@ -846,18 +846,6 @@ export function unusedSources(
   return sources.filter((s) => !used.has(`${s.kind}:${s.id}`));
 }
 
-/** Format for a datetime-local input in the browser's zone. */
-export function localDateTimeValue(at: number) {
-  const date = new Date(at);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-export function parseLocalDateTime(value: string) {
-  const at = new Date(value).getTime();
-  return Number.isFinite(at) ? at : null;
-}
-
 export type TimeFormat = { timeZone?: string; locale?: string };
 
 /**

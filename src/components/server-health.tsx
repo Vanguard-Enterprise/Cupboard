@@ -122,7 +122,6 @@ function HealthView({ identity }: { identity: Identity }) {
         {view && (
           <Button
             variant="outline"
-            className="min-h-11"
             disabled={refreshing}
             onClick={() => setAttempt((a) => a + 1)}
           >
@@ -163,7 +162,7 @@ function HealthView({ identity }: { identity: Identity }) {
                   : "Ask an organization administrator to add a server."}
               </p>
               {manage && (
-                <Button asChild className="mt-4 min-h-11">
+                <Button asChild className="mt-4">
                   <Link href="/dashboard/servers">Add server</Link>
                 </Button>
               )}
@@ -286,7 +285,7 @@ function HealthView({ identity }: { identity: Identity }) {
             </ul>
           )}
           {!!servers?.length && (
-            <Button variant="outline" asChild className="min-h-11">
+            <Button variant="outline" asChild>
               <Link href="/dashboard/servers">View server connections</Link>
             </Button>
           )}

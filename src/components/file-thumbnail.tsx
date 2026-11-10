@@ -76,7 +76,7 @@ export function FileThumbnail({
         <img
           src={source}
           alt=""
-          className="size-full bg-white object-contain"
+          className="size-full bg-image-backdrop object-contain"
           onError={() => setFailed(true)}
         />
       ) : (

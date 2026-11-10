@@ -161,7 +161,7 @@ function CredentialRow({
           <Button
             variant="ghost"
             size="icon"
-            className="col-start-2 row-start-1 size-11 self-start text-text-muted lg:col-auto lg:row-auto lg:size-9 lg:self-center lg:justify-self-end [@media(any-pointer:coarse)]:size-11"
+            className="col-start-2 row-start-1 self-start text-text-muted lg:col-auto lg:row-auto lg:self-center lg:justify-self-end"
             aria-label={`Credential actions for ${credential.name}`}
             disabled={disabled}
           >
@@ -281,7 +281,7 @@ function WebhookRow({
             <Button
               variant="ghost"
               size="icon"
-              className="size-11 text-muted-foreground lg:size-9 [@media(any-pointer:coarse)]:size-11"
+              className="text-muted-foreground"
               aria-label={`Manage ${webhook.name}`}
               disabled={disabled}
             >
@@ -875,11 +875,7 @@ export function OrganizationIntegrations() {
             data; changes are disabled.
           </AlertDescription>
           <AlertAction className="static">
-            <Button
-              variant="secondary"
-              className="h-9 [@media(any-pointer:coarse)]:min-h-11"
-              onClick={requestUnreadableReplacement}
-            >
+            <Button variant="secondary" onClick={requestUnreadableReplacement}>
               Replace local data
             </Button>
           </AlertAction>
@@ -897,7 +893,7 @@ export function OrganizationIntegrations() {
             </h2>
           </div>
           <Button
-            className="h-11 w-full sm:w-auto lg:h-10 [@media(any-pointer:coarse)]:min-h-11"
+            className="w-full sm:w-auto"
             onClick={openCredentialDialog}
             disabled={storageUnreadable}
           >
@@ -962,7 +958,7 @@ export function OrganizationIntegrations() {
           </div>
           <Button
             variant="outline"
-            className="h-11 w-full sm:w-auto lg:h-10 [@media(any-pointer:coarse)]:min-h-11"
+            className="w-full sm:w-auto"
             onClick={openWebhookDialog}
             disabled={storageUnreadable}
           >
@@ -1052,7 +1048,6 @@ export function OrganizationIntegrations() {
               aria-describedby={
                 credentialNameError ? "credential-name-error" : undefined
               }
-              className="h-10 [@media(any-pointer:coarse)]:h-11"
               autoComplete="off"
               maxLength={80}
             />
@@ -1069,7 +1064,6 @@ export function OrganizationIntegrations() {
           <DialogFooter>
             <Button
               variant="outline"
-              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
               onClick={() => setCredentialDialogOpen(false)}
             >
               Cancel
@@ -1077,7 +1071,6 @@ export function OrganizationIntegrations() {
             <Button
               type="submit"
               form="create-credential-form"
-              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
               disabled={!credentialNameValid || credentialStorageCleared}
             >
               Create credential
@@ -1116,16 +1109,11 @@ export function OrganizationIntegrations() {
             </Alert>
           )}
           <DialogFooter>
-            <Button
-              variant="secondary"
-              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
-              onClick={() => setCreatedSecret(null)}
-            >
+            <Button variant="secondary" onClick={() => setCreatedSecret(null)}>
               Done
             </Button>
             <Button
               variant={copyState === "error" ? "destructive" : "default"}
-              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
               onClick={copyCredential}
             >
               <ClipboardIcon aria-hidden="true" />
@@ -1199,7 +1187,6 @@ export function OrganizationIntegrations() {
                   }
                 }}
                 aria-invalid={Boolean(webhookErrors.name)}
-                className="h-10 [@media(any-pointer:coarse)]:h-11"
                 autoComplete="off"
                 maxLength={80}
               />
@@ -1233,7 +1220,7 @@ export function OrganizationIntegrations() {
                   }))
                 }
                 aria-invalid={Boolean(webhookErrors.url)}
-                className="h-10 font-mono [@media(any-pointer:coarse)]:h-11"
+                className="font-mono"
                 maxLength={2048}
               />
               {webhookErrors.url ? (
@@ -1284,7 +1271,6 @@ export function OrganizationIntegrations() {
           <DialogFooter>
             <Button
               variant="outline"
-              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
               onClick={() => setWebhookDialogOpen(false)}
             >
               Cancel
@@ -1292,7 +1278,6 @@ export function OrganizationIntegrations() {
             <Button
               type="submit"
               form="create-webhook-form"
-              className="h-10 [@media(any-pointer:coarse)]:min-h-11"
               disabled={
                 !webhookFormValid ||
                 Boolean(webhookEditIssue) ||
@@ -1437,7 +1422,6 @@ export function OrganizationIntegrations() {
                   selectedWebhook.lastDelivery.status >= 400 && (
                     <Button
                       variant="outline"
-                      className="h-10 [@media(any-pointer:coarse)]:min-h-11"
                       onClick={() =>
                         toast.info(
                           "Retry delivery isn't available in this sample-data preview.",
@@ -1450,7 +1434,6 @@ export function OrganizationIntegrations() {
                   )}
                 <Button
                   variant="outline"
-                  className="h-10 [@media(any-pointer:coarse)]:min-h-11"
                   onClick={() => editWebhook(selectedWebhook)}
                   disabled={storageUnreadable}
                 >
@@ -1459,7 +1442,7 @@ export function OrganizationIntegrations() {
                 </Button>
                 <Button
                   variant="destructive"
-                  className="h-10 [@media(any-pointer:coarse)]:min-h-11 sm:ml-auto"
+                  className="sm:ml-auto"
                   onClick={() => {
                     setSelectedWebhookId(null);
                     setWebhookDeleteStartedWithMissingKey(
