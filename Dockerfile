@@ -1,10 +1,14 @@
+# syntax=docker/dockerfile:1
 FROM node:24.18.0-bookworm-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json ./
-RUN npm ci
+# npm and Next.js caches persist in the runner's Docker daemon.
+RUN --mount=type=cache,id=cupboard-npm,target=/root/.npm,sharing=locked \
+    npm ci --prefer-offline --no-audit --no-fund
 COPY . .
-RUN npm run build
+RUN --mount=type=cache,id=cupboard-next,target=/app/.next/cache,sharing=locked \
+    npm run build
 
 FROM node:24.18.0-bookworm-slim AS runtime
 WORKDIR /app

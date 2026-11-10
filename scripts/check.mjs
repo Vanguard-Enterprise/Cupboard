@@ -3,7 +3,17 @@ import { isIP } from "node:net";
 import { execFileSync } from "node:child_process";
 import { createProcesses } from "./processes.mjs";
 
-const quick = process.argv.includes("--quick");
+// `npm run check` runs everything. CI runs the parts as parallel jobs:
+// `--rust` (fmt, clippy, tests), `--web` (Node checks, no build; the image
+// job builds the app). `--quick` skips services, Rust tests, and the build.
+const args = process.argv.slice(2);
+const quick = args.includes("--quick");
+const onlyRust = args.includes("--rust");
+const onlyWeb = args.includes("--web");
+const rust = !onlyWeb;
+const web = !onlyRust;
+const build = web && !quick && !onlyWeb && !args.includes("--no-build");
+const services = rust && !quick;
 const processes = createProcesses();
 const project = `cupboard-check-${randomUUID()}`;
 const runnerContainer = process.env.CUPBOARD_CHECK_CONTAINER;
@@ -17,27 +27,29 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 try {
-  await processes.run("python3", [
-    "-B",
-    "-m",
-    "unittest",
-    "discover",
-    "-s",
-    "tests",
-    "-p",
-    "test_agent.py",
-  ]);
-  await processes.run("cargo", ["fmt", "--all", "--check"]);
-  await processes.run("cargo", [
-    "clippy",
-    "--locked",
-    "--all-targets",
-    "--",
-    "-D",
-    "warnings",
-  ]);
+  if (web)
+    await processes.run("python3", [
+      "-B",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_agent.py",
+    ]);
+  if (rust) await processes.run("cargo", ["fmt", "--all", "--check"]);
+  if (rust)
+    await processes.run("cargo", [
+      "clippy",
+      "--locked",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings",
+    ]);
   let databaseUrl = process.env.CUPBOARD_TEST_DATABASE_URL;
-  if (!quick && !databaseUrl) {
+  if (services && !databaseUrl) {
     ownedDatabase = true;
     const env = { ...process.env, CUPBOARD_TEST_DB_PORT: "0" };
     await processes.run(
@@ -82,7 +94,7 @@ try {
     }
   }
   let storageEnv = {};
-  if (!quick) {
+  if (services) {
     ownedStorage = true;
     await processes.run("docker", [
       ...compose,
@@ -129,7 +141,7 @@ try {
     }
     storageEnv = { CUPBOARD_TEST_S3_ENDPOINT: `http://${host}:${port}` };
   }
-  if (!quick)
+  if (services)
     // Auth tests share the process-wide four-slot password hashing semaphore.
     // Run tests serially so unrelated signup requests do not receive busy 429s.
     await processes.run(
@@ -142,12 +154,8 @@ try {
       },
     );
   for (const script of [
-    "format:check",
-    "lint",
-    "ui:check",
-    "typecheck",
-    "test",
-    ...(quick ? [] : ["build"]),
+    ...(web ? ["format:check", "lint", "ui:check", "typecheck", "test"] : []),
+    ...(build ? ["build"] : []),
   ]) {
     await processes.run(process.execPath, [
       process.env.npm_execpath,
