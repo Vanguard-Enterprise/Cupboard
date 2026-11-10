@@ -7,6 +7,11 @@ import { defineConfig } from "vitest/config";
 process.env.TZ = "America/New_York";
 
 export default defineConfig({
+  test: {
+    setupFiles: ["./src/test/setup.ts"],
+    // See src/test/setup.ts: CI shares its host with the Rust and image builds.
+    testTimeout: 20000,
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
