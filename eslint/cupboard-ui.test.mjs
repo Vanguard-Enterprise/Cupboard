@@ -77,5 +77,21 @@ tester.run("control-size", plugin.rules["control-size"], {
       output: '<Input className={cn("", invalid && "border-destructive")} />',
       errors: 1,
     },
+    {
+      // Interpolations keep the space that separates them from other classes.
+      code: "<Input className={`${tone} h-11 w-full`} />",
+      output: "<Input className={`${tone} w-full`} />",
+      errors: 1,
+    },
+    {
+      code: "<Input className={`${tone} h-11 ${width}`} />",
+      output: "<Input className={`${tone} ${width}`} />",
+      errors: 1,
+    },
+    {
+      code: "<Input className={`h-11 ${width} min-h-11`} />",
+      output: "<Input className={`${width}`} />",
+      errors: 1,
+    },
   ],
 });

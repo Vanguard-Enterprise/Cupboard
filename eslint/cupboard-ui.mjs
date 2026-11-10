@@ -103,9 +103,11 @@ function rewrite(text, change) {
   );
 }
 
+// A chunk that starts after an interpolation (`}`) keeps one space so the
+// interpolated class stays separate from the next one.
 function tidy(text) {
   return text
-    .replace(/(["'`}])\s+/, "$1")
+    .replace(/^(["'`])\s+/, "$1")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\s+(["'`$])/g, (m, end) => (end === "$" ? ` ${end}` : end));
 }
