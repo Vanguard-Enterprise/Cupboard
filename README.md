@@ -13,7 +13,7 @@ common mistakes. `npm run lint` runs the `cupboard-ui` rules in
 and spacing, heavy weights, all-caps text, height overrides on shared
 controls, and native menus. `npx eslint --fix` applies the mechanical fixes.
 `npm run ui:check` rejects raw colors and unloaded fonts in stylesheets. Both
-run in `npm run check` and in CI's UI consistency job.
+run in `npm run check` and in CI's Web checks job.
 
 ## Worktrees and review
 
@@ -74,6 +74,12 @@ Run all Rust and web checks from the repository root:
 ```bash
 npm run check
 ```
+
+`npm run check -- --rust` runs only rustfmt, Clippy, and the Rust tests, and
+`npm run check -- --web` runs only the Node checks without the production build.
+CI runs these as parallel jobs next to the release image build, which is the only
+Next.js build in CI. Rust dependencies are cached from `main`, and image builds
+reuse the runner's Docker cache, so unchanged dependencies are not rebuilt.
 
 Checks create separate disposable PostgreSQL and S3 containers and remove them afterward.
 They require Docker, or `CUPBOARD_TEST_DATABASE_URL` pointing to a dedicated test

@@ -10,13 +10,19 @@ permissions:
 
 concurrency:
   group: check-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Three independent jobs run in parallel. Each tool runs exactly once:
+#   web     Node checks: format, lint, UI rules, types, unit tests, agent tests
+#   rust    rustfmt, clippy, and the database-backed Rust tests
+#   images  the release build (the only Next.js build) and the image smoke test
+# `check` is the required status. `publish` pushes the images that passed.
 jobs:
-  verify:
+  web:
+    name: Web checks
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, ve-runner]
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -25,6 +31,25 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npm run check -- --web
+
+  rust:
+    name: Rust checks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, ve-runner]
+    timeout-minutes: 30
+    env:
+      # Retry crates.io downloads so a brief network failure does not fail CI.
+      CARGO_NET_RETRY: "10"
+      CARGO_HTTP_TIMEOUT: "60"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
       - uses: actions/cache@v4
         with:
           path: |
@@ -40,39 +65,18 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+      # Only main saves, so pull requests never evict its cache. Saving after a
+      # failed run keeps dependencies cached even while main is red.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: checks
-          cache-on-failure: false
-      - uses: actions/cache@v4
-        with:
-          path: .next/cache
-          key: next-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc', 'package-lock.json') }}-${{ github.sha }}
-          restore-keys: |
-            next-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc', 'package-lock.json') }}-
-      - run: npm ci --prefer-offline --no-audit --no-fund
-      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check
-
-  # Fast, named feedback for UI rules: design-token class names, shared
-  # control sizes, native menus, and raw colors or stale fonts in stylesheets.
-  ui:
-    name: UI consistency
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, Linux, X64, ve-runner]
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci --prefer-offline --no-audit --no-fund
-      - run: npm run lint
-      - run: npm run ui:check
+          shared-key: rust
+          add-job-id-key: false
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check -- --rust
 
   images:
+    name: Release images
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 30
@@ -85,18 +89,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+      # The host Docker daemon keeps layers and cache mounts between runs, so
+      # unchanged dependencies are never rebuilt.
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
       - name: Build release images in parallel
         uses: docker/bake-action@v6
         with:
           source: .
           files: docker-bake.hcl
-          load: true
       - name: Verify release images and restart persistence
-        run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" node scripts/smoke-images.mjs cupboard-api:check-${{ github.run_id }}-${{ github.run_attempt }} cupboard-web:check-${{ github.run_id }}-${{ github.run_attempt }}
+        run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" node scripts/smoke-images.mjs cupboard-api:${IMAGE_TAG} cupboard-web:${IMAGE_TAG}
       - name: Save tested release images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker save cupboard-api:check-${{ github.run_id }}-${{ github.run_attempt }} cupboard-web:check-${{ github.run_id }}-${{ github.run_attempt }} | gzip -1 > "$RUNNER_TEMP/cupboard-images.tar.gz"
+        run: docker save cupboard-api:${IMAGE_TAG} cupboard-web:${IMAGE_TAG} | gzip -1 > "$RUNNER_TEMP/cupboard-images.tar.gz"
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
@@ -104,23 +111,20 @@ jobs:
           path: ${{ runner.temp }}/cupboard-images.tar.gz
           compression-level: 0
           retention-days: 1
-      - name: Remove check image
+      - name: Remove check images
         if: always()
-        run: docker image rm cupboard-api:check-${{ github.run_id }}-${{ github.run_attempt }} cupboard-web:check-${{ github.run_id }}-${{ github.run_attempt }} || true
+        run: docker image rm cupboard-api:${IMAGE_TAG} cupboard-web:${IMAGE_TAG} || true
 
-  # Preserve the existing required check name and include both parallel jobs.
   check:
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [verify, ui, images]
+    needs: [web, rust, images]
     runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 5
     steps:
-      - name: Require checks and release smoke to pass
+      - name: Require every check to pass
         env:
-          VERIFY_RESULT: ${{ needs.verify.result }}
-          UI_RESULT: ${{ needs.ui.result }}
-          IMAGES_RESULT: ${{ needs.images.result }}
-        run: test "$VERIFY_RESULT" = success && test "$UI_RESULT" = success && test "$IMAGES_RESULT" = success
+          RESULTS: ${{ needs.web.result }} ${{ needs.rust.result }} ${{ needs.images.result }}
+        run: test "$RESULTS" = "success success success"
 
   publish:
     needs: check
