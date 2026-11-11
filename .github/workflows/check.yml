@@ -23,6 +23,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 15
+    env:
+      WEB_DIR: /tmp/cupboard-web
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,15 +33,26 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # ESLint and Prettier key their caches by absolute path, and each runner
+      # checks out under a differently named directory. Checking from one fixed
+      # path lets their caches hit. The runner container persists between
+      # jobs, so the copy is replaced first and removed afterward.
+      - name: Copy the checkout to a fixed path
+        run: rm -rf "$WEB_DIR" && cp -a . "$WEB_DIR"
       - run: npm ci --prefer-offline --no-audit --no-fund
+        working-directory: ${{ env.WEB_DIR }}
       # ESLint, Prettier, and tsc skip unchanged files, and Vitest starts the
       # slowest test files first, when they find their caches from earlier runs.
       - uses: actions/cache@v4
         with:
-          path: .cache
+          path: ${{ env.WEB_DIR }}/.cache
           key: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
           restore-keys: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
       - run: npm run check -- --web
+        working-directory: ${{ env.WEB_DIR }}
+      - name: Remove the fixed-path copy
+        if: always()
+        run: rm -rf "$WEB_DIR"
 
   rust:
     name: Rust checks
