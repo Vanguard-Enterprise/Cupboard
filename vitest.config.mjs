@@ -7,6 +7,9 @@ import { defineConfig } from "vitest/config";
 process.env.TZ = "America/New_York";
 
 export default defineConfig({
+  // Kept outside node_modules so CI can restore it after `npm ci`. Vitest
+  // reads its saved file durations here and starts the slowest files first.
+  cacheDir: ".cache/vite",
   test: {
     setupFiles: ["./src/test/setup.ts"],
     // See src/test/setup.ts: CI shares its host with the Rust and image builds.

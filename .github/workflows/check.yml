@@ -23,6 +23,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, Linux, X64, ve-runner]
     timeout-minutes: 15
+    env:
+      WEB_DIR: /tmp/cupboard-web
     steps:
       - uses: actions/checkout@v5
         with:
@@ -31,8 +33,32 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # ESLint and Prettier key their caches by absolute path, and each runner
+      # checks out under a differently named directory. Checking from one fixed
+      # path lets their caches hit. The runner container persists between
+      # jobs, so the copy is replaced first and removed afterward.
+      - name: Copy the checkout to a fixed path
+        run: rm -rf "$WEB_DIR" && cp -a . "$WEB_DIR"
       - run: npm ci --prefer-offline --no-audit --no-fund
+        working-directory: ${{ env.WEB_DIR }}
+      # ESLint, Prettier, and tsc skip unchanged files, and Vitest starts the
+      # slowest test files first, when they find their caches from earlier runs.
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.WEB_DIR }}/.cache
+          key: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
       - run: npm run check -- --web
+        working-directory: ${{ env.WEB_DIR }}
+      # Saved explicitly: a post-job save would run after the copy is removed.
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ env.WEB_DIR }}/.cache
+          key: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+      - name: Remove the fixed-path copy
+        if: always()
+        run: rm -rf "$WEB_DIR"
 
   rust:
     name: Rust checks
@@ -43,6 +69,10 @@ jobs:
       # Retry crates.io downloads so a brief network failure does not fail CI.
       CARGO_NET_RETRY: "10"
       CARGO_HTTP_TIMEOUT: "60"
+      # Incremental data is large and rarely reused on a fresh runner. Line
+      # tables keep panic locations while shrinking the build and its cache.
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v5
         with:
@@ -65,15 +95,38 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+      # Paths stay relative or under $HOME: the cache version hashes them, and
+      # each ephemeral runner checks out under a differently named directory,
+      # so an absolute workspace path never matches a saved cache.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          restore-keys: rust-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
+      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check -- --rust
       # Only main saves, so pull requests never evict its cache. Saving after a
       # failed run keeps dependencies cached even while main is red.
-      - uses: Swatinem/rust-cache@v2
+      # Keep only dependencies: the workspace crate rebuilds on every change,
+      # and the runner's small disk must also hold the archive being written.
+      - name: Prune workspace build artifacts
+        if: always() && github.ref == 'refs/heads/main'
+        run: |
+          rm -rf target/debug/incremental target/debug/examples
+          find target/debug -maxdepth 3 -name '*cupboard*' -exec rm -rf {} +
+          du -sh target
+      - uses: actions/cache/save@v4
+        if: always() && github.ref == 'refs/heads/main'
         with:
-          shared-key: rust
-          add-job-id-key: false
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check -- --rust
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
 
   images:
     name: Release images
