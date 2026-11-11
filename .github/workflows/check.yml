@@ -50,8 +50,10 @@ jobs:
       # Retry crates.io downloads so a brief network failure does not fail CI.
       CARGO_NET_RETRY: "10"
       CARGO_HTTP_TIMEOUT: "60"
-      # Incremental data is large and rarely reused on a fresh runner.
+      # Incremental data is large and rarely reused on a fresh runner. Line
+      # tables keep panic locations while shrinking the build and its cache.
       CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     steps:
       - uses: actions/checkout@v5
         with:
@@ -89,6 +91,14 @@ jobs:
       - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check -- --rust
       # Only main saves, so pull requests never evict its cache. Saving after a
       # failed run keeps dependencies cached even while main is red.
+      # Keep only dependencies: the workspace crate rebuilds on every change,
+      # and the runner's small disk must also hold the archive being written.
+      - name: Prune workspace build artifacts
+        if: always()
+        run: |
+          rm -rf target/debug/incremental target/debug/examples
+          find target/debug -maxdepth 3 -name '*cupboard*' -exec rm -rf {} +
+          du -sh target
       - uses: actions/cache/save@v4
         if: always()
         with:
