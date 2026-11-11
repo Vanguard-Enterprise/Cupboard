@@ -50,6 +50,8 @@ jobs:
       # Retry crates.io downloads so a brief network failure does not fail CI.
       CARGO_NET_RETRY: "10"
       CARGO_HTTP_TIMEOUT: "60"
+      # Incremental data is large and rarely reused on a fresh runner.
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -72,15 +74,30 @@ jobs:
           fi
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.96.0 --profile minimal --component rustfmt --component clippy
+      # Paths stay relative or under $HOME: the cache version hashes them, and
+      # each ephemeral runner checks out under a differently named directory,
+      # so an absolute workspace path never matches a saved cache.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
+          restore-keys: rust-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
+      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check -- --rust
       # Only main saves, so pull requests never evict its cache. Saving after a
       # failed run keeps dependencies cached even while main is red.
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache/save@v4
+        if: always()
         with:
-          shared-key: rust
-          add-job-id-key: false
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: CUPBOARD_CHECK_CONTAINER="$HOSTNAME" npm run check -- --rust
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-${{ github.sha }}
 
   images:
     name: Release images
