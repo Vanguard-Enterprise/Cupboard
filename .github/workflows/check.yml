@@ -43,13 +43,19 @@ jobs:
         working-directory: ${{ env.WEB_DIR }}
       # ESLint, Prettier, and tsc skip unchanged files, and Vitest starts the
       # slowest test files first, when they find their caches from earlier runs.
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         with:
           path: ${{ env.WEB_DIR }}/.cache
           key: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
           restore-keys: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
       - run: npm run check -- --web
         working-directory: ${{ env.WEB_DIR }}
+      # Saved explicitly: a post-job save would run after the copy is removed.
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ${{ env.WEB_DIR }}/.cache
+          key: web-checks-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
       - name: Remove the fixed-path copy
         if: always()
         run: rm -rf "$WEB_DIR"
