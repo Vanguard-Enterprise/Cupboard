@@ -2,6 +2,9 @@
 // looks; these rules stop screens from quietly overriding them. Run
 // `npx eslint --fix` to apply the mechanical fixes.
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 const variantPrefix = /^(?:(?:[^:[\]\s]|\[[^\]]*\])+:)+/;
 const sides = "(?:-(?:t|r|b|l|s|e|tl|tr|br|bl|ss|se|es|ee))?";
 const fontSteps = [
@@ -342,6 +345,16 @@ const controlSizeRule = {
 };
 
 const plugin = {
+  // `npm run lint` caches results by config, and ESLint identifies a plugin
+  // by its name and version. Versioning by this file's contents makes a rule
+  // change recheck every file instead of reusing results from the old rule.
+  meta: {
+    name: "cupboard-ui",
+    version: createHash("sha256")
+      .update(readFileSync(new URL(import.meta.url)))
+      .digest("hex")
+      .slice(0, 16),
+  },
   rules: {
     "class-tokens": classTokensRule,
     "control-size": controlSizeRule,
