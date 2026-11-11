@@ -94,13 +94,13 @@ jobs:
       # Keep only dependencies: the workspace crate rebuilds on every change,
       # and the runner's small disk must also hold the archive being written.
       - name: Prune workspace build artifacts
-        if: always()
+        if: always() && github.ref == 'refs/heads/main'
         run: |
           rm -rf target/debug/incremental target/debug/examples
           find target/debug -maxdepth 3 -name '*cupboard*' -exec rm -rf {} +
           du -sh target
       - uses: actions/cache/save@v4
-        if: always()
+        if: always() && github.ref == 'refs/heads/main'
         with:
           path: |
             ~/.cargo/registry/index
