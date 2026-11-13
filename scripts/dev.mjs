@@ -7,6 +7,7 @@ import {
 } from "./workspace.mjs";
 import { execFileSync } from "node:child_process";
 import { startRustDev } from "./rust-dev.mjs";
+import { loadDiscordCredentials, startDiscordRelay } from "./discord.mjs";
 import { createProcesses } from "./processes.mjs";
 import { networkInterfaces } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -75,11 +76,13 @@ async function start() {
   }
   const processes = createProcesses();
   let rust;
+  let stopRelay;
   let stopping = false;
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
       stopping = true;
       rust?.stop();
+      stopRelay?.();
       processes.stop();
     });
   }
@@ -217,7 +220,24 @@ async function start() {
         ...(process.env.CUPBOARD_DEV_ORIGINS?.split(",").filter(Boolean) ?? []),
       ].join(","),
     };
-    rust = startRustDev({ env });
+    // Discord credentials reach only the API, never Next.js or the terminal.
+    const discordHost = config.netbirdUrl
+      ? new URL(config.netbirdUrl).hostname
+      : "localhost";
+    const discordEnv = process.env.CUPBOARD_DISCORD_BOT_TOKEN
+      ? {}
+      : await loadDiscordCredentials(discordHost, config.port);
+    if (discordEnv) {
+      if (!process.env.CUPBOARD_DISCORD_BOT_TOKEN)
+        stopRelay = startDiscordRelay([discordHost]);
+      console.log("Discord: shared development application enabled.");
+    } else {
+      console.log(
+        "Discord: guild installs are off; OpenBao credentials were not readable.",
+      );
+    }
+    if (stopping) return;
+    rust = startRustDev({ env: { ...env, ...discordEnv } });
     if (!process.env.DATABASE_URL)
       void processes
         .run(process.execPath, ["scripts/dev-machines.mjs"])
@@ -235,6 +255,7 @@ async function start() {
     }
   } finally {
     rust?.stop();
+    stopRelay?.();
     processes.stop();
     // The race above reports watcher failure; still wait for its cleanup.
     await rust?.done.catch(() => {});

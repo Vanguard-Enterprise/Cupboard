@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useState, type ComponentType, type SVGProps } from "react";
+import { DiscordIcon } from "@/components/discord-icon";
 import {
   ServerIcon,
   HardDriveIcon,
@@ -11,14 +12,12 @@ import {
   GavelIcon,
   LifeBuoyIcon,
   ShoppingBagIcon,
-  MessageSquareIcon,
   UsersRoundIcon,
   ListTodoIcon,
   PlugIcon,
   ShieldCheckIcon,
   Settings2Icon,
   ChevronRightIcon,
-  type LucideIcon,
 } from "lucide-react";
 import {
   Collapsible,
@@ -41,7 +40,7 @@ import {
   dashboardNavigation,
 } from "@/lib/dashboard-navigation";
 
-const icons: Record<string, LucideIcon> = {
+const icons: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   servers: ServerIcon,
   infrastructure: HardDriveIcon,
   metrics: ChartNoAxesCombinedIcon,
@@ -50,7 +49,7 @@ const icons: Record<string, LucideIcon> = {
   moderation: GavelIcon,
   support: LifeBuoyIcon,
   store: ShoppingBagIcon,
-  discord: MessageSquareIcon,
+  discord: DiscordIcon,
   members: UsersRoundIcon,
   projects: ListTodoIcon,
   integrations: PlugIcon,
@@ -77,6 +76,34 @@ function NavSection({
     setOpenMobile,
   } = useSidebar();
   const Icon = icons[item.icon];
+  const href = item.id ? navigationHref(item.id) : undefined;
+
+  if (href) {
+    const current = item.id === activeSection;
+    return (
+      <SidebarMenuItem>
+        {disabled ? (
+          <SidebarMenuButton tooltip={item.title} disabled>
+            <Icon />
+            <span>{item.title}</span>
+          </SidebarMenuButton>
+        ) : (
+          <SidebarMenuButton asChild tooltip={item.title} isActive={current}>
+            <Link
+              href={href}
+              aria-current={current ? "page" : undefined}
+              onClick={() => {
+                if (isMobile) setOpenMobile(false);
+              }}
+            >
+              <Icon />
+              <span>{item.title}</span>
+            </Link>
+          </SidebarMenuButton>
+        )}
+      </SidebarMenuItem>
+    );
+  }
 
   return (
     <Collapsible

@@ -25,6 +25,9 @@ const paths = new Set([
   "files/folders",
   "public-files/download",
   "servers/health",
+  "discord/guilds",
+  "discord/install/start",
+  "discord/install",
   "organizations",
   "invitations/accept",
   "alerts",
@@ -81,6 +84,7 @@ export async function proxyApi(
     !/^status-page\/maintenance\/[0-9a-f-]{36}(?:\/(?:complete|remove))?$/.test(
       path,
     ) &&
+    !/^discord\/guilds\/[0-9]{17,20}(?:\/remove)?$/.test(path) &&
     !(
       /^public\/status\/[a-z0-9-]{1,40}$/.test(path) && request.method === "GET"
     )
@@ -111,7 +115,8 @@ export async function proxyApi(
     path.startsWith("alerts/") ||
     path === "organization/export" ||
     path === "status-page" ||
-    path.startsWith("status-page/")
+    path.startsWith("status-page/") ||
+    path.startsWith("discord/")
   ) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);

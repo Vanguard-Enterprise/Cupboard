@@ -22,6 +22,7 @@ async fn run() -> Result<(), &'static str> {
     )?;
     let storage = cupboard::storage::FileStore::from_env()?;
     let panel_policy = cupboard::pelican::PanelPolicy::from_env()?;
+    let discord = cupboard::discord::DiscordConfig::from_env()?;
     let pool = cupboard::connect(&url).await?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
@@ -50,6 +51,9 @@ async fn run() -> Result<(), &'static str> {
     let mut app = cupboard::router_with_auth(pool.clone(), config)
         .layer(axum::Extension(key))
         .layer(axum::Extension(panel_policy));
+    if let Some(discord) = discord {
+        app = app.layer(axum::Extension(discord));
+    }
     let cleanup = storage.map(|storage| {
         app = app.clone().layer(axum::Extension(storage.clone()));
         tokio::spawn(cupboard::cleanup_files(pool.clone(), storage))

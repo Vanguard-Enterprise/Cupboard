@@ -31,6 +31,7 @@ impl Client {
             || path.starts_with("machines/")
             || path.starts_with("integrations/")
             || path.starts_with("servers/")
+            || path.starts_with("discord/")
             || path.starts_with("alerts")
             || path.starts_with("status-page")
             || path == "organization/export"
@@ -1110,10 +1111,12 @@ async fn role_migration_preserves_existing_memberships() {
             ("viewer".into(), false)
         ]
     );
-    sqlx::raw_sql(include_str!("migrations/202610040006_machines.sql"))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    for migration in [
+        include_str!("migrations/202610040006_machines.sql"),
+        include_str!("migrations/202611120001_discord_guilds.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&mut *tx).await.unwrap();
+    }
     let admin_permissions: Vec<String> =
         sqlx::query_scalar("SELECT permissions FROM organization_roles WHERE id='administrator'")
             .fetch_one(&mut *tx)
@@ -7073,4 +7076,687 @@ async fn active_maintenance_survives_many_scheduled_and_past_windows() {
             .any(|w| w["id"] == active_id.as_str()),
         "{public}"
     );
+}
+
+#[tokio::test]
+async fn discord_guilds_are_scoped_to_the_organization_and_need_community_view() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = router_with_auth(pool.clone(), AuthConfig::default());
+    let mut owner = Client::new(&app);
+    let mut outsider = Client::new(&app);
+    let mut member = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    let member_email = format!("discord-member-{suffix}@example.com");
+    owner
+        .signup(&format!("discord-owner-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    outsider
+        .signup(&format!("discord-outsider-{suffix}@example.com"))
+        .await;
+    outsider.create_organization().await;
+    for (org, guild, name, access) in [
+        (
+            &owner.organization,
+            "120000000000000002",
+            "zeta guild",
+            "manager",
+        ),
+        (
+            &owner.organization,
+            "120000000000000001",
+            "Alpha guild",
+            "owner",
+        ),
+        (
+            &outsider.organization,
+            "120000000000000003",
+            "Outsider guild",
+            "owner",
+        ),
+    ] {
+        sqlx::query("INSERT INTO discord_guilds(organization_id,guild_id,name,access,member_count) VALUES($1,$2,$3,$4,10)")
+            .bind(org).bind(guild).bind(name).bind(access).execute(&pool).await.unwrap();
+    }
+
+    assert_eq!(
+        anonymous
+            .request("GET", "discord/guilds", json!(null))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, guilds) = owner.request("GET", "discord/guilds", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{guilds}");
+    let names: Vec<_> = guilds
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Alpha guild", "zeta guild"]);
+    assert_eq!(guilds[0]["id"], "120000000000000001");
+    assert_eq!(guilds[0]["access"], "owner");
+    assert_eq!(guilds[0]["memberCount"], 10);
+    assert!(guilds[0]["connectedAt"].is_i64());
+
+    // A page left open on another organization gets a conflict, not that tenant's data.
+    let current = owner.organization.clone();
+    owner.organization = outsider.organization.clone();
+    assert_eq!(
+        owner.request("GET", "discord/guilds", json!(null)).await.0,
+        StatusCode::CONFLICT
+    );
+    owner.organization = current;
+
+    let viewer = owner.create_role("Server viewer", &["servers.view"]).await;
+    let (status, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Member","email":member_email,"roleIds":[viewer["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(status, StatusCode::OK, "{invitation}");
+    member.signup(&member_email).await;
+    assert_eq!(
+        member
+            .request(
+                "POST",
+                "invitations/accept",
+                json!({"token":invitation["invitationToken"]})
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
+    member.request("GET", "auth/me", json!(null)).await;
+    assert_eq!(
+        member.request("GET", "discord/guilds", json!(null)).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    let community = owner.create_role("Community", &["community.view"]).await;
+    let team = owner.team().await;
+    let user = team["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|u| u["email"] == member_email.as_str())
+        .unwrap()
+        .clone();
+    let mut updated = user.clone();
+    updated["roleIds"] = json!([viewer["id"], community["id"]]);
+    let (status, response) = owner
+        .change(json!({"kind":"updateUser","user":updated}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let (status, guilds) = member.request("GET", "discord/guilds", json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{guilds}");
+    assert_eq!(guilds.as_array().unwrap().len(), 2);
+    assert!(!guilds.to_string().contains("Outsider guild"));
+}
+
+#[derive(Clone, Default)]
+struct DiscordMock {
+    revoked: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    left: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    /// 0 leaves normally, 1 fails, 2 answers that the bot already left.
+    leave_mode: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    /// Bot reads of a guild.
+    reads: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    /// 0 answers guild reads, 1 rate limits them for a minute.
+    read_mode: std::sync::Arc<std::sync::atomic::AtomicU16>,
+}
+const DISCORD_GUILD: &str = "130000000000000001";
+const DISCORD_GONE_GUILD: &str = "130000000000000404";
+const DISCORD_SECRETS: [&str; 3] = ["bot-token-secret", "client-secret-value", "user-access-"];
+
+async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
+    use axum::{
+        extract::{Path, State},
+        http::HeaderMap,
+        response::IntoResponse,
+        routing::{delete, get, post},
+    };
+    use std::sync::atomic::Ordering;
+    fn bot(headers: &HeaderMap) -> bool {
+        headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bot bot-token-secret")
+    }
+    async fn token(headers: HeaderMap, body: String) -> axum::response::Response {
+        // Basic base64("130000000000000099:client-secret-value")
+        let expected = "Basic MTMwMDAwMDAwMDAwMDAwMDk5OmNsaWVudC1zZWNyZXQtdmFsdWU=";
+        if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(expected)
+            || !body.contains("grant_type=authorization_code")
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let who = if body.contains("code=owner-code") {
+            "owner"
+        } else if body.contains("code=manager-code") {
+            "manager"
+        } else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        axum::Json(json!({"access_token":format!("user-access-{who}"),"token_type":"Bearer","guild":{"id":DISCORD_GUILD}})).into_response()
+    }
+    async fn me(headers: HeaderMap) -> axum::response::Response {
+        match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+            Some("Bearer user-access-owner") => {
+                axum::Json(json!({"id":"200000000000000001"})).into_response()
+            }
+            Some("Bearer user-access-manager") => {
+                axum::Json(json!({"id":"200000000000000002"})).into_response()
+            }
+            _ => StatusCode::UNAUTHORIZED.into_response(),
+        }
+    }
+    async fn revoke(State(mock): State<DiscordMock>) -> axum::response::Response {
+        mock.revoked.fetch_add(1, Ordering::SeqCst);
+        axum::Json(json!({})).into_response()
+    }
+    async fn guild(
+        State(mock): State<DiscordMock>,
+        headers: HeaderMap,
+        Path(id): Path<String>,
+    ) -> axum::response::Response {
+        if !bot(&headers) {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        mock.reads.fetch_add(1, Ordering::SeqCst);
+        if mock.read_mode.load(Ordering::SeqCst) == 1 {
+            return (StatusCode::TOO_MANY_REQUESTS, [("retry-after", "60")]).into_response();
+        }
+        if id == DISCORD_GONE_GUILD {
+            return StatusCode::NOT_FOUND.into_response();
+        }
+        axum::Json(json!({"id":id,"name":" Test guild ","icon":format!("a_{}", "0f".repeat(16)),"banner":"0a".repeat(16),"home_header":"0b".repeat(16),"owner_id":"200000000000000001","approximate_member_count":42,"roles":[{"id":id,"name":"@everyone","color":0,"position":0},{"id":"300000000000000001","name":"Mods","color":255,"position":1,"hoist":true}]})).into_response()
+    }
+    async fn leave(State(mock): State<DiscordMock>, headers: HeaderMap) -> StatusCode {
+        if !bot(&headers) {
+            return StatusCode::UNAUTHORIZED;
+        }
+        match mock.leave_mode.load(Ordering::SeqCst) {
+            1 => StatusCode::INTERNAL_SERVER_ERROR,
+            2 => StatusCode::NOT_FOUND,
+            _ => {
+                mock.left.fetch_add(1, Ordering::SeqCst);
+                StatusCode::NO_CONTENT
+            }
+        }
+    }
+    let mock = DiscordMock::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let app = Router::new()
+        .route("/oauth2/token", post(token))
+        .route("/oauth2/token/revoke", post(revoke))
+        .route("/users/@me", get(me))
+        .route("/guilds/{id}", get(guild))
+        .route("/users/@me/guilds/{id}", delete(leave))
+        .route(
+            "/guilds/{id}/channels",
+            get(|Path(id): Path<String>| async move {
+                axum::Json(json!([
+                    {"id":"400000000000000001","name":"general","type":0,"position":0,"permission_overwrites":[]},
+                    {"id":"400000000000000002","name":"staff","type":0,"position":1,"topic":"Mods only","permission_overwrites":[{"id":id,"type":0,"allow":"0","deny":"1024"}]}
+                ]))
+            }),
+        )
+        .route(
+            "/guilds/{id}/members",
+            get(|| async {
+                axum::Json(json!([
+                    {"user":{"id":"200000000000000001","username":"owner","global_name":"Owner"},"nick":null,"roles":["300000000000000001"],"joined_at":"2026-01-02T00:00:00+00:00"},
+                    {"user":{"id":"200000000000000003","username":"helper","bot":true},"nick":"Helper","roles":[],"joined_at":"2026-02-03T00:00:00+00:00"}
+                ]))
+            }),
+        )
+        .route(
+            "/guilds/{id}/scheduled-events",
+            get(|| async { axum::Json(json!([])) }),
+        )
+        .route(
+            "/guilds/{id}/threads/active",
+            get(|| async { axum::Json(json!({"threads":[{"id":"500000000000000001","name":"Wipe day","message_count":7}],"members":[]})) }),
+        )
+        .with_state(mock.clone());
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, mock, task)
+}
+
+fn install_state(start: &Value) -> String {
+    let url = start["url"].as_str().unwrap();
+    let state = url
+        .split("&state=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap();
+    percent_encoding::percent_decode_str(state)
+        .decode_utf8()
+        .unwrap()
+        .into_owned()
+}
+
+#[tokio::test]
+async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_private() {
+    use std::sync::atomic::Ordering;
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM discord_guilds WHERE guild_id=$1")
+        .bind(DISCORD_GUILD)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (api, mock, task) = discord_mock().await;
+    let config = crate::discord::DiscordConfig::new(
+        "130000000000000099".into(),
+        "bot-token-secret".into(),
+        "client-secret-value".into(),
+        "http://100.64.0.1:21700/discord/callback".into(),
+        "21712.".into(),
+        api,
+    );
+    let auth = AuthConfig {
+        secure_cookies: false,
+        ..Default::default()
+    };
+    let app = router_with_auth(pool.clone(), auth.clone()).layer(axum::Extension(config));
+    let unconfigured = router_with_auth(pool.clone(), auth);
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut viewer = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner
+        .signup(&format!("discord-a-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("discord-b-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let mut responses = Vec::new();
+
+    assert_eq!(
+        anonymous
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut owner_without_config = Client {
+        app: unconfigured,
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    assert_eq!(
+        owner_without_config
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .0,
+        StatusCode::FAILED_DEPENDENCY
+    );
+
+    // A community viewer sees guilds but cannot add or remove them.
+    let viewer_email = format!("discord-viewer-{suffix}@example.com");
+    let role = owner
+        .create_role("Discord viewer", &["community.view"])
+        .await;
+    let (status, invitation) = owner.change(json!({"kind":"invite","user":{"id":"ignored","name":"Viewer","email":viewer_email,"roleIds":[role["id"]],"status":"invited","lastActiveAt":null}})).await;
+    assert_eq!(status, StatusCode::OK, "{invitation}");
+    viewer.signup(&viewer_email).await;
+    viewer
+        .request(
+            "POST",
+            "invitations/accept",
+            json!({"token":invitation["invitationToken"]}),
+        )
+        .await;
+    viewer.request("GET", "auth/me", json!(null)).await;
+    assert_eq!(
+        viewer.request("GET", "discord/guilds", json!(null)).await.0,
+        StatusCode::OK
+    );
+    for path in [
+        "discord/install/start".to_owned(),
+        format!("discord/guilds/{DISCORD_GUILD}/remove"),
+    ] {
+        assert_eq!(
+            viewer.request("POST", &path, json!({})).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    let (status, start) = owner
+        .request("POST", "discord/install/start", json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{start}");
+    let url = start["url"].as_str().unwrap();
+    assert!(url.starts_with("https://discord.com/oauth2/authorize?client_id=130000000000000099&"));
+    assert!(url.contains("scope=bot%20identify"));
+    assert!(url.contains("redirect_uri=http%3A%2F%2F100.64.0.1%3A21700%2Fdiscord%2Fcallback"));
+    assert!(!url.contains("permissions="));
+    let state = install_state(&start);
+    assert!(state.starts_with("21712."));
+    responses.push(start.to_string());
+
+    // A wrong state consumes the pending install, so the right one no longer works.
+    let (status, wrong) = owner
+        .request(
+            "POST",
+            "discord/install",
+            json!({"code":"owner-code","state":"21712.forged"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong}");
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "discord/install",
+                json!({"code":"owner-code","state":state}),
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Discord rejecting the code is reported without detail.
+    let state = install_state(
+        &owner
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .1,
+    );
+    let (status, failed) = owner
+        .request(
+            "POST",
+            "discord/install",
+            json!({"code":"bad-code","state":state}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FAILED_DEPENDENCY, "{failed}");
+    responses.push(failed.to_string());
+
+    let state = install_state(
+        &owner
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .1,
+    );
+    let (status, guild) = owner
+        .request(
+            "POST",
+            "discord/install",
+            json!({"code":"owner-code","state":state,"guildId":DISCORD_GUILD}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{guild}");
+    assert_eq!(guild["id"], DISCORD_GUILD);
+    assert_eq!(guild["name"], "Test guild");
+    assert_eq!(guild["access"], "owner");
+    assert_eq!(guild["memberCount"], 42);
+    assert_eq!(guild["iconHash"], format!("a_{}", "0f".repeat(16)));
+    assert_eq!(guild["bannerHash"], "0a".repeat(16));
+    assert_eq!(guild["homeHeaderHash"], "0b".repeat(16));
+    assert_eq!(mock.revoked.load(Ordering::SeqCst), 1);
+    responses.push(guild.to_string());
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "discord/install",
+                json!({"code":"owner-code","state":state}),
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Another organization cannot remove this organization's guild.
+    assert_eq!(
+        other
+            .request(
+                "POST",
+                &format!("discord/guilds/{DISCORD_GUILD}/remove"),
+                json!({}),
+            )
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // A state started in one organization is refused after switching to another.
+    let state = install_state(
+        &owner
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .1,
+    );
+    let mut switched = Client {
+        app: app.clone(),
+        cookie: owner.cookie.clone(),
+        organization: other.organization.clone(),
+    };
+    assert_eq!(
+        switched
+            .request(
+                "POST",
+                "discord/install",
+                json!({"code":"owner-code","state":state}),
+            )
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+
+    let state = install_state(
+        &other
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .1,
+    );
+    let (status, managed) = other
+        .request(
+            "POST",
+            "discord/install",
+            json!({"code":"manager-code","state":state}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{managed}");
+    assert_eq!(managed["access"], "manager");
+    let (_, owner_list) = owner.request("GET", "discord/guilds", json!(null)).await;
+    assert_eq!(owner_list.as_array().unwrap().len(), 1);
+    assert_eq!(owner_list[0]["access"], "owner");
+    responses.push(owner_list.to_string());
+
+    // A failed leave keeps the guild listed so the operator can retry.
+    let remove = format!("discord/guilds/{DISCORD_GUILD}/remove");
+    mock.leave_mode.store(1, Ordering::SeqCst);
+    let (status, failed) = other.request("POST", &remove, json!({})).await;
+    assert_eq!(status, StatusCode::FAILED_DEPENDENCY, "{failed}");
+    assert_eq!(
+        other.request("GET", "discord/guilds", json!(null)).await.1[0]["id"],
+        DISCORD_GUILD
+    );
+    responses.push(failed.to_string());
+
+    // The bot leaves on removal, and the guild goes for every organization.
+    mock.leave_mode.store(0, Ordering::SeqCst);
+    let (status, remaining) = other.request("POST", &remove, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{remaining}");
+    assert_eq!(remaining, json!([]));
+    assert_eq!(mock.left.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        owner.request("GET", "discord/guilds", json!(null)).await.1,
+        json!([])
+    );
+    assert_eq!(
+        owner.request("POST", &remove, json!({})).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // A guild the bot already left is still removable.
+    sqlx::query("INSERT INTO discord_guilds(organization_id,guild_id,name,access) VALUES($1,$2,'Gone guild','owner')")
+        .bind(&owner.organization)
+        .bind(DISCORD_GUILD)
+        .execute(&pool)
+        .await
+        .unwrap();
+    mock.leave_mode.store(2, Ordering::SeqCst);
+    assert_eq!(
+        owner.request("POST", &remove, json!({})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(mock.left.load(Ordering::SeqCst), 1);
+
+    for response in responses {
+        for secret in DISCORD_SECRETS {
+            assert!(!response.contains(secret), "{response}");
+        }
+    }
+    task.abort();
+}
+
+#[tokio::test]
+async fn discord_guild_overview_reads_discord_for_the_linking_organization_only() {
+    use std::sync::atomic::Ordering;
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let guild_id = "130000000000000777";
+    sqlx::query("DELETE FROM discord_guild_snapshots WHERE guild_id=$1")
+        .bind(guild_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (api, mock, task) = discord_mock().await;
+    let config = crate::discord::DiscordConfig::new(
+        "130000000000000099".into(),
+        "bot-token-secret".into(),
+        "client-secret-value".into(),
+        "http://100.64.0.1:21700/discord/callback".into(),
+        String::new(),
+        api,
+    );
+    let app = router_with_auth(
+        pool.clone(),
+        AuthConfig {
+            secure_cookies: false,
+            ..Default::default()
+        },
+    )
+    .layer(axum::Extension(config));
+    let mut owner = Client::new(&app);
+    let mut outsider = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    let suffix = uuid::Uuid::new_v4();
+    owner
+        .signup(&format!("overview-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    outsider
+        .signup(&format!("overview-other-{suffix}@example.com"))
+        .await;
+    outsider.create_organization().await;
+    for guild in [guild_id, DISCORD_GONE_GUILD] {
+        sqlx::query("INSERT INTO discord_guilds(organization_id,guild_id,name,access) VALUES($1,$2,'Linked','owner')")
+            .bind(&owner.organization)
+            .bind(guild)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let path = "discord/guilds/130000000000000777";
+    assert_eq!(
+        anonymous.request("GET", path, json!(null)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    // Another organization cannot read a guild it never linked.
+    assert_eq!(
+        outsider.request("GET", path, json!(null)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // A guild the bot was removed from explains what to do.
+    let (status, gone) = owner
+        .request(
+            "GET",
+            &format!("discord/guilds/{DISCORD_GONE_GUILD}"),
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{gone}");
+    let (status, overview) = owner.request("GET", path, json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    let reads = mock.reads.load(Ordering::SeqCst);
+    assert_eq!(overview["guild"]["name"], " Test guild ");
+    assert_eq!(overview["guild"]["memberCount"], 42);
+    assert_eq!(overview["guild"]["bannerHash"], "0a".repeat(16));
+    let channels = overview["channels"].as_array().unwrap();
+    assert_eq!(channels[0]["private"], false);
+    assert_eq!(channels[1]["private"], true);
+    assert_eq!(channels[1]["topic"], "Mods only");
+    let roles = overview["roles"].as_array().unwrap();
+    assert_eq!(roles[0]["everyone"], true);
+    assert_eq!(roles[0]["memberCount"], 2);
+    assert_eq!(roles[1]["name"], "Mods");
+    assert_eq!(roles[1]["memberCount"], 1);
+    let members = overview["members"]["items"].as_array().unwrap();
+    assert_eq!(members[0]["displayName"], "Owner");
+    assert_eq!(members[1]["displayName"], "Helper");
+    assert_eq!(members[1]["bot"], true);
+    assert_eq!(overview["members"]["complete"], true);
+    assert_eq!(overview["threads"][0]["name"], "Wipe day");
+    for secret in DISCORD_SECRETS {
+        assert!(!overview.to_string().contains(secret));
+    }
+    // The read refreshed the guild's list entry.
+    let (name, members): (String, Option<i32>) = sqlx::query_as(
+        "SELECT name,member_count FROM discord_guilds WHERE organization_id=$1 AND guild_id=$2",
+    )
+    .bind(&owner.organization)
+    .bind(guild_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((name.as_str(), members), ("Test guild", Some(42)));
+
+    // A fresh snapshot answers without calling Discord.
+    let (status, cached) = owner.request("GET", path, json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{cached}");
+    assert_eq!(cached, overview);
+    assert_eq!(mock.reads.load(Ordering::SeqCst), reads);
+
+    // A stale snapshot is refreshed, and still answers while Discord rate
+    // limits. Further reads wait out the limit without calling Discord.
+    sqlx::query(
+        "UPDATE discord_guild_snapshots SET fetched_at=now()-interval '1 hour' WHERE guild_id=$1",
+    )
+    .bind(guild_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    mock.read_mode.store(1, Ordering::SeqCst);
+    let (status, stale) = owner.request("GET", path, json!(null)).await;
+    assert_eq!(status, StatusCode::OK, "{stale}");
+    assert_eq!(stale["guild"], overview["guild"]);
+    assert_eq!(mock.reads.load(Ordering::SeqCst), reads + 1);
+    let (status, _) = owner.request("GET", path, json!(null)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mock.reads.load(Ordering::SeqCst), reads + 1);
+
+    // Removing the guild deletes what Cupboard stored about it.
+    let (status, removed) = owner
+        .request("POST", &format!("{path}/remove"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
+    let stored: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM discord_guild_snapshots WHERE guild_id=$1)",
+    )
+    .bind(guild_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!stored);
+    task.abort();
 }

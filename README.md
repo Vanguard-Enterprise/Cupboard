@@ -670,6 +670,33 @@ are stopped receive fresh reports after they start. Newly created worktrees join
 when their development seed is run. Use `npm run dev:machines` to run the shared
 reporter separately; its repository-wide lock prevents duplicate collectors.
 
+## Discord guilds
+
+The Discord page lists the guilds an organization owns or manages. Operators
+with `integrations.manage` add a guild by inviting the Cupboard bot through
+Discord's install screen. Discord reports which guild was chosen, and Cupboard
+marks it Owner when the installing Discord account owns the guild, otherwise
+Manager. Viewing the list needs `community.view`. Removing a guild makes the
+bot leave it first; only after Discord confirms does Cupboard unlink the guild,
+from every organization that linked it, since none can use it without the bot.
+
+The bot never holds a gateway connection. Cupboard calls Discord's REST API only
+during an operator action (install, removal), so several environments can share
+one Discord application without taking over each other's sessions.
+
+The API reads `CUPBOARD_DISCORD_APPLICATION_ID`, `CUPBOARD_DISCORD_BOT_TOKEN`,
+`CUPBOARD_DISCORD_CLIENT_SECRET`, and `CUPBOARD_DISCORD_REDIRECT_URI`. Set all
+four or none; with none, adding guilds is turned off.
+
+In development, every worktree shares one Discord application. `npm run dev`
+reads its credentials from OpenBao (`kv/cupboard/rebuild/development/discord`,
+using your `bao` login) and passes them to the Rust API only, never to Next.js
+or to disk. Discord returns installs to one registered redirect URI,
+`http://<NetBird IP>:21700/discord/callback`. A relay on port 21700, run by
+whichever worktree's dev server holds the port, forwards each install to the
+worktree whose web port leads its state. The relay holds no credentials. When
+OpenBao is unreachable, the dev server starts with guild installs off.
+
 ## Maintenance and status page
 
 Open `/dashboard/infrastructure/maintenance` (Status page in the sidebar) to

@@ -28,6 +28,7 @@ import {
   auditLogPath,
   connectionsPath,
   credentialsPath,
+  discordPath,
   alertsPath,
   profilePath,
   rolesPath,
@@ -109,14 +110,21 @@ export function Workspace({
           }
         : undefined;
   const serverPage =
-    pathname === filesPath
-      ? { activeSection: "file-library", crumbs: ["Files"] }
-      : pathname === serversPath
+    pathname === discordPath || pathname === `${discordPath}/callback`
+      ? { activeSection: "discord", crumbs: ["Community", "Discord"] }
+      : pathname.startsWith(`${discordPath}/`)
         ? {
-            activeSection: "servers",
-            crumbs: ["Operations", "Game servers", "Server inventory"],
+            activeSection: "discord",
+            crumbs: ["Community", "Discord", "Guild"],
           }
-        : undefined;
+        : pathname === filesPath
+          ? { activeSection: "file-library", crumbs: ["Files"] }
+          : pathname === serversPath
+            ? {
+                activeSection: "servers",
+                crumbs: ["Operations", "Game servers", "Server inventory"],
+              }
+            : undefined;
   const machinePage =
     pathname === machinesPath || pathname === machinesPath + "/setup"
       ? {
@@ -170,9 +178,17 @@ export function Workspace({
                         <BreadcrumbItem>
                           {index === page.crumbs.length - 1 ? (
                             <BreadcrumbPage>{crumb}</BreadcrumbPage>
-                          ) : crumb === "Machines" ? (
+                          ) : crumb === "Machines" || crumb === "Discord" ? (
                             <BreadcrumbLink asChild>
-                              <Link href={machinesPath}>{crumb}</Link>
+                              <Link
+                                href={
+                                  crumb === "Machines"
+                                    ? machinesPath
+                                    : discordPath
+                                }
+                              >
+                                {crumb}
+                              </Link>
                             </BreadcrumbLink>
                           ) : (
                             <span>{crumb}</span>

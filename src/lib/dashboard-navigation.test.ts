@@ -5,6 +5,7 @@ import {
   auditLogPath,
   connectionsPath,
   credentialsPath,
+  discordPath,
   navigationHref,
   profilePath,
   rolesPath,
@@ -25,6 +26,7 @@ describe("dashboard navigation", () => {
     expect(navigationHref("team-roles")).toBe(rolesPath);
     expect(navigationHref("maintenance")).toBe(maintenancePath);
     expect(navigationHref("alerts-data")).toBe(alertsPath);
+    expect(navigationHref("discord")).toBe(discordPath);
     // Observability's planned alerts page is separate from alert settings.
     expect(navigationHref("alerts")).toBeUndefined();
   });

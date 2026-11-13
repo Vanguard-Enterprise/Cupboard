@@ -18,6 +18,7 @@ pub const PERMISSIONS: &[&str] = &[
     "servers.view",
     "servers.manage",
     "players.moderate",
+    "community.view",
     "integrations.manage",
     "billing.manage",
     "organization.manage",

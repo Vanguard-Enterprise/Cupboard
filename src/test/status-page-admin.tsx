@@ -100,15 +100,29 @@ export const live: StatusPageState = {
 };
 
 export function registerStatusPageHooks() {
+  // Frames still waiting when a test ends would run after the file's jsdom
+  // window is gone, so each test cancels its own.
+  const frames = new Set<ReturnType<typeof setTimeout>>();
   beforeEach(() => {
     // jsdom runs animation frames on one setInterval, made by the first
     // request. Made while a test fakes setInterval, it dies with the fake
     // timers and no frame runs again in this file. Frames on setTimeout,
     // looked up per call, survive that.
-    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) =>
-      setTimeout(() => run(performance.now()), 16),
+    vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+      const frame = setTimeout(() => {
+        frames.delete(frame);
+        run(performance.now());
+      }, 16);
+      frames.add(frame);
+      return frame;
+    });
+    vi.stubGlobal(
+      "cancelAnimationFrame",
+      (frame: ReturnType<typeof setTimeout>) => {
+        frames.delete(frame);
+        clearTimeout(frame);
+      },
     );
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
     Element.prototype.scrollIntoView = vi.fn();
     vi.mocked(apiRequest).mockReset();
     vi.mocked(toast.success).mockReset();
@@ -124,6 +138,8 @@ export function registerStatusPageHooks() {
   });
   afterEach(() => {
     cleanup();
+    for (const frame of frames) clearTimeout(frame);
+    frames.clear();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
