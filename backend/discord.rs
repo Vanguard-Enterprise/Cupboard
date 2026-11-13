@@ -487,7 +487,9 @@ async fn install(
     headers: HeaderMap,
     input: Result<Json<InstallInput>, axum::extract::rejection::JsonRejection>,
 ) -> ApiResult<Json<Guild>> {
-    let (mut conn, org) = access(&pool, &auth, &session, &headers, "integrations.manage").await?;
+    let (conn, org) = access(&pool, &auth, &session, &headers, "integrations.manage").await?;
+    // Hold no database connection while waiting on Discord or the guild lock.
+    drop(conn);
     let Some(Extension(DiscordConfig(config))) = config else {
         return Err(unconfigured());
     };
@@ -525,6 +527,7 @@ async fn install(
         .approximate_member_count
         .and_then(|count| i32::try_from(count).ok())
         .filter(|count| *count >= 0);
+    let mut conn = pool.acquire().await?;
     let saved = sqlx::query_as("INSERT INTO discord_guilds(organization_id,guild_id,name,icon_hash,banner_hash,home_header_hash,access,member_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(organization_id,guild_id) DO UPDATE SET name=EXCLUDED.name,icon_hash=EXCLUDED.icon_hash,banner_hash=EXCLUDED.banner_hash,home_header_hash=EXCLUDED.home_header_hash,access=EXCLUDED.access,member_count=EXCLUDED.member_count RETURNING guild_id AS id,name,icon_hash,banner_hash,home_header_hash,access,member_count,(EXTRACT(EPOCH FROM connected_at)*1000)::bigint AS connected_at")
         .bind(&org)
         .bind(&guild.id)
@@ -564,6 +567,8 @@ async fn remove(
     let Some(Extension(DiscordConfig(config))) = config else {
         return Err(unconfigured());
     };
+    // Hold no database connection while waiting on the lock or Discord.
+    drop(conn);
     // Wait for any install or refresh of this guild to finish first.
     let lock = config.guild_lock(&id);
     let Ok(_turn) = tokio::time::timeout(REMOVE_LOCK_WAIT, lock.lock()).await else {
@@ -591,6 +596,7 @@ async fn remove(
     }
     // Without the bot the guild is unusable everywhere, so every organization
     // that linked it loses it.
+    let mut conn = pool.acquire().await?;
     let mut tx = sqlx::Connection::begin(&mut *conn).await?;
     sqlx::query("DELETE FROM discord_guilds WHERE guild_id=$1")
         .bind(&id)
