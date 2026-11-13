@@ -282,7 +282,14 @@ export function DiscordGuilds({
             </p>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={removeBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel
+              aria-disabled={removeBusy || undefined}
+              onClick={(event) => {
+                if (removeBusy) event.preventDefault();
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
               aria-disabled={removeBusy}

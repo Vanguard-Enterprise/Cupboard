@@ -50,6 +50,9 @@ const DISCORD_DEADLINE: Duration = Duration::from_secs(20);
 /// still fits the proxy's 25 seconds.
 const INSTALL_DEADLINE: Duration = Duration::from_secs(15);
 const REVOKE_TIMEOUT: Duration = Duration::from_secs(4);
+/// How long a removal waits for an install or refresh of the same guild.
+/// With the bot's 10-second leave request it stays inside the proxy's 25.
+const REMOVE_LOCK_WAIT: Duration = Duration::from_secs(10);
 /// How long to stop calling Discord when it rate limits without saying.
 const DEFAULT_BACKOFF_SECONDS: i64 = 60;
 /// application/x-www-form-urlencoded leaves these unreserved bytes as they are.
@@ -76,15 +79,16 @@ struct Settings {
     /// Unix time until which Discord asked Cupboard to stop sending reads.
     /// Pages serve stored snapshots until then instead of piling on.
     rate_limited_until: AtomicI64,
-    /// One Discord refresh per guild at a time. Requests that arrive during a
-    /// refresh wait for it, then read the snapshot it stored.
-    refreshing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// Refreshes, installs, and removals of one guild take turns. A request
+    /// that arrives during a refresh waits, then reads the snapshot it
+    /// stored, and an install can't save a guild the bot has just left.
+    guild_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Settings {
-    fn refresh_lock(&self, guild_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    fn guild_lock(&self, guild_id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self
-            .refreshing
+            .guild_locks
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         // Locks are only handed out under this mutex, so a lock nobody else
@@ -155,7 +159,7 @@ impl DiscordConfig {
             state_prefix,
             api: api.trim_end_matches('/').to_owned(),
             rate_limited_until: AtomicI64::new(0),
-            refreshing: Mutex::default(),
+            guild_locks: Mutex::default(),
         }))
     }
 }
@@ -385,11 +389,17 @@ async fn by<T>(
 }
 
 /// Exchanges the install's code, identifies the installer, and reads the
-/// guild Discord added the bot to.
+/// guild Discord added the bot to. Returns holding the guild's turn, so a
+/// removal can't make the bot leave between this read and the save.
 async fn exchange(
     config: &Settings,
     input: &InstallInput,
-) -> ApiResult<(IdOnly, String, DiscordGuild)> {
+) -> ApiResult<(
+    IdOnly,
+    String,
+    DiscordGuild,
+    tokio::sync::OwnedMutexGuard<()>,
+)> {
     let deadline = tokio::time::Instant::now() + INSTALL_DEADLINE;
     let client = client()?;
     let token: TokenResponse = by(deadline, async {
@@ -449,6 +459,10 @@ async fn exchange(
     if !snowflake(&guild_id) || input.guild_id.as_ref().is_some_and(|id| *id != guild_id) {
         return Err(discord_failed());
     }
+    let turn = by(deadline, async {
+        Ok(config.guild_lock(&guild_id).lock_owned().await)
+    })
+    .await?;
     let guild: DiscordGuild = by(deadline, async {
         read(
             client
@@ -462,7 +476,7 @@ async fn exchange(
         .await
     })
     .await?;
-    Ok((installer, guild_id, guild))
+    Ok((installer, guild_id, guild, turn))
 }
 
 async fn install(
@@ -497,7 +511,7 @@ async fn install(
     if input.code.is_empty() || input.code.len() > 256 {
         return Err(discord_failed());
     }
-    let (installer, guild_id, guild) = exchange(&config, &input).await?;
+    let (installer, guild_id, guild, _turn) = exchange(&config, &input).await?;
     let name = guild.name.trim();
     if guild.id != guild_id || name.is_empty() || name.chars().count() > 100 {
         return Err(discord_failed());
@@ -549,6 +563,14 @@ async fn remove(
     }
     let Some(Extension(DiscordConfig(config))) = config else {
         return Err(unconfigured());
+    };
+    // Wait for any install or refresh of this guild to finish first.
+    let lock = config.guild_lock(&id);
+    let Ok(_turn) = tokio::time::timeout(REMOVE_LOCK_WAIT, lock.lock()).await else {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Another change to this guild is still running. Try again in a moment.",
+        ));
     };
     // The bot leaves before Cupboard forgets the guild, so a guild is never
     // unlisted while the bot stays in it. Discord answers 404 when the bot
@@ -760,7 +782,7 @@ async fn overview(
     };
     // Waiting for another request's refresh counts toward the deadline too.
     let deadline = tokio::time::Instant::now() + DISCORD_DEADLINE;
-    let lock = config.refresh_lock(&id);
+    let lock = config.guild_lock(&id);
     let Ok(_refreshing) = tokio::time::timeout_at(deadline, lock.lock()).await else {
         return cached
             .map(|s| respond(s, connected_at, true))
