@@ -55,7 +55,8 @@ type Role = {
   managed: boolean;
   mentionable: boolean;
   everyone: boolean;
-  memberCount: number;
+  /** Null when Discord didn't share the member list. */
+  memberCount: number | null;
 };
 type Channel = {
   id: string;
@@ -96,7 +97,7 @@ export type GuildOverview = {
   };
   channels: Channel[];
   roles: Role[];
-  members: { items: Member[]; complete: boolean };
+  members: { items: Member[]; available: boolean; complete: boolean };
   emojis: { id: string; name: string; animated: boolean | null }[];
   stickers: { id: string; name: string }[];
   events: {
@@ -117,6 +118,8 @@ const days = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
 });
 const cdn = "https://cdn.discordapp.com";
+const membersHidden =
+  "Discord didn’t share this guild’s member list, so member and role counts aren’t available.";
 
 const verification = ["None", "Low", "Medium", "High", "Highest"];
 const channelIcons: Record<number, LucideIcon> = {
@@ -382,11 +385,14 @@ function Overview({
   });
   const roleBars = roles
     .filter((role) => !role.everyone)
-    .map((role) => ({ name: role.name, members: role.memberCount }))
+    .map((role) => ({ name: role.name, members: role.memberCount ?? 0 }))
     .sort((a, b) => b.members - a.members);
   const sample = members.complete
     ? undefined
     : "Based on the first 1,000 members.";
+  const hidden = (
+    <p className="text-sm text-muted-foreground">{membersHidden}</p>
+  );
   const details = [
     ["Created", guild.createdAt ? dates.format(guild.createdAt) : "Unknown"],
     ["Added to Cupboard", dates.format(guild.connectedAt)],
@@ -407,9 +413,15 @@ function Overview({
     <div className="grid gap-4 lg:grid-cols-2">
       <Panel
         title="Member growth"
-        note={sample ?? "Current members by the day they joined."}
+        note={
+          members.available
+            ? (sample ?? "Current members by the day they joined.")
+            : undefined
+        }
       >
-        {growth.length > 1 ? (
+        {!members.available ? (
+          hidden
+        ) : growth.length > 1 ? (
           <ChartContainer
             config={growthConfig}
             className="h-56 w-full [&_.recharts-cartesian-grid_line]:opacity-50"
@@ -458,8 +470,13 @@ function Overview({
           </p>
         )}
       </Panel>
-      <Panel title="Members by role" note={sample}>
-        {roleBars.length ? (
+      <Panel
+        title="Members by role"
+        note={members.available ? sample : undefined}
+      >
+        {!members.available ? (
+          hidden
+        ) : roleBars.length ? (
           <ChartContainer
             config={roleConfig}
             className="w-full"
@@ -630,7 +647,11 @@ function Roles({ roles }: { roles: Role[] }) {
                 </span>
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {numbers.format(role.memberCount)}
+                {role.memberCount === null ? (
+                  <span className="text-muted-foreground">Unknown</span>
+                ) : (
+                  numbers.format(role.memberCount)
+                )}
               </TableCell>
               <TableCell>{yes(role.hoist)}</TableCell>
               <TableCell>{yes(role.mentionable)}</TableCell>
@@ -654,6 +675,12 @@ function Members({
 }) {
   const [query, setQuery] = useState("");
   const names = new Map(roles.map((role) => [role.id, role]));
+  if (!members.available)
+    return (
+      <p className="rounded-xl border border-border bg-card px-5 py-8 text-center text-sm text-muted-foreground">
+        {membersHidden}
+      </p>
+    );
   const search = query.trim().toLowerCase();
   const visible = members.items
     .filter(

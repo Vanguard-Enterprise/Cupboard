@@ -34,6 +34,9 @@ const DISCORD_API: &str = "https://discord.com/api/v10";
 const INSTALL_KEY: &str = "discord_install";
 const INSTALL_TTL_SECONDS: i64 = 600;
 const MAX_BODY: usize = 64 * 1024;
+/// A guild object lists every role, emoji, and sticker, so busy guilds run
+/// well past `MAX_BODY`.
+const GUILD_BODY: usize = 1 << 20;
 /// Guild pages call Discord only when the stored snapshot is older than this.
 const SNAPSHOT_FRESH_SECONDS: i64 = 600;
 /// How long to stop calling Discord when it rate limits without saying.
@@ -333,11 +336,11 @@ fn client() -> ApiResult<reqwest::Client> {
         .map_err(|_| internal())
 }
 
-async fn read<T: DeserializeOwned>(response: reqwest::Response) -> ApiResult<T> {
+async fn read<T: DeserializeOwned>(response: reqwest::Response, limit: usize) -> ApiResult<T> {
     let mut response = response.error_for_status().map_err(|_| discord_failed())?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| discord_failed())? {
-        if bytes.len() + chunk.len() > MAX_BODY {
+        if bytes.len() + chunk.len() > limit {
             return Err(discord_failed());
         }
         bytes.extend_from_slice(&chunk);
@@ -391,6 +394,7 @@ async fn install(
             .send()
             .await
             .map_err(|_| discord_failed())?,
+        MAX_BODY,
     )
     .await?;
     let installer: ApiResult<IdOnly> = read(
@@ -400,6 +404,7 @@ async fn install(
             .send()
             .await
             .map_err(|_| discord_failed())?,
+        MAX_BODY,
     )
     .await;
     // Cupboard needs the operator's token only for this request.
@@ -427,6 +432,7 @@ async fn install(
             .send()
             .await
             .map_err(|_| discord_failed())?,
+        GUILD_BODY,
     )
     .await?;
     let name = guild.name.trim();
@@ -718,10 +724,21 @@ async fn overview(
 /// removal cannot bring its data back.
 async fn store(pool: &PgPool, id: &str, data: &Value) -> ApiResult<i64> {
     let mut tx = pool.begin().await?;
-    let fetched_at: Option<i64> = sqlx::query_scalar("INSERT INTO discord_guild_snapshots(guild_id,data) SELECT $1,$2::jsonb WHERE EXISTS(SELECT 1 FROM discord_guilds WHERE guild_id=$1) ON CONFLICT(guild_id) DO UPDATE SET data=EXCLUDED.data,fetched_at=now() RETURNING (EXTRACT(EPOCH FROM fetched_at)*1000)::bigint")
+    // Lock the guild's links before its snapshot, in the same order as
+    // removal, so the two wait for each other instead of deadlocking. A
+    // removal that commits first leaves no link to lock.
+    let linked: Vec<i32> =
+        sqlx::query_scalar("SELECT 1 FROM discord_guilds WHERE guild_id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+    if linked.is_empty() {
+        return Ok(now() * 1000);
+    }
+    let fetched_at: i64 = sqlx::query_scalar("INSERT INTO discord_guild_snapshots(guild_id,data) VALUES($1,$2::jsonb) ON CONFLICT(guild_id) DO UPDATE SET data=EXCLUDED.data,fetched_at=now() RETURNING (EXTRACT(EPOCH FROM fetched_at)*1000)::bigint")
         .bind(id)
         .bind(data.to_string())
-        .fetch_optional(&mut *tx)
+        .fetch_one(&mut *tx)
         .await?;
     let guild = &data["guild"];
     let name = guild["name"].as_str().map(str::trim).unwrap_or_default();
@@ -740,7 +757,7 @@ async fn store(pool: &PgPool, id: &str, data: &Value) -> ApiResult<i64> {
             .await?;
     }
     tx.commit().await?;
-    Ok(fetched_at.unwrap_or_else(|| now() * 1000))
+    Ok(fetched_at)
 }
 
 /// Reads a guild from Discord and normalizes it for the guild page.
@@ -751,7 +768,7 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
             &client,
             config,
             format!("guilds/{id}?with_counts=true"),
-            1 << 20
+            GUILD_BODY
         ),
         bot_get(&client, config, format!("guilds/{id}/channels"), 1 << 20),
         bot_get(
@@ -777,6 +794,9 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
         return Err(guild_gone());
     };
     let (channels, members, events, threads) = (channels?, members?, events?, threads?);
+    // Discord refuses the member list without the server members intent.
+    // Unknown counts must not read as zero.
+    let members_available = members.is_some();
 
     let members: Vec<Value> = items(&members)
         .iter()
@@ -804,17 +824,21 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
         .iter()
         .map(|role| {
             let role_id = role.get("id").and_then(Value::as_str).unwrap_or_default();
-            let count = if role_id == id {
-                members.len()
+            let count = if !members_available {
+                None
+            } else if role_id == id {
+                Some(members.len())
             } else {
-                members
-                    .iter()
-                    .filter(|member| {
-                        member["roleIds"]
-                            .as_array()
-                            .is_some_and(|ids| ids.iter().any(|v| v == role_id))
-                    })
-                    .count()
+                Some(
+                    members
+                        .iter()
+                        .filter(|member| {
+                            member["roleIds"]
+                                .as_array()
+                                .is_some_and(|ids| ids.iter().any(|v| v == role_id))
+                        })
+                        .count(),
+                )
             };
             json!({
                 "id": role_id,
@@ -926,7 +950,8 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
         "roles": roles,
         "members": {
             "items": members,
-            "complete": guild
+            "available": members_available,
+            "complete": members_available && guild
                 .get("approximate_member_count")
                 .and_then(Value::as_u64)
                 .is_none_or(|total| total as usize <= MAX_MEMBERS),

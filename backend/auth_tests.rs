@@ -7207,6 +7207,8 @@ struct DiscordMock {
 }
 const DISCORD_GUILD: &str = "130000000000000001";
 const DISCORD_GONE_GUILD: &str = "130000000000000404";
+/// A guild whose member list Discord refuses, as without the members intent.
+const DISCORD_HIDDEN_MEMBERS_GUILD: &str = "130000000000000403";
 const DISCORD_SECRETS: [&str; 3] = ["bot-token-secret", "client-secret-value", "user-access-"];
 
 async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
@@ -7267,7 +7269,11 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
         if id == DISCORD_GONE_GUILD {
             return StatusCode::NOT_FOUND.into_response();
         }
-        axum::Json(json!({"id":id,"name":" Test guild ","icon":format!("a_{}", "0f".repeat(16)),"banner":"0a".repeat(16),"home_header":"0b".repeat(16),"owner_id":"200000000000000001","approximate_member_count":42,"roles":[{"id":id,"name":"@everyone","color":0,"position":0},{"id":"300000000000000001","name":"Mods","color":255,"position":1,"hoist":true}]})).into_response()
+        // Busy guilds list hundreds of roles and emojis, well past 64 KiB.
+        let emojis: Vec<Value> = (0..1200)
+            .map(|n| json!({"id":format!("6000000000000{n:05}"),"name":format!("emoji_{n:04}_padding_padding"),"animated":false}))
+            .collect();
+        axum::Json(json!({"id":id,"name":" Test guild ","icon":format!("a_{}", "0f".repeat(16)),"banner":"0a".repeat(16),"home_header":"0b".repeat(16),"owner_id":"200000000000000001","approximate_member_count":42,"emojis":emojis,"roles":[{"id":id,"name":"@everyone","color":0,"position":0},{"id":"300000000000000001","name":"Mods","color":255,"position":1,"hoist":true}]})).into_response()
     }
     async fn leave(State(mock): State<DiscordMock>, headers: HeaderMap) -> StatusCode {
         if !bot(&headers) {
@@ -7302,11 +7308,14 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
         )
         .route(
             "/guilds/{id}/members",
-            get(|| async {
+            get(|Path(id): Path<String>| async move {
+                if id == DISCORD_HIDDEN_MEMBERS_GUILD {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
                 axum::Json(json!([
                     {"user":{"id":"200000000000000001","username":"owner","global_name":"Owner"},"nick":null,"roles":["300000000000000001"],"joined_at":"2026-01-02T00:00:00+00:00"},
                     {"user":{"id":"200000000000000003","username":"helper","bot":true},"nick":"Helper","roles":[],"joined_at":"2026-02-03T00:00:00+00:00"}
-                ]))
+                ])).into_response()
             }),
         )
         .route(
@@ -7625,8 +7634,8 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
         .await
         .unwrap();
     let guild_id = "130000000000000777";
-    sqlx::query("DELETE FROM discord_guild_snapshots WHERE guild_id=$1")
-        .bind(guild_id)
+    sqlx::query("DELETE FROM discord_guild_snapshots WHERE guild_id=ANY($1)")
+        .bind([guild_id, DISCORD_HIDDEN_MEMBERS_GUILD])
         .execute(&pool)
         .await
         .unwrap();
@@ -7659,7 +7668,7 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
         .signup(&format!("overview-other-{suffix}@example.com"))
         .await;
     outsider.create_organization().await;
-    for guild in [guild_id, DISCORD_GONE_GUILD] {
+    for guild in [guild_id, DISCORD_GONE_GUILD, DISCORD_HIDDEN_MEMBERS_GUILD] {
         sqlx::query("INSERT INTO discord_guilds(organization_id,guild_id,name,access) VALUES($1,$2,'Linked','owner')")
             .bind(&owner.organization)
             .bind(guild)
@@ -7688,7 +7697,6 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
     assert_eq!(status, StatusCode::CONFLICT, "{gone}");
     let (status, overview) = owner.request("GET", path, json!(null)).await;
     assert_eq!(status, StatusCode::OK, "{overview}");
-    let reads = mock.reads.load(Ordering::SeqCst);
     assert_eq!(overview["guild"]["name"], " Test guild ");
     assert_eq!(overview["guild"]["memberCount"], 42);
     assert_eq!(overview["guild"]["bannerHash"], "0a".repeat(16));
@@ -7710,6 +7718,26 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
     for secret in DISCORD_SECRETS {
         assert!(!overview.to_string().contains(secret));
     }
+    assert_eq!(overview["members"]["available"], true);
+    assert_eq!(overview["emojis"].as_array().unwrap().len(), 1200);
+    // A refused member list reads as unknown, never as zero members.
+    let (status, hidden) = owner
+        .request(
+            "GET",
+            &format!("discord/guilds/{DISCORD_HIDDEN_MEMBERS_GUILD}"),
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{hidden}");
+    assert_eq!(hidden["members"]["available"], false);
+    assert_eq!(hidden["members"]["complete"], false);
+    assert!(
+        hidden["roles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|role| role["memberCount"].is_null())
+    );
     // The read refreshed the guild's list entry.
     let (name, members): (String, Option<i32>) = sqlx::query_as(
         "SELECT name,member_count FROM discord_guilds WHERE organization_id=$1 AND guild_id=$2",
@@ -7722,6 +7750,7 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
     assert_eq!((name.as_str(), members), ("Test guild", Some(42)));
 
     // A fresh snapshot answers without calling Discord.
+    let reads = mock.reads.load(Ordering::SeqCst);
     let (status, cached) = owner.request("GET", path, json!(null)).await;
     assert_eq!(status, StatusCode::OK, "{cached}");
     assert_eq!(cached, overview);

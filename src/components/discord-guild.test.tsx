@@ -88,6 +88,7 @@ const overview: GuildOverview = {
     },
   ],
   members: {
+    available: true,
     complete: true,
     items: [
       {
@@ -147,6 +148,32 @@ it("shows the guild's details, channels, roles, and members", async () => {
 
   await user.click(screen.getByRole("tab", { name: "Emojis and events" }));
   expect(screen.getByText("Wipe day")).toBeTruthy();
+});
+
+it("shows member counts as unknown when Discord withholds the member list", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({
+      ...overview,
+      roles: overview.roles.map((role) => ({ ...role, memberCount: null })),
+      members: { items: [], available: false, complete: false },
+    }),
+  );
+  const user = userEvent.setup();
+  render(<DiscordGuild identity={identity} guildId={guildId} />);
+  await screen.findByRole("heading", { name: "Northstar Rust" });
+  expect(
+    screen.getAllByText(/didn’t share this guild’s member list/),
+  ).toHaveLength(2);
+
+  await user.click(screen.getByRole("tab", { name: "Roles" }));
+  const admins = screen.getByRole("row", { name: /Admins/ });
+  expect(within(admins).getAllByRole("cell")[1]!.textContent).toBe("Unknown");
+
+  await user.click(screen.getByRole("tab", { name: "Members" }));
+  expect(screen.queryByLabelText("Search members")).toBeNull();
+  expect(
+    screen.getByText(/didn’t share this guild’s member list/),
+  ).toBeTruthy();
 });
 
 it("explains when the bot is no longer in the guild", async () => {
