@@ -13,6 +13,7 @@ import {
   UserRoundPenIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Skeleton, SkeletonRows } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -410,10 +411,27 @@ export function OrganizationUsers() {
   ]);
 
   if (!ready) {
+    // The page's own header, with the list's shape below it.
     return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading users...
-      </p>
+      <>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">Users</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Manage organization members and their access.
+            </p>
+          </div>
+          <Button disabled>
+            <PlusIcon /> Invite user
+          </Button>
+        </div>
+        <div aria-hidden="true" className="mb-4 flex gap-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-9 w-20" />
+          ))}
+        </div>
+        <SkeletonRows label="Loading users" className="rounded-xl" />
+      </>
     );
   }
 

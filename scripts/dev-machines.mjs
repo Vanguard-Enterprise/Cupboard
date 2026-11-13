@@ -84,6 +84,21 @@ export function targets() {
   }
   return result;
 }
+/** The API origin when `url` is plain HTTP on loopback; throws otherwise. */
+export function loopbackApi(url) {
+  const parsed = new URL(url);
+  if (
+    parsed.protocol !== "http:" ||
+    parsed.hostname !== "127.0.0.1" ||
+    parsed.pathname !== "/" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  )
+    throw new Error("Development reports must stay on loopback.");
+  return parsed.origin;
+}
 export async function publish(report, destinations, send = fetch) {
   if (
     JSON.stringify(report).length > 8192 ||
@@ -92,17 +107,7 @@ export async function publish(report, destinations, send = fetch) {
     throw new Error("Unexpected development collector report.");
   return Promise.all(
     destinations.map(async (target) => {
-      const url = new URL(target.url);
-      if (
-        url.protocol !== "http:" ||
-        url.hostname !== "127.0.0.1" ||
-        url.pathname !== "/" ||
-        url.username ||
-        url.password ||
-        url.search ||
-        url.hash
-      )
-        throw new Error("Development reports must stay on loopback.");
+      loopbackApi(target.url);
       try {
         const response = await send(`${target.url}/node-api/heartbeat`, {
           method: "POST",

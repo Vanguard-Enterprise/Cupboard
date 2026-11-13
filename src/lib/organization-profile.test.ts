@@ -131,7 +131,9 @@ describe("organization profile", () => {
     const links = dashboardNavigation
       .flatMap((group) =>
         group.items.flatMap((item) =>
-          item.sections.map((section) => navigationHref(section.id)),
+          item.sections
+            ? item.sections.map((section) => navigationHref(section.id))
+            : [navigationHref(item.id)],
         ),
       )
       .filter(Boolean);

@@ -20,6 +20,7 @@
   /* Behind image previews, so transparent dark artwork stays visible. */
   --color-image-backdrop: #ffffff;
   --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-success: var(--success);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -93,6 +94,8 @@
      item: 5.0:1 on the 20% tint over a popover. */
   --destructive-strong: #e58a8a;
   --warning: #c9a45d;
+  /* Informational notices only, such as a status page announcement. */
+  --info: #7fa7d9;
   --success: #7cb58d;
   --border: #2a2f36;
   --border-strong: #3a4048;
@@ -158,6 +161,7 @@
   --destructive: #b23c3c;
   --destructive-strong: #9a2f2f;
   --warning: #8a6418;
+  --info: #2f5f9e;
   --success: #2f7a48;
   --border: #e1e4e8;
   --border-strong: #c8cdd4;
@@ -320,5 +324,84 @@
     right: 0.25rem;
     width: 2.75rem;
     height: 2.75rem;
+  }
+}
+
+/* Top-center toasts (a save bar's confirmation) hang from the top edge like
+   a tab dropping out of the window frame: no gap above, no top border, and
+   only the lower corners rounded. Sonner's enter slide already starts above
+   the edge. */
+[data-sonner-toaster][data-y-position="top"][data-x-position="center"] {
+  top: env(safe-area-inset-top, 0px);
+}
+[data-sonner-toaster][data-y-position="top"][data-x-position="center"]
+  [data-sonner-toast][data-styled="true"] {
+  border-top-width: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Toast countdown: a slim rail inside the toast, under its text, inset from
+   the rounded corners. A faint track runs the full width; the fill, in the
+   toast's own status color, drains to the left over its 4 seconds (the
+   Toaster's duration). Sonner pauses a toast while the pointer rests on the
+   stack, and the rail pauses with it. Sonner draws its own ::before only
+   while a toast is swiped or removed, so the rail steps aside then. */
+[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]:not([data-type="loading"]) {
+  padding-bottom: 22px;
+}
+[data-sonner-toast]:not([data-type="loading"]):not([data-swiping="true"]):not(
+    [data-removed="true"]
+  )::before {
+  content: "";
+  position: absolute;
+  inset-inline: 16px;
+  bottom: 10px;
+  height: 3px;
+  border-radius: 9999px;
+  background: linear-gradient(
+      var(--rail, var(--muted-foreground)),
+      var(--rail, var(--muted-foreground))
+    )
+    left / 100% 100% no-repeat;
+  background-color: color-mix(
+    in oklch,
+    var(--rail, var(--muted-foreground)),
+    transparent 82%
+  );
+  animation: toast-countdown 4000ms linear forwards;
+  pointer-events: none;
+}
+[data-sonner-toast][data-type="success"]::before {
+  --rail: var(--primary);
+}
+[data-sonner-toast][data-type="error"]::before {
+  --rail: var(--destructive);
+}
+[data-sonner-toast][data-type="warning"]::before {
+  --rail: var(--warning);
+}
+[data-sonner-toast][data-expanded="true"]::before {
+  animation-play-state: paused;
+}
+@keyframes toast-countdown {
+  from {
+    background-size: 100% 100%;
+  }
+  to {
+    background-size: 0% 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toast]::before {
+    animation: none;
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toast]::before {
+    animation: none;
+    opacity: 0;
   }
 }

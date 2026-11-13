@@ -4258,6 +4258,132 @@ async fn pelican_inventory_is_tenant_authorized_encrypted_and_persistent() {
 }
 
 #[tokio::test]
+async fn development_example_fleet_is_sealed_enrolled_and_scoped() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let key = crate::secrets::SecretKey::parse(&"ab".repeat(32)).unwrap();
+    let server = |name: &str, behavior: &str| crate::dev_seed::ExampleServer {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.into(),
+        behavior: behavior.into(),
+        max_players: 100,
+        rcon_port: 41_001,
+        a2s_port: 41_002,
+    };
+    let machine = |name: &str, behavior: &str| crate::dev_seed::ExampleMachine {
+        id: uuid::Uuid::new_v4().to_string(),
+        credential: crate::auth::secret(),
+        name: name.into(),
+        behavior: behavior.into(),
+        address: "203.0.113.21".into(),
+        provider: "Hetzner".into(),
+        tags: vec!["game-server".into()],
+    };
+    let fleet = crate::dev_seed::ExampleFleet {
+        rcon_password: "0123456789abcdef0123456789abcdef".into(),
+        servers: vec![server("Rust EU Main", "busy"), server("Rust AU", "offline")],
+        machines: vec![
+            machine("eu-game-01", "steady"),
+            machine("backup-01", "silent"),
+        ],
+    };
+    let account = crate::dev_seed::SeedAccount {
+        account_id: uuid::Uuid::new_v4().to_string(),
+        organization_id: uuid::Uuid::new_v4().to_string(),
+        email: format!("seed-{}@example.test", uuid::Uuid::new_v4()),
+        password: "local-fixture-password-only".into(),
+        dev_machine: None,
+        example_fleet: Some(fleet.clone()),
+    };
+    // Servers store a sealed password, so seeding them needs the key.
+    assert!(crate::dev_seed::seed(&pool, &account, None).await.is_err());
+    crate::dev_seed::seed(&pool, &account, Some(&key))
+        .await
+        .unwrap();
+    crate::dev_seed::seed(&pool, &account, Some(&key))
+        .await
+        .unwrap();
+    let org = &account.organization_id;
+    let servers: Vec<(String, String, i32, Vec<u8>)> = sqlx::query_as(
+        "SELECT id,rcon_host,rcon_port,rcon_password_encrypted FROM servers WHERE organization_id=$1 ORDER BY name",
+    )
+    .bind(org)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(servers.len(), 2);
+    for (id, host, port, sealed) in &servers {
+        assert_eq!((host.as_str(), *port), ("127.0.0.1", 41_001));
+        assert!(
+            !sealed
+                .windows(32)
+                .any(|w| w == fleet.rcon_password.as_bytes())
+        );
+        assert_eq!(
+            key.decrypt(sealed, org, id, "rcon").unwrap(),
+            fleet.rcon_password.as_bytes()
+        );
+    }
+    // Each reporting machine accepts a report with its own credential; the
+    // silent one starts out with an old reading.
+    let app = router_with_auth(pool.clone(), AuthConfig::default());
+    let (status, _) = node_request(
+        &app,
+        "heartbeat",
+        &fleet.machines[0].credential,
+        node_health(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let silent: i64 = sqlx::query_scalar(
+        "SELECT (EXTRACT(EPOCH FROM clock_timestamp())*1000)::bigint-last_seen_at FROM machines WHERE id=$1 AND organization_id=$2",
+    )
+    .bind(&fleet.machines[1].id)
+    .bind(org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(silent > 86_400_000);
+    // Another organization cannot claim the same example rows.
+    let other = crate::dev_seed::SeedAccount {
+        account_id: uuid::Uuid::new_v4().to_string(),
+        organization_id: uuid::Uuid::new_v4().to_string(),
+        email: format!("seed-{}@example.test", uuid::Uuid::new_v4()),
+        password: "local-fixture-password-only".into(),
+        dev_machine: None,
+        example_fleet: Some(fleet.clone()),
+    };
+    assert!(
+        crate::dev_seed::seed(&pool, &other, Some(&key))
+            .await
+            .is_err()
+    );
+    let owner: String = sqlx::query_scalar("SELECT organization_id FROM servers WHERE id=$1")
+        .bind(&fleet.servers[0].id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(&owner, org);
+    // An invalid fleet changes nothing.
+    let mut broken = fleet.clone();
+    broken.machines[0].credential = "short".into();
+    let invalid = crate::dev_seed::SeedAccount {
+        example_fleet: Some(broken),
+        account_id: account.account_id.clone(),
+        organization_id: account.organization_id.clone(),
+        email: account.email.clone(),
+        password: account.password.clone(),
+        dev_machine: None,
+    };
+    assert!(
+        crate::dev_seed::seed(&pool, &invalid, Some(&key))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn development_seed_is_repeatable_scoped_and_login_ready() {
     let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
         .await
@@ -4271,8 +4397,9 @@ async fn development_seed_is_repeatable_scoped_and_login_ready() {
             id: uuid::Uuid::new_v4().to_string(),
             credential: crate::auth::secret(),
         }),
+        example_fleet: None,
     };
-    crate::dev_seed::seed(&pool, &account).await.unwrap();
+    crate::dev_seed::seed(&pool, &account, None).await.unwrap();
     let machine = account.dev_machine.as_ref().unwrap();
     let stored: String =
         sqlx::query_scalar("SELECT agent_hash FROM machines WHERE id=$1 AND organization_id=$2")
@@ -4289,7 +4416,7 @@ async fn development_seed_is_repeatable_scoped_and_login_ready() {
         .await
         .unwrap();
     assert_ne!(hash, account.password);
-    crate::dev_seed::seed(&pool, &account).await.unwrap();
+    crate::dev_seed::seed(&pool, &account, None).await.unwrap();
     let repeated: String = sqlx::query_scalar("SELECT password_hash FROM accounts WHERE id=$1")
         .bind(&account.account_id)
         .fetch_one(&pool)
@@ -4335,8 +4462,9 @@ async fn development_seed_is_repeatable_scoped_and_login_ready() {
         email: format!("seed-{}@example.test", uuid::Uuid::new_v4()),
         password: account.password.clone(),
         dev_machine: account.dev_machine.clone(),
+        example_fleet: None,
     };
-    assert!(crate::dev_seed::seed(&pool, &wrong).await.is_err());
+    assert!(crate::dev_seed::seed(&pool, &wrong, None).await.is_err());
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM accounts WHERE id=$1")
         .bind(&wrong.account_id)
         .fetch_one(&pool)
@@ -5985,7 +6113,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert_eq!(status, StatusCode::OK, "{foreign}");
     let foreign_id = foreign["id"].as_str().unwrap().to_owned();
 
-    let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components});
+    let save = |revision: i64, slug: &str, components: Value| json!({"revision":revision,"name":" Northstar status ","slug":slug,"published":true,"announcement":"Wipe on Thursday.","supportUrl":"https://discord.gg/northstar","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"showName":true,"headerTitle":"","logoAlign":"left","logoSize":"medium","announcementIcon":"megaphone","announcementTone":"neutral","components":components});
     let component = |id: Option<&str>, kind: &str, source: &str, public: bool| json!({"id":id,"name":format!("{kind} shown"),"kind":kind,"sourceId":source,"tagId":"","public":public});
     // Another organization's server cannot be shown, even with a valid id.
     for (body, expected) in [
@@ -6011,7 +6139,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         (save(0, "North Star", json!([])), StatusCode::BAD_REQUEST),
         (save(1, "northstar", json!([])), StatusCode::CONFLICT),
         (
-            json!({"revision":0,"name":"x","slug":"x","published":false,"announcement":"","supportUrl":"http://insecure.example.com","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":[]}),
+            json!({"revision":0,"name":"x","slug":"x","published":false,"announcement":"","supportUrl":"http://insecure.example.com","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"showName":true,"headerTitle":"","logoAlign":"left","logoSize":"medium","announcementIcon":"megaphone","announcementTone":"neutral","components":[]}),
             StatusCode::BAD_REQUEST,
         ),
     ] {
@@ -6105,7 +6233,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         .request(
             "POST",
             "status-page",
-            json!({"revision":1,"name":"Northstar status","slug":"northstar","published":false,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":[component(Some(&server_component), "server", &server_id, true), component(Some(&machine_component), "machine", &machine_id, false)]}),
+            json!({"revision":1,"name":"Northstar status","slug":"northstar","published":false,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"showName":true,"headerTitle":"","logoAlign":"left","logoSize":"medium","announcementIcon":"megaphone","announcementTone":"neutral","components":[component(Some(&server_component), "server", &server_id, true), component(Some(&machine_component), "machine", &machine_id, false)]}),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{hidden}");
@@ -6271,6 +6399,12 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
         json!({"links":[{"label":"a","url":"https://a.example"},{"label":"b","url":"https://b.example"},{"label":"c","url":"https://c.example"},{"label":"d","url":"https://d.example"}]}),
         json!({"footerText":"Line one\nLine two"}),
         json!({"footerText":"x".repeat(201)}),
+        json!({"announcementIcon":"skull"}),
+        json!({"headerTitle":"x".repeat(81)}),
+        json!({"logoAlign":"middle"}),
+        json!({"logoSize":"huge"}),
+        json!({"headerTitle":"Two\nlines"}),
+        json!({"announcementTone":"purple"}),
     ] {
         let (status, response) = owner
             .request("POST", "status-page", branded(4, true, branding.clone()))
@@ -6284,7 +6418,7 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             branded(
                 4,
                 true,
-                json!({"theme":"system","accentColor":"#E4572E","font":"space-grotesk","links":[{"label":" Website ","url":"https://northstar.example"}],"footerText":"Northstar Games LLC","poweredBy":false}),
+                json!({"theme":"system","accentColor":"#E4572E","font":"space-grotesk","links":[{"label":" Website ","url":"https://northstar.example"}],"footerText":"Northstar Games LLC","poweredBy":false,"showName":false,"headerTitle":" Northstar ","logoAlign":"center","logoSize":"large","announcementIcon":"wrench","announcementTone":"warning"}),
             ),
         )
         .await;
@@ -6299,6 +6433,12 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     );
     assert_eq!(styled["footerText"], "Northstar Games LLC");
     assert_eq!(styled["poweredBy"], false);
+    assert_eq!(styled["showName"], false);
+    assert_eq!(styled["headerTitle"], "Northstar");
+    assert_eq!(styled["logoAlign"], "center");
+    assert_eq!(styled["logoSize"], "large");
+    assert_eq!(styled["announcementIcon"], "wrench");
+    assert_eq!(styled["announcementTone"], "warning");
     assert_eq!(styled["logoVersion"], Value::Null);
     let (_, public) = anonymous
         .request("GET", "public/status/northstar", json!(null))
@@ -6309,6 +6449,12 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert_eq!(public["links"][0]["label"], "Website");
     assert_eq!(public["footerText"], "Northstar Games LLC");
     assert_eq!(public["poweredBy"], false);
+    assert_eq!(public["showName"], false);
+    assert_eq!(public["headerTitle"], "Northstar");
+    assert_eq!(public["logoAlign"], "center");
+    assert_eq!(public["logoSize"], "large");
+    assert_eq!(public["announcementIcon"], "wrench");
+    assert_eq!(public["announcementTone"], "warning");
     assert_eq!(public["logoVersion"], Value::Null);
 
     // Logos are re-encoded, private to the tenant, and public only while published.
@@ -6640,6 +6786,16 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             .unwrap()
     );
     responder.abort();
+    // The response time lands in the target's history with its result.
+    let measured: i32 = sqlx::query_scalar(
+        "SELECT latency_count FROM status_page_health_hours WHERE organization_id=$1 AND component_id=$2",
+    )
+    .bind(&org)
+    .bind(&website_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(measured, 1);
     let (_, checked) = owner.request("GET", "status-page", json!(null)).await;
     assert_eq!(checked["components"][0]["health"], "operational");
     assert!(
@@ -6747,8 +6903,173 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
     assert!(!public.to_string().contains("Hidden only"));
 }
 
+#[tokio::test]
+async fn status_history_is_sampled_public_only_and_restarts_when_a_target_changes() {
+    let pool = connect(&std::env::var("CUPBOARD_TEST_DATABASE_URL").unwrap())
+        .await
+        .unwrap();
+    let app = status_page_app(&pool).await;
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let mut owner = Client::new(&app);
+    let mut other = Client::new(&app);
+    let mut anonymous = Client::new(&app);
+    owner
+        .signup(&format!("status-history-{suffix}@example.com"))
+        .await;
+    owner.create_organization().await;
+    other
+        .signup(&format!("status-history-other-{suffix}@example.com"))
+        .await;
+    other.create_organization().await;
+    let target = |id: Option<&str>, url: &str, public: bool| json!({"id":id,"name":"Website","kind":"url","sourceId":url,"tagId":"","public":public});
+    let slug = format!("history-{}", &suffix[..8]);
+    let other_slug = format!("history-other-{}", &suffix[..8]);
+    let (status, page) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(
+                json!(0),
+                &slug,
+                true,
+                json!([
+                    target(None, "https://a.example.com/", true),
+                    target(None, "https://b.example.com/", false)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let shown = page["components"][0]["id"].as_str().unwrap().to_owned();
+    let hidden = page["components"][1]["id"].as_str().unwrap().to_owned();
+    let (status, foreign) = other
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(
+                json!(0),
+                &other_slug,
+                true,
+                json!([target(None, "https://a.example.com/", true)]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{foreign}");
+
+    // A down probe is sampled into this hour and opens an incident.
+    let owner_org = owner.organization.clone();
+    let probe = |result: &'static str| {
+        let pool = pool.clone();
+        let org = owner_org.clone();
+        async move {
+            sqlx::query("UPDATE status_page_url_checks SET checked_at=$2,result=$3,status_code=503,latency_ms=40 WHERE organization_id=$1")
+                .bind(&org)
+                .bind(time::OffsetDateTime::now_utc().unix_timestamp() * 1000)
+                .bind(result)
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE status_pages SET sampled_at=0 WHERE organization_id=$1")
+                .bind(&org)
+                .execute(&pool)
+                .await
+                .unwrap();
+            while crate::status_page::sample_due(&pool).await.unwrap() {}
+        }
+    };
+    probe("down").await;
+    let history_path =
+        |slug: &str, id: &str| format!("public/status/{slug}/components/{id}/history");
+    let (status, history) = anonymous
+        .request("GET", &history_path(&slug, &shown), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history["hours"].as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history["hours"][0]["down"], 1);
+    assert_eq!(history["days"][0]["down"], 1);
+    assert_eq!(history["incidents"][0]["worst"], "down");
+    assert_eq!(history["incidents"][0]["endedAt"], Value::Null);
+
+    // Recovery closes the incident.
+    probe("up").await;
+    let (_, history) = anonymous
+        .request("GET", &history_path(&slug, &shown), json!(null))
+        .await;
+    assert_eq!(history["hours"][0]["operational"], 1, "{history}");
+    assert_eq!(history["hours"][0]["down"], 1);
+    assert!(history["incidents"][0]["endedAt"].is_i64(), "{history}");
+
+    // Hidden targets, other pages' targets, and unknown ids have no public history.
+    for (page_slug, id) in [
+        (slug.as_str(), hidden.as_str()),
+        (other_slug.as_str(), shown.as_str()),
+        (
+            slug.as_str(),
+            foreign["components"][0]["id"].as_str().unwrap(),
+        ),
+        (slug.as_str(), "not-a-target"),
+    ] {
+        let (status, body) = anonymous
+            .request("GET", &history_path(page_slug, id), json!(null))
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{page_slug} {id} {body}");
+        assert!(!body.to_string().contains("operational"));
+    }
+
+    // Pointing the target at another address starts its history over; the
+    // hidden target keeps its own.
+    let (status, edited) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(
+                json!(1),
+                &slug,
+                true,
+                json!([
+                    target(Some(&shown), "https://c.example.com/", true),
+                    target(Some(&hidden), "https://b.example.com/", true)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    let (_, history) = anonymous
+        .request("GET", &history_path(&slug, &shown), json!(null))
+        .await;
+    assert_eq!(history["hours"], json!([]), "{history}");
+    assert_eq!(history["incidents"], json!([]));
+    let (status, kept) = anonymous
+        .request("GET", &history_path(&slug, &hidden), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["hours"][0]["operational"], 1, "{kept}");
+
+    // Unpublishing hides the history with the page.
+    let (status, unpublished) = owner
+        .request(
+            "POST",
+            "status-page",
+            status_page_save(
+                json!(2),
+                &slug,
+                false,
+                json!([
+                    target(Some(&shown), "https://c.example.com/", true),
+                    target(Some(&hidden), "https://b.example.com/", true)
+                ]),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{unpublished}");
+    let (status, _) = anonymous
+        .request("GET", &history_path(&slug, &hidden), json!(null))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
 fn status_page_save(revision: Value, slug: &str, published: bool, components: Value) -> Value {
-    json!({"revision":revision,"name":"Northstar status","slug":slug,"published":published,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"components":components})
+    json!({"revision":revision,"name":"Northstar status","slug":slug,"published":published,"announcement":"","supportUrl":"","theme":"dark","accentColor":"#7cb58d","font":"geist","links":[],"footerText":"","poweredBy":true,"showName":true,"headerTitle":"","logoAlign":"left","logoSize":"medium","announcementIcon":"megaphone","announcementTone":"neutral","components":components})
 }
 
 async fn status_page_app(pool: &sqlx::PgPool) -> Router {

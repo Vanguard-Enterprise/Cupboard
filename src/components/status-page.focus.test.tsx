@@ -14,7 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StatusPageAdmin } from "./status-page";
 import { apiRequest } from "@/lib/api-client";
-import { atText, type StatusPageState } from "@/lib/status-page";
+import type { StatusPageState } from "@/lib/status-page";
 import { toast } from "sonner";
 
 vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
@@ -108,15 +108,11 @@ describe("Status page admin errors and focus", () => {
     expect(toast.error).not.toHaveBeenCalled();
     await user.keyboard("{Escape}");
 
-    await user.click(
-      screen.getByRole("button", { name: "Post an announcement" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Post announcement" }));
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Announcement"), "Wipe.");
     vi.mocked(apiRequest).mockRejectedValueOnce(unavailable);
-    await user.click(
-      within(dialog).getByRole("button", { name: "Post announcement" }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: "Post" }));
     expect((await within(dialog).findByRole("alert")).textContent).toContain(
       "Cupboard is unavailable.",
     );
@@ -154,7 +150,7 @@ describe("Status page admin errors and focus", () => {
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     const footer = screen.getByLabelText("Footer text");
     await user.type(footer, "Northstar");
-    const save = screen.getByRole("button", { name: "Save changes" });
+    const save = screen.getByRole("button", { name: "Save" });
     save.focus();
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...live,
@@ -510,7 +506,7 @@ describe("Status page admin, every action reachable", () => {
       within(card).getByRole("button", { name: /Past windows/ }),
     ).toBeTruthy();
     await user.click(button);
-    await screen.findByRole("dialog", { name: "Schedule maintenance" });
+    await screen.findByRole("dialog", { name: "Create Scheduled Maintenance" });
     await user.keyboard("{Escape}");
     await waitFor(() => expect(document.activeElement).toBe(button));
     cleanup();
@@ -525,20 +521,22 @@ describe("Status page admin, every action reachable", () => {
       name: "Schedule maintenance",
     });
     await user.click(action);
-    await screen.findByRole("dialog", { name: "Schedule maintenance" });
+    await screen.findByRole("dialog", { name: "Create Scheduled Maintenance" });
     await user.keyboard("{Escape}");
     await waitFor(() => expect(document.activeElement).toBe(action));
   });
 
-  it("previews only in the editors, on phones and private pages too", async () => {
+  it("previews only on Settings, on phones and private pages too", async () => {
     phone();
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValue({ ...live, published: false });
     mount();
     await ready();
-    // Nothing is being edited on Overview.
+    // Preview sits with the branding edits: not on Overview or Targets.
     expect(screen.queryByRole("button", { name: /Preview/ })).toBeNull();
-    for (const tab of ["Targets", "Settings"]) {
+    await user.click(screen.getByRole("tab", { name: "Targets" }));
+    expect(screen.queryByRole("button", { name: /Preview/ })).toBeNull();
+    for (const tab of ["Settings"]) {
       await user.click(screen.getByRole("tab", { name: tab }));
       const open = screen.getByRole("button", { name: "Preview" });
       await user.click(open);
@@ -571,17 +569,14 @@ describe("Status page admin, true status", () => {
     const status = screen.getByRole("region", {
       name: "1 target needs attention",
     });
-    const attention = within(status).getByRole("list", {
-      name: "Needs attention",
-    });
-    expect(within(attention).getByText("Wings host")).toBeTruthy();
-    expect(within(attention).getByText("Hidden")).toBeTruthy();
-    expect(within(attention).getByText("Unavailable")).toBeTruthy();
-    // The count says the hidden ones in words.
-    expect(status.textContent).toContain("2 targets, 1 hidden");
-    expect(
-      within(status).getByRole("button", { name: "Manage targets" }),
-    ).toBeTruthy();
+    const wings = within(status).getByText("Wings host").closest("li")!;
+    expect(wings.textContent).toContain("Hidden");
+    expect(wings.textContent).toContain("Unavailable");
+    // Like the public page: every row in view, nothing to expand, and no
+    // summary line or Manage targets under the headline.
+    expect(within(status).getByText("EU main")).toBeTruthy();
+    expect(within(status).queryAllByRole("button")).toHaveLength(0);
+    expect(status.textContent).not.toMatch(/2 targets|Updated/);
   });
 
   it("never lets maintenance hide a target that is down", async () => {
@@ -598,10 +593,7 @@ describe("Status page admin, true status", () => {
     const status = screen.getByRole("region", {
       name: "2 targets need attention",
     });
-    const attention = within(status).getByRole("list", {
-      name: "Needs attention",
-    });
-    const eu = within(attention).getByText("EU main").closest("li")!;
+    const eu = within(status).getByText("EU main").closest("li")!;
     expect(eu.textContent).toContain("Unavailable");
     expect(eu.textContent).toContain("Maintenance");
     expect(eu.textContent).toContain("Query timed out");
@@ -619,7 +611,7 @@ describe("Status page admin, true status", () => {
     mount();
     await ready();
     expect(
-      screen.getByRole("region", { name: "All 2 targets operational" }),
+      screen.getByRole("region", { name: "Systems Operational" }),
     ).toBeTruthy();
   });
 
@@ -996,7 +988,7 @@ describe("Status page admin, round 12", () => {
     expect(popover.textContent).toContain("see a not-found page");
   });
 
-  it("names a window in progress under a healthy headline", async () => {
+  it("marks a target in a running window under a healthy headline", async () => {
     vi.mocked(apiRequest).mockResolvedValue({
       ...live,
       components: live.components.map((c) => ({
@@ -1007,16 +999,16 @@ describe("Status page admin, round 12", () => {
     mount();
     await ready();
     const status = screen.getByRole("region", {
-      name: "All 2 targets operational",
+      name: "Systems Operational",
     });
-    expect(status.textContent).toContain(
-      `Maintenance until ${atText(live.maintenance[0].endsAt, Date.now())}.`,
-    );
-    cleanup();
-    vi.mocked(apiRequest).mockResolvedValue({ ...live, maintenance: [] });
-    mount();
-    await ready();
-    expect(screen.queryByText(/Maintenance until/)).toBeNull();
+    // The window itself leads the page in the Maintenance card.
+    const eu = within(status).getByText("EU main").closest("li")!;
+    expect(eu.textContent).toContain("Maintenance");
+    expect(
+      within(screen.getByRole("region", { name: /^Maintenance/ })).getByText(
+        "In progress",
+      ),
+    ).toBeTruthy();
   });
 
   it("puts the check interval right after the Address label", async () => {
@@ -1180,23 +1172,31 @@ describe("Status page admin, round 13", () => {
     expect([...empty.children]).toEqual([icon, message, button]);
   });
 
-  it("keeps the maintenance line under a healthy headline short", async () => {
-    vi.mocked(apiRequest).mockResolvedValue({
-      ...live,
-      components: live.components.map((c) => ({
-        ...c,
-        health: "operational" as const,
-      })),
-    });
+  it("leads the Overview with Maintenance and the Announcement", async () => {
+    vi.mocked(apiRequest).mockResolvedValue(live);
     mount();
     await ready();
-    const status = screen.getByRole("region", {
-      name: "All 2 targets operational",
-    });
-    expect(status.textContent).toContain(
-      `Maintenance until ${atText(live.maintenance[0].endsAt, Date.now())}.`,
-    );
-    expect(status.textContent).not.toContain("in progress");
+    const order = screen
+      .getAllByRole("region")
+      .map((region) => region.getAttribute("aria-labelledby"))
+      .filter((id) =>
+        [
+          "maintenance-heading",
+          "announcement-heading",
+          "health-heading",
+        ].includes(id ?? ""),
+      );
+    expect(order).toEqual([
+      "maintenance-heading",
+      "announcement-heading",
+      "health-heading",
+    ]);
+    // A long schedule scrolls inside its card.
+    const maintenance = screen.getByRole("region", { name: /^Maintenance/ });
+    expect(
+      within(maintenance).getByRole("group", { name: "Maintenance windows" })
+        .className,
+    ).toContain("overflow-y-auto");
   });
   it("keeps the grip tooltip inside the main landmark", async () => {
     vi.mocked(apiRequest).mockResolvedValue(grouped);

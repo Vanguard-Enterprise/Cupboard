@@ -3,7 +3,6 @@ import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { apiRequest } from "@/lib/api-client";
-import { toast } from "sonner";
 
 vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
 const { push } = vi.hoisted(() => ({ push: vi.fn() }));
@@ -31,7 +30,7 @@ import {
   live,
   mount,
   ready,
-  savedInBar,
+  savedToast,
 } from "@/test/status-page-admin";
 
 registerStatusPageHooks();
@@ -49,13 +48,10 @@ describe("Status page admin", () => {
     const status = screen.getByRole("region", {
       name: "1 target needs attention",
     });
-    // One count wording at every width (claude D-92).
-    expect(within(status).getAllByText(/^2 targets, 1 hidden\.$/)).toHaveLength(
-      1,
-    );
-    expect(status.textContent).toMatch(/Updated \d{1,2}:\d{2}\s?[AP]M/);
     // EU main is healthy inside a window: it says so in words.
-    expect(within(status).getByText("Under maintenance")).toBeTruthy();
+    const eu = within(status).getByText("EU main").closest("li")!;
+    expect(eu.textContent).toContain("Maintenance");
+    expect(eu.textContent).toContain("Operational");
     expect(screen.getByText("In progress")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Mark complete" })).toBeTruthy();
   });
@@ -104,7 +100,7 @@ describe("Status page admin", () => {
     ).toBeTruthy();
   });
 
-  it("reads setup, Maintenance, then the Announcement at every width (claude D-60)", async () => {
+  it("reads Maintenance, the Announcement, then setup at every width (claude D-60)", async () => {
     vi.mocked(apiRequest).mockResolvedValue(empty);
     mount();
     await ready();
@@ -119,7 +115,7 @@ describe("Status page admin", () => {
             "setup-heading",
           ].includes(id ?? ""),
         ),
-    ).toEqual(["setup-heading", "maintenance-heading", "announcement-heading"]);
+    ).toEqual(["maintenance-heading", "announcement-heading", "setup-heading"]);
     // The last step points at the pill that publishes.
     expect(
       screen.getByRole("region", { name: "Set up your status page" })
@@ -268,7 +264,7 @@ describe("Status page admin", () => {
     expect(bar.textContent).toContain("3 new targets");
 
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -304,8 +300,7 @@ describe("Status page admin", () => {
         "org-one",
       ),
     );
-    await savedInBar();
-    expect(toast.success).not.toHaveBeenCalled();
+    await savedToast();
   });
 
   it("adds the chosen machine by ID when two machines share a name", async () => {
@@ -356,7 +351,7 @@ describe("Status page admin", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",

@@ -16,7 +16,6 @@ import {
   ArrowUpRightIcon,
   ChevronDownIcon,
   HistoryIcon,
-  MegaphoneIcon,
   RefreshCwIcon,
 } from "lucide-react";
 import { apiRequest } from "@/lib/api-client";
@@ -28,6 +27,7 @@ import {
   dayName,
   durationLabel,
   groupComponents,
+  headerTitleOf,
   maintenancePhase,
   nameList,
   onlineCount,
@@ -35,6 +35,7 @@ import {
   publicMaintenance,
   publicSummary,
   relativeTime,
+  secondsAgo,
   statusAnnouncement,
   statusLabel,
   statusSnapshot,
@@ -47,10 +48,22 @@ import {
   type MaintenanceWindow,
   type PublicStatus,
   type SummaryPart,
+  type TargetHistory,
+  type TimeFormat,
 } from "@/lib/status-page";
 import { cn } from "@/lib/utils";
 import { statusFontFamily } from "@/components/status-fonts";
-import { ToneIcon, toneClass, type Tone } from "@/components/status-indicators";
+import {
+  AnnouncementGlyph,
+  ToneIcon,
+  announcementToneOptions,
+  metaSize,
+  metaText,
+  statusFocus,
+  toneClass,
+  type Tone,
+} from "@/components/status-indicators";
+import { TargetHistoryPanel } from "@/components/status-history";
 
 const REFRESH_MS = 60_000;
 /** Refresh on return to the tab when the last attempt is older than this. */
@@ -67,15 +80,14 @@ const CHANGE_CUE_MS = 5_000;
  */
 const LONG_MESSAGE = 120;
 
-/**
- * Focus never follows the brand accent: a near-white or near-black accent
- * would hide it. The page's own text color always contrasts with its
- * background, in both themes.
- */
-export const statusFocus =
-  "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-foreground";
-
 const touchTarget = "[@media(any-pointer:coarse)]:min-h-11";
+
+/** The logo's size when it stands in for the title, at phone and wider widths. */
+const logoTitleSize: Record<string, string> = {
+  small: "h-10 max-w-40 @min-[40rem]:h-12 @min-[40rem]:max-w-48",
+  medium: "h-12 max-w-48 @min-[40rem]:h-14 @min-[40rem]:max-w-64",
+  large: "h-16 max-w-64 @min-[40rem]:h-24 @min-[40rem]:max-w-96",
+};
 
 const severity: ComponentStatus[] = [
   "down",
@@ -94,28 +106,14 @@ const problemChip: Partial<Record<Tone, string>> = {
   down: "border-destructive/50 text-destructive",
   degraded: "border-warning/50 text-warning",
 };
-/** Lines players act on (times, plans, reading ages, labels) are 13 pixels. */
-const metaSize = "text-[0.8125rem] leading-5";
-const metaText = cn(metaSize, "text-muted-foreground");
+
 /** Section headings: one size for every list on the page. */
 const sectionHeading = "text-[0.9375rem] leading-6 font-semibold";
 /**
- * Glyphs that lead a block (the hero's state, the announcement's megaphone)
- * hang in the left margin once the page is wide enough, so the title, the
- * announcement, and the lists share one left edge. Below that the block's
- * text is indented by `--hang` and the glyph sits in the indent at the
- * column edge, so a wrapped line lines up with the first, never under the
- * glyph. `--hang` follows the hero's type size.
+ * The hero's state glyph sits inline before the title, centered on its first
+ * line; a wrapped line lines up with the title's text, never under the glyph.
  */
-const hangWidth =
-  "[--hang:2rem] @min-[30rem]:[--hang:2.25rem] @min-[40rem]:[--hang:2.75rem] @min-[48rem]:[--hang:3rem] @min-[50rem]:[--hang:0rem]";
-const hanging =
-  "absolute left-[calc(var(--hang)*-1)] @min-[50rem]:left-auto @min-[50rem]:right-full @min-[50rem]:mr-4";
-/** The hero's state glyph: centered on the title's first line. */
-const heroGlyph = cn(
-  "top-[0.16em] size-[0.8em] @min-[50rem]:size-[0.75em]",
-  hanging,
-);
+const heroGlyph = "mt-[0.16em] size-[0.8em] shrink-0";
 
 const subscribeNothing = () => () => {};
 
@@ -227,6 +225,14 @@ export function PublicStatusPage({
     setRetrying(false);
   }
 
+  const loadHistory = useCallback(
+    (component: string) =>
+      apiRequest<TargetHistory>(
+        `public/status/${slug}/components/${component}/history`,
+      ),
+    [slug],
+  );
+
   return (
     <PublicStatusView
       data={data}
@@ -240,6 +246,7 @@ export function PublicStatusPage({
       onRetry={retry}
       retrying={retrying}
       liveMessage={liveMessage}
+      loadHistory={loadHistory}
     />
   );
 }
@@ -259,6 +266,7 @@ export function PublicStatusView({
   onRetry,
   retrying = false,
   liveMessage = "",
+  loadHistory,
 }: {
   data: PublicStatus;
   logoUrl: string | null;
@@ -268,6 +276,8 @@ export function PublicStatusView({
   onRetry?: () => void;
   retrying?: boolean;
   liveMessage?: string;
+  /** Opens a target's history under its row; without it rows are static. */
+  loadHistory?: (component: string) => Promise<TargetHistory>;
 }) {
   const id = useId();
   const accent = validColor(data.accentColor) ? data.accentColor : "#7cb58d";
@@ -276,6 +286,8 @@ export function PublicStatusView({
   // lighter shade of the accent, per scheme (System pages can get either).
   const edges = accentEdges(accent, data.theme);
   const components = data.components;
+  /** The top bar's title: the operator's own, or the page name. */
+  const headerTitle = headerTitleOf(data);
   const maintenance = publicMaintenance(
     data.maintenance,
     components.map((c) => c.id),
@@ -391,6 +403,90 @@ export function PublicStatusView({
     </ScheduleList>
   );
 
+  /**
+   * Where the logo and title sit. Left keeps links and support at the right
+   * edge; right mirrors that; center puts them under the title on phones and
+   * at the right edge on wider pages.
+   */
+  const align = data.logoAlign ?? "left";
+  const headerLayout = {
+    left: "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 @min-[40rem]:flex @min-[40rem]:justify-between",
+    right:
+      "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-3 @min-[40rem]:flex @min-[40rem]:flex-row-reverse @min-[40rem]:justify-between",
+    center:
+      "flex flex-col items-center gap-3 text-center @min-[40rem]:grid @min-[40rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @min-[40rem]:items-center @min-[40rem]:text-left",
+  }[align];
+  const brandPlace = {
+    left: "",
+    right: "col-start-2 row-start-1 justify-self-end",
+    center: "justify-center @min-[40rem]:col-start-2",
+  }[align];
+  const navPlace = {
+    left: "col-span-2 row-start-2 -mx-2 @min-[40rem]:mx-0 @min-[40rem]:ml-auto",
+    right:
+      "col-span-2 row-start-2 -mx-2 justify-end @min-[40rem]:mx-0 @min-[40rem]:mr-auto",
+    center: "justify-center",
+  }[align];
+  const supportPlace = {
+    left: "col-start-2 row-start-1",
+    right: "col-start-1 row-start-1",
+    center: "",
+  }[align];
+  const navLinks = data.links.length > 0 && (
+    <Nav
+      aria-label={embedded ? undefined : `${data.name} links`}
+      className={cn("flex flex-wrap items-center", navPlace)}
+    >
+      {data.links.map((link) => (
+        <a
+          key={`${link.label}:${link.url}`}
+          href={link.url}
+          target="_blank"
+          rel="noreferrer"
+          aria-describedby={`${id}-new-tab`}
+          className={cn(
+            "inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-sm font-medium text-muted-foreground underline-offset-4 transition-[color] hover:text-foreground hover:underline",
+            touchTarget,
+            statusFocus,
+          )}
+        >
+          {link.label}
+          <ArrowUpRightIcon aria-hidden="true" className="size-3.5" />
+        </a>
+      ))}
+    </Nav>
+  );
+  const supportLink = data.supportUrl && (
+    <a
+      href={data.supportUrl}
+      target="_blank"
+      rel="noreferrer"
+      aria-label="Contact support"
+      aria-describedby={`${id}-new-tab`}
+      className={cn(
+        supportPlace,
+        "inline-flex h-9 shrink-0 items-center rounded-lg px-3.5 text-sm font-medium transition-[filter] hover:brightness-110",
+        touchTarget,
+        statusFocus,
+      )}
+      style={
+        {
+          background: accent,
+          color: accentText,
+          ...((edges.light || edges.dark) && {
+            "--accent-edge-light": edges.light ?? "transparent",
+            "--accent-edge-dark": edges.dark ?? "transparent",
+            boxShadow:
+              "inset 0 0 0 1px light-dark(var(--accent-edge-light), var(--accent-edge-dark))",
+          }),
+        } as CSSProperties
+      }
+    >
+      <span className="@min-[40rem]:hidden">Support</span>
+      <span className="hidden @min-[40rem]:inline">Contact support</span>
+    </a>
+  );
+
   return (
     <div
       data-status-page={embedded ? undefined : ""}
@@ -421,95 +517,71 @@ export function PublicStatusView({
       <Header
         className={cn(
           column,
-          "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 @min-[40rem]:flex @min-[40rem]:justify-between",
+          headerLayout,
           embedded ? "pt-5" : "pt-5 @min-[48rem]:pt-8",
         )}
       >
-        <div className="flex min-w-0 items-center gap-3">
-          {logoUrl ? (
-            // Logos are re-encoded PNGs served by Cupboard, not remote images.
-            // eslint-disable-next-line @next/next/no-img-element
+        {logoUrl && !data.showName ? (
+          // The logo is the title: its alt text names the page.
+          <H1 className={cn("min-w-0", brandPlace)}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={logoUrl}
-              alt=""
-              className="h-9 w-auto max-w-32 shrink-0 object-contain @min-[40rem]:max-w-40"
+              alt={headerTitle}
+              className={cn(
+                "w-auto object-contain",
+                logoTitleSize[data.logoSize] ?? logoTitleSize.medium,
+              )}
             />
-          ) : (
-            <span
-              aria-hidden="true"
-              className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold"
-              style={{ background: accent, color: accentText }}
-            >
-              {data.name.trim().charAt(0).toUpperCase()}
-            </span>
-          )}
-          <H1 className="min-w-0 text-base leading-tight font-semibold tracking-tight break-words @min-[40rem]:text-lg">
-            {data.name}
           </H1>
-        </div>
-        {data.links.length > 0 && (
-          <Nav
-            aria-label={embedded ? undefined : `${data.name} links`}
-            className="col-span-2 row-start-2 -mx-2 flex flex-wrap items-center @min-[40rem]:mx-0 @min-[40rem]:ml-auto"
-          >
-            {data.links.map((link) => (
-              <a
-                key={`${link.label}:${link.url}`}
-                href={link.url}
-                target="_blank"
-                rel="noreferrer"
-                aria-describedby={`${id}-new-tab`}
-                className={cn(
-                  "inline-flex min-h-8 items-center gap-1 rounded-md px-2 text-sm font-medium text-muted-foreground underline-offset-4 transition-[color] hover:text-foreground hover:underline",
-                  touchTarget,
-                  statusFocus,
-                )}
+        ) : (
+          <div className={cn("flex min-w-0 items-center gap-3", brandPlace)}>
+            {logoUrl ? (
+              // Logos are re-encoded PNGs served by Cupboard, not remote images.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={logoUrl}
+                alt=""
+                className="h-9 w-auto max-w-32 shrink-0 object-contain @min-[40rem]:max-w-40"
+              />
+            ) : (
+              <span
+                aria-hidden="true"
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold"
+                style={{ background: accent, color: accentText }}
               >
-                {link.label}
-                <ArrowUpRightIcon aria-hidden="true" className="size-3.5" />
-              </a>
-            ))}
-          </Nav>
-        )}
-        {data.supportUrl && (
-          <a
-            href={data.supportUrl}
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Contact support"
-            aria-describedby={`${id}-new-tab`}
-            className={cn(
-              "col-start-2 row-start-1 inline-flex h-9 shrink-0 items-center rounded-lg px-3.5 text-sm font-medium transition-[filter] hover:brightness-110",
-              touchTarget,
-              statusFocus,
+                {headerTitle.trim().charAt(0).toUpperCase()}
+              </span>
             )}
-            style={
-              {
-                background: accent,
-                color: accentText,
-                ...((edges.light || edges.dark) && {
-                  "--accent-edge-light": edges.light ?? "transparent",
-                  "--accent-edge-dark": edges.dark ?? "transparent",
-                  boxShadow:
-                    "inset 0 0 0 1px light-dark(var(--accent-edge-light), var(--accent-edge-dark))",
-                }),
-              } as CSSProperties
-            }
-          >
-            <span className="@min-[40rem]:hidden">Support</span>
-            <span className="hidden @min-[40rem]:inline">Contact support</span>
-          </a>
+            <H1 className="min-w-0 text-base leading-tight font-semibold tracking-tight break-words @min-[40rem]:text-lg">
+              {headerTitle}
+            </H1>
+          </div>
+        )}
+        {align === "center" ? (
+          // Centered, links and support share a row under the title on
+          // phones and sit at the right edge on wider pages.
+          (data.links.length > 0 || data.supportUrl) && (
+            <div className="flex flex-wrap items-center justify-center gap-2 @min-[40rem]:col-start-3 @min-[40rem]:justify-end">
+              {navLinks}
+              {supportLink}
+            </div>
+          )
+        ) : (
+          <>
+            {navLinks}
+            {supportLink}
+          </>
         )}
       </Header>
 
       <Main
         className={cn(
           column,
-          hangWidth,
           "flex-1",
           embedded
             ? "pt-8 pb-10"
-            : "pt-12 pb-16 @min-[48rem]:pt-20 @min-[48rem]:pb-24",
+            : "pt-8 pb-16 @min-[48rem]:pt-12 @min-[48rem]:pb-24",
         )}
       >
         {!embedded && (
@@ -539,8 +611,8 @@ export function PublicStatusView({
             {stale ? (
               <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
                 <p className={metaText}>
-                  Updated <Time at={data.updatedAt} text={updatedText} />{" "}
-                  <Relative>{timeAgo(data.updatedAt, now)}</Relative>
+                  Updated{" "}
+                  <Ago at={data.updatedAt} now={now} title={updatedText} />
                 </p>
                 {onRetry && (
                   <button
@@ -569,6 +641,7 @@ export function PublicStatusView({
               total > 0 && (
                 <UpdatedLine
                   at={data.updatedAt}
+                  now={now}
                   text={updatedText}
                   answered={!!summary.answer}
                 />
@@ -582,15 +655,20 @@ export function PublicStatusView({
           <div
             role="note"
             aria-label={embedded ? undefined : "Announcement"}
-            className="relative mt-10 pl-(--hang)"
+            className={cn(
+              "mt-8 flex gap-3",
+              // A colored announcement sits in a tinted panel of its color.
+              announcementToneOptions[data.announcementTone]?.panel &&
+                cn(
+                  "rounded-lg border px-4 py-3",
+                  announcementToneOptions[data.announcementTone].panel,
+                ),
+            )}
           >
-            <MegaphoneIcon
-              aria-hidden="true"
-              className={cn(
-                "top-1 size-4 text-muted-foreground",
-                hanging,
-                "left-0",
-              )}
+            <AnnouncementGlyph
+              icon={data.announcementIcon}
+              tone={data.announcementTone}
+              className="mt-1 size-4 shrink-0"
             />
             {/* Free text from the operator: its times are theirs, not
                 converted to the visitor's zone like the rest of the page. */}
@@ -615,7 +693,7 @@ export function PublicStatusView({
         {total > 0 && (
           <section
             aria-labelledby={embedded ? undefined : `${id}-services`}
-            className="group/services mt-12 @min-[48rem]:mt-14"
+            className="group/services mt-10"
           >
             <div className="flex items-baseline justify-between gap-3">
               <H2 id={`${id}-services`} className={sectionHeading}>
@@ -628,7 +706,7 @@ export function PublicStatusView({
                 data-testid="services-count"
                 className={cn(
                   metaText,
-                  "hidden text-right tabular-nums group-has-[button[aria-expanded=false]]/services:block",
+                  "hidden text-right tabular-nums group-has-[button[data-group-toggle][aria-expanded=false]]/services:block",
                 )}
               >
                 {stale && (
@@ -662,6 +740,10 @@ export function PublicStatusView({
                         name={component.name}
                         status={status}
                         stale={stale}
+                        format={format}
+                        loadHistory={
+                          loadHistory && (() => loadHistory(component.id))
+                        }
                         detail={
                           // The hero or the maintenance list names the end.
                           status ===
@@ -866,8 +948,7 @@ function dayText(parts: Parts, today: string) {
 /**
  * The hero's statement: the state glyph, the headline, the one line players
  * act on, then `children` (the Updated line). Place it inside an
- * `@container` that sets `--hang` (`hangWidth`); its type follows that
- * container's width.
+ * `@container`; its type follows that container's width.
  */
 function HeroStatement({
   heading: Heading = "h2",
@@ -894,11 +975,11 @@ function HeroStatement({
   children?: ReactNode;
 }) {
   return (
-    <div className="pl-(--hang)">
+    <div>
       <Heading
         key={titleKey}
         className={cn(
-          "relative text-2xl leading-[1.12] font-semibold tracking-[-0.025em] text-balance break-words @min-[30rem]:text-3xl @min-[40rem]:text-4xl @min-[48rem]:text-4xl @min-[48rem]:leading-[1.06]",
+          "flex gap-3 text-2xl @min-[40rem]:gap-4 leading-[1.12] font-semibold tracking-[-0.025em] text-balance break-words @min-[30rem]:text-3xl @min-[40rem]:text-4xl @min-[48rem]:text-4xl @min-[48rem]:leading-[1.06]",
           // A new headline settles in; the first paint never moves.
           !!titleKey &&
             "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-300",
@@ -908,7 +989,7 @@ function HeroStatement({
         {glyph ?? (
           <ToneIcon tone={tone} className={cn(heroGlyph, toneClass[tone])} />
         )}
-        {title}
+        <span className="min-w-0">{title}</span>
       </Heading>
       {answer && (
         <p
@@ -933,20 +1014,44 @@ function HeroStatement({
   );
 }
 
-/** "Updated 4:04 PM UTC" under the hero's answer. */
+/** "Updated 5 seconds ago" under the hero's answer. */
 function UpdatedLine({
   at,
+  now,
   text,
   answered,
 }: {
   at: number;
+  now: number;
   text: string;
   answered: boolean;
 }) {
   return (
     <p className={cn(answered ? "mt-2" : "mt-4", metaText)}>
-      Updated <Time at={at} text={text} />
+      Updated <Ago at={at} now={now} title={text} />
     </p>
+  );
+}
+
+/**
+ * How long ago `at` was, counting seconds. It renders from `now` first, so
+ * server HTML and hydration agree, then ticks every second on its own. The
+ * clock time stays on hover.
+ */
+function Ago({ at, now, title }: { at: number; now: number; title: string }) {
+  const [clock, setClock] = useState(now);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <time
+      dateTime={new Date(at).toISOString()}
+      title={title}
+      className="whitespace-nowrap tabular-nums"
+    >
+      {secondsAgo(at, Math.max(now, clock))}
+    </time>
   );
 }
 
@@ -1245,7 +1350,9 @@ function ScheduleRow({
  * A coming window is for screen readers here: the Upcoming maintenance list
  * names every service it affects. When the state changes after a refresh,
  * the row flashes its new color once; with reduced motion it holds a still
- * tint of that color for a few seconds instead (a11y P-R6-03).
+ * tint of that color for a few seconds instead (a11y P-R6-03). With
+ * `loadHistory`, the whole row opens the target's uptime, response times,
+ * and incidents below it.
  */
 function TargetRow({
   name,
@@ -1253,13 +1360,23 @@ function TargetRow({
   stale,
   detail,
   upcoming,
+  format,
+  loadHistory,
 }: {
   name: string;
   status: ComponentStatus;
   stale: boolean;
   detail: ReactNode;
   upcoming: ReactNode;
+  format: TimeFormat;
+  loadHistory?: () => Promise<TargetHistory>;
 }) {
+  const panel = useId();
+  const [open, setOpen] = useState(false);
+  // One loader per opening, so the panel loads once and again on reopen.
+  const [loader, setLoader] = useState<(() => Promise<TargetHistory>) | null>(
+    null,
+  );
   const chip = problemChip[status];
   const tint = stale ? "text-muted-foreground" : toneClass[status];
   const changes = useChangeCount(status);
@@ -1270,26 +1387,37 @@ function TargetRow({
     const timer = window.setTimeout(() => setSettled(changes), CHANGE_CUE_MS);
     return () => window.clearTimeout(timer);
   }, [changes]);
-  return (
-    <li className="relative grid min-h-12 grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-4 py-3">
-      {changes > settled && !stale && (
-        <span
-          key={changes}
-          aria-hidden="true"
-          data-status-changed=""
-          className={cn(
-            "pointer-events-none absolute inset-0 animate-status-flash bg-current motion-reduce:animate-none motion-reduce:opacity-10",
-            toneClass[status],
-          )}
-        />
-      )}
+  const summary = (
+    <>
       <ToneIcon
         tone={status}
         className={cn("col-start-1 row-start-1 mt-0.5 size-4 shrink-0", tint)}
       />
       <p className="col-start-2 row-start-1 text-sm font-medium break-words">
-        {name}
-        <span className="sr-only">: </span>
+        {loadHistory ? (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={panel}
+            onClick={() => {
+              if (!open) setLoader(() => loadHistory);
+              setOpen(!open);
+            }}
+            className={cn(
+              // The button covers the row's summary, status label included,
+              // and its focus ring traces it.
+              "text-left outline-none after:absolute after:inset-0 after:content-[''] focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-solid focus-visible:after:outline-foreground",
+            )}
+          >
+            {name}
+            <span className="sr-only">: </span>
+          </button>
+        ) : (
+          <>
+            {name}
+            <span className="sr-only">: </span>
+          </>
+        )}
       </p>
       <span
         data-status-label=""
@@ -1305,6 +1433,15 @@ function TargetRow({
         {statusLabel[status]}
         <span className="sr-only">.</span>
       </span>
+      {loadHistory && (
+        <ChevronDownIcon
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none col-start-4 row-start-1 mt-0.5 size-4 text-muted-foreground transition-[rotate,color] duration-150 group-hover/target:text-foreground motion-reduce:transition-none",
+            open && "rotate-180",
+          )}
+        />
+      )}
       {detail && (
         <p className={cn("col-start-2 row-start-2", metaText)}>
           <span className="sr-only"> </span>
@@ -1312,6 +1449,41 @@ function TargetRow({
         </p>
       )}
       {upcoming && <span className="sr-only"> {upcoming}</span>}
+    </>
+  );
+  const flash = changes > settled && !stale && (
+    <span
+      key={changes}
+      aria-hidden="true"
+      data-status-changed=""
+      className={cn(
+        "pointer-events-none absolute inset-0 animate-status-flash bg-current motion-reduce:animate-none motion-reduce:opacity-10",
+        toneClass[status],
+      )}
+    />
+  );
+  const grid = "grid min-h-12 items-start gap-x-3 px-4 py-3";
+  if (!loadHistory)
+    return (
+      <li className={cn("relative grid-cols-[auto_minmax(0,1fr)_auto]", grid)}>
+        {flash}
+        {summary}
+      </li>
+    );
+  return (
+    <li className="relative">
+      {flash}
+      <div
+        className={cn(
+          "group/target relative grid-cols-[auto_minmax(0,1fr)_auto_auto] transition-[background-color] hover:bg-surface-elevated/60",
+          grid,
+        )}
+      >
+        {summary}
+      </div>
+      <div id={panel} hidden={!open} className="px-4 pb-4">
+        {open && loader && <TargetHistoryPanel load={loader} format={format} />}
+      </div>
     </li>
   );
 }
@@ -1364,6 +1536,7 @@ function TargetGroup({
           {collapsible ? (
             <button
               type="button"
+              data-group-toggle=""
               aria-expanded={expanded}
               aria-controls={panel}
               aria-describedby={showRollup ? rollup : undefined}

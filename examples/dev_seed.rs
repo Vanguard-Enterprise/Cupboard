@@ -27,7 +27,11 @@ async fn main() {
         let pool =
             cupboard::connect(&std::env::var("DATABASE_URL").map_err(|_| "Use npm run dev:seed.")?)
                 .await?;
-        let result = cupboard::dev_seed::seed(&pool, &account).await;
+        let key = std::env::var("CUPBOARD_SECRET_KEY")
+            .ok()
+            .map(|value| cupboard::secrets::SecretKey::parse(&value))
+            .transpose()?;
+        let result = cupboard::dev_seed::seed(&pool, &account, key.as_ref()).await;
         pool.close().await;
         result
     }
