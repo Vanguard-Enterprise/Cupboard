@@ -34,9 +34,10 @@ radii. A 4-pixel spacing grid, 24 pixels of page padding (16 on phones).
   inputs. Use `Select`, `Combobox`, `DatePicker`, or `TimeField`.
 - **Status.** Always pair color with a shape or text.
 - **Busy buttons.** Use `aria-disabled`, not `disabled`, so focus stays put.
-- **Toasts.** Only for events in the background. An action's result shows
-  where it happened. A dialog's error stays in the dialog, never only in a
-  toast.
+- **Toasts.** For events in the background, and to confirm a save bar's
+  Save (top center). Other results show where they happened. A dialog's
+  error stays in the dialog, never only in a toast. Every toast counts down
+  its 4 seconds and swipes away.
 - **Unsaved edits.** Register them with `useUnsavedChanges` and navigate with
   `useGuardedNavigation`, never a bare `router.push`.
 - **Phones.** Text inputs are 16 pixels below 768 wide so the page doesn't zoom

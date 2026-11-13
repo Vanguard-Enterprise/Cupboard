@@ -122,7 +122,7 @@ describe("Toaster", () => {
     expect(toaster.getAttribute("data-duration")).toBe("4000");
   });
 
-  it("moves to the bottom on phones, clear of a fixed bottom bar", () => {
+  it("moves to the bottom on phones, clear of the home indicator", () => {
     screenWidth(390);
     render(<Toaster />);
 
@@ -131,11 +131,8 @@ describe("Toaster", () => {
     expect(toaster.getAttribute("data-position")).toBe("bottom-center");
     for (const name of ["data-offset-bottom", "data-mobile-offset-bottom"])
       expect(toaster.getAttribute(name)).toContain(
-        "var(--cupboard-bottom-bar, 0px)",
+        "env(safe-area-inset-bottom",
       );
-    expect(toaster.getAttribute("data-mobile-offset-bottom")).toContain(
-      "env(safe-area-inset-bottom",
-    );
   });
 
   it("keeps a place the caller chooses", () => {
@@ -148,8 +145,7 @@ describe("Toaster", () => {
 
   // claude D-65, codex D-42: at 834 a top-right toast covered the breadcrumb;
   // dropped below the header it covered the title's Published pill (a11y D-78,
-  // claude D-84). Tablets put toasts at the bottom right, clear of both and
-  // of a bar pinned to the bottom of the content.
+  // claude D-84). Tablets put toasts at the bottom right, clear of both.
   it("sits at the bottom right on tablets, clear of the page header", () => {
     for (const [width, position] of [
       [834, "bottom-right"],
@@ -166,7 +162,7 @@ describe("Toaster", () => {
       );
       expect(toaster.getAttribute("data-offset-top")).toBe("24px");
       expect(toaster.getAttribute("data-offset-bottom")).toContain(
-        "var(--cupboard-bottom-bar, 0px)",
+        "env(safe-area-inset-bottom",
       );
       cleanup();
     }
@@ -314,16 +310,14 @@ describe("Toaster", () => {
     cleanup();
     document.body.innerHTML = "";
 
-    // Desktop: top right becomes bottom right, above a pinned bar.
+    // Desktop: top right becomes bottom right.
     screenSize(1440, 900);
-    document.documentElement.style.setProperty("--cupboard-bottom-bar", "80px");
     render(<Toaster />);
     const toggle = place("Desktop preview", rect(1244, 35, 134, 32));
     act(() => toggle.focus());
     const top = arriveAt(1028, 388, 54);
-    await waitFor(() => expect(top.getBoundingClientRect().top).toBe(742));
+    await waitFor(() => expect(top.getBoundingClientRect().top).toBe(822));
     expect(position()).toBe("top-right");
-    document.documentElement.style.removeProperty("--cupboard-bottom-bar");
   });
 
   it("stays home when the other end would hide the focused control too", async () => {

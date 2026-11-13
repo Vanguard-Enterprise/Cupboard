@@ -30,6 +30,7 @@ import {
   ChevronRightIcon,
 } from "lucide-react";
 import { type Identity } from "@/lib/api-client";
+import { SkeletonRows } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -1001,29 +1002,33 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                 }}
               >
                 {files === null ? (
-                  <p role="status" className="text-sm text-muted-foreground">
-                    {syncError
-                      ? "Files could not be loaded. Retrying automatically."
-                      : "Loading files..."}
-                  </p>
+                  syncError ? (
+                    <p role="status" className="text-sm text-muted-foreground">
+                      Files could not be loaded. Retrying automatically.
+                    </p>
+                  ) : (
+                    <SkeletonRows label="Loading files" rows={4} />
+                  )
                 ) : visible?.length === 0 ? (
                   <div className="flex min-h-64 flex-col items-center justify-center rounded-xl border border-dashed p-8 text-center">
                     <div className="mb-4 rounded-xl bg-muted/40 p-4">
                       <FileIcon className="size-8 text-muted-foreground" />
                     </div>
-                    <h2 className="font-medium">
-                      {query || type !== "all"
-                        ? "No matching files"
-                        : folder
-                          ? "This folder is empty"
-                          : "Your files, together"}
-                    </h2>
-                    <p className="mt-2 max-w-sm text-sm text-muted-foreground">
+                    {/* The empty library needs no title: the icon and
+                        its one line say it. */}
+                    {(query || type !== "all" || folder) && (
+                      <h2 className="mb-2 font-medium">
+                        {query || type !== "all"
+                          ? "No matching files"
+                          : "This folder is empty"}
+                      </h2>
+                    )}
+                    <p className="max-w-sm text-sm text-muted-foreground">
                       {query || type !== "all"
                         ? "Try another filename or clear your filters."
                         : "Upload configs, plugins, and other files to share with your organization managers."}
                     </p>
-                    {query || type !== "all" ? (
+                    {(query || type !== "all") && (
                       <Button
                         variant="outline"
                         className="mt-5"
@@ -1034,10 +1039,6 @@ export function FileLibrary({ identity }: { identity: Identity }) {
                       >
                         Clear filters
                       </Button>
-                    ) : (
-                      <p className="mt-4 text-xs text-muted-foreground">
-                        Use Upload file to get started. Up to 10 MiB per file.
-                      </p>
                     )}
                   </div>
                 ) : view === "list" ? (

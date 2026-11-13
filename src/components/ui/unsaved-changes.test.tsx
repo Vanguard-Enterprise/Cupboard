@@ -30,7 +30,7 @@ afterEach(() => {
   replace.mockReset();
 });
 
-function Editor({ dirty, changes }: { dirty: boolean; changes?: string }) {
+function Editor({ dirty, changes }: { dirty: boolean; changes?: string[] }) {
   useUnsavedChanges(dirty, { changes });
   return <input aria-label="Footer text" />;
 }
@@ -55,7 +55,7 @@ function Leaver({ onAction }: { onAction?: () => void }) {
 function renderGuarded(dirty: boolean, onAction?: () => void) {
   return render(
     <UnsavedChangesProvider>
-      <Editor dirty={dirty} changes="Footer text and logo." />
+      <Editor dirty={dirty} changes={["Footer text", "Logo"]} />
       <Leaver onAction={onAction} />
     </UnsavedChangesProvider>,
   );
@@ -72,7 +72,7 @@ describe("unsaved changes guard", () => {
     expect(prompt()).toBeNull();
   });
 
-  it("asks before programmatic navigation and stays on Keep editing", async () => {
+  it("asks before programmatic navigation and stays on Cancel", async () => {
     const user = userEvent.setup();
     renderGuarded(true);
     await user.click(screen.getByRole("button", { name: "Machines" }));
@@ -80,21 +80,23 @@ describe("unsaved changes guard", () => {
     expect(replace).not.toHaveBeenCalled();
     const dialog = prompt()!;
     expect(dialog.textContent).toContain("Leave without saving?");
-    expect(dialog.textContent).toContain("You have unsaved changes.");
-    expect(dialog.textContent).toContain("Footer text and logo.");
-    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    expect(dialog.textContent).toContain("Your changes:");
+    expect(
+      [...dialog.querySelectorAll("li")].map((item) => item.textContent),
+    ).toEqual(["Footer text", "Logo"]);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(prompt()).toBeNull();
     expect(push).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it("leaves after Discard and leave, replacing its own Back entry", async () => {
+  it("leaves after Confirm, replacing its own Back entry", async () => {
     const user = userEvent.setup();
     renderGuarded(true);
     // While dirty the page sits on an extra history entry for Back.
     expect(window.history.state?.cupboardUnsavedGuard).toBe(true);
     await user.click(screen.getByRole("button", { name: "Machines" }));
-    await user.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
     expect(replace).toHaveBeenCalledWith("/dashboard/machines");
     expect(push).not.toHaveBeenCalled();
   });
@@ -112,7 +114,7 @@ describe("unsaved changes guard", () => {
     expect(prompt()).not.toBeNull();
     // The link's own navigation never ran.
     expect(outside).toHaveBeenCalledTimes(2);
-    await user.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
     expect(replace).toHaveBeenCalledWith("/dashboard");
     document.removeEventListener("click", outside);
   });
@@ -123,11 +125,11 @@ describe("unsaved changes guard", () => {
     renderGuarded(true, action);
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(action).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Discard and leave" }));
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
     expect(action).toHaveBeenCalledTimes(1);
   });
 
-  it("asks on the browser's Back and restores the Back entry on Keep editing", async () => {
+  it("asks on the browser's Back and restores the Back entry on Cancel", async () => {
     const user = userEvent.setup();
     renderGuarded(true);
     // Back lands on the page's own entry (no guard flag).
@@ -136,7 +138,7 @@ describe("unsaved changes guard", () => {
       window.dispatchEvent(new PopStateEvent("popstate", { state: null }));
     });
     expect(prompt()).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(window.history.state?.cupboardUnsavedGuard).toBe(true);
   });
 
@@ -192,7 +194,7 @@ describe("unsaved changes guard", () => {
 });
 
 describe("unsaved changes guard from a menu", () => {
-  it("returns focus to the menu's button after Keep editing", async () => {
+  it("returns focus to the menu's button after Cancel", async () => {
     const {
       DropdownMenu,
       DropdownMenuContent,
@@ -222,7 +224,7 @@ describe("unsaved changes guard from a menu", () => {
     await user.click(screen.getByRole("button", { name: "Account" }));
     await user.click(await screen.findByRole("menuitem", { name: "Log out" }));
     expect(prompt()).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(document.activeElement).toBe(
         screen.getByRole("button", { name: "Account" }),

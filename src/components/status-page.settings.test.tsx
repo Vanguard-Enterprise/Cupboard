@@ -60,7 +60,7 @@ describe("Status page admin", () => {
       await user.clear(start);
       await user.type(start, "1:30 AM PST");
       await user.click(
-        within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+        within(dialog).getByRole("button", { name: "Schedule" }),
       );
       expect(
         vi
@@ -79,7 +79,7 @@ describe("Status page admin", () => {
       expect(summary.textContent).toContain("1:30 AM EST");
       vi.mocked(apiRequest).mockResolvedValueOnce(live);
       await user.click(
-        within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+        within(dialog).getByRole("button", { name: "Schedule" }),
       );
       // 1:30 AM EST is 6:30 UTC; the first 1:30 would be 5:30 UTC.
       await waitFor(() =>
@@ -121,7 +121,7 @@ describe("Status page admin", () => {
       const summary = within(dialog).getByTestId("maintenance-summary");
       const spoken = dialog.querySelector('p[aria-live="polite"].sr-only');
       const submit = within(dialog).getByRole("button", {
-        name: "Schedule maintenance",
+        name: "Schedule",
       });
 
       // Start: a wrong label, and an unknown one, typed and submitted

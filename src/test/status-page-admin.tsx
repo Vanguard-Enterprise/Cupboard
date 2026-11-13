@@ -2,13 +2,7 @@
 // Vitest can run them in parallel. Each test file mocks the modules itself.
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UnsavedChangesProvider } from "@/components/ui/unsaved-changes";
-import {
-  cleanup,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { StatusPageAdmin } from "@/components/status-page";
 import { apiRequest, type Identity } from "@/lib/api-client";
@@ -35,6 +29,12 @@ export const empty: StatusPageState = {
   links: [],
   footerText: "",
   poweredBy: true,
+  showName: true,
+  headerTitle: "",
+  logoAlign: "left",
+  logoSize: "medium",
+  announcementIcon: "megaphone",
+  announcementTone: "neutral",
   logoVersion: null,
   components: [],
   maintenance: [],
@@ -143,14 +143,17 @@ export const ready = () =>
   );
 
 /** The save bar says "Saved", in its status region. */
-export const savedInBar = () =>
-  waitFor(() =>
+/** A Save went through: the bar is gone and a top toast says so. */
+export const savedToast = () =>
+  waitFor(() => {
+    expect(toast.success).toHaveBeenCalledWith(
+      "Changes saved.",
+      expect.objectContaining({ position: "top-center" }),
+    );
     expect(
-      within(screen.getByRole("region", { name: "Changes saved" })).getByRole(
-        "status",
-      ).textContent,
-    ).toContain("Saved"),
-  );
+      screen.queryByRole("region", { name: "Unsaved changes" }),
+    ).toBeNull();
+  });
 /** A polite live region on the page says `text`. */
 export const said = (text: string) =>
   waitFor(() =>

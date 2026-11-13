@@ -224,6 +224,17 @@ async function start() {
         .catch(() => {
           if (!stopping) console.error("Development machine reporter stopped.");
         });
+    // Example game servers and machines from `npm run dev:seed` stay live.
+    if (!process.env.DATABASE_URL)
+      void processes
+        .run(
+          process.execPath,
+          ["scripts/dev-fleet.mjs", ".dev-stack/dev-account.json"],
+          { ...process.env, CUPBOARD_API_URL: env.CUPBOARD_API_URL },
+        )
+        .catch(() => {
+          if (!stopping) console.error("Example fleet stopped.");
+        });
     await Promise.race([
       rust.done,
       processes.run(process.execPath, createNextDevArgs(config), env),

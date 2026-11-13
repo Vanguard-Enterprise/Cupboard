@@ -422,10 +422,13 @@ export function OrganizationAlerts({ identity }: { identity: Identity }) {
         </Button>
       </div>
     ) : (
-      <div aria-label="Loading alerts" className="space-y-6">
-        <Skeleton className="h-40 w-full rounded-xl" />
-        <Skeleton className="h-72 w-full rounded-xl" />
-        <Skeleton className="h-48 w-full rounded-xl" />
+      // One block per card, in order: Delivery channels, Alert routing (one
+      // row per event), Recent alerts, and Data.
+      <div role="status" aria-label="Loading alerts" className="space-y-6">
+        <Skeleton className="h-52 w-full rounded-xl" />
+        <Skeleton className="h-190 w-full rounded-xl" />
+        <Skeleton className="h-52 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     );
   }

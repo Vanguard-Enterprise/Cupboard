@@ -9,6 +9,7 @@ import {
   RefreshCwIcon,
   ServerIcon,
 } from "lucide-react";
+import { SkeletonRows } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -566,11 +567,7 @@ export function ServerInventory({ identity }: { identity: Identity }) {
               </AlertDescription>
             </Alert>
           )}
-          {!servers && !error && (
-            <p role="status" className="text-sm text-muted-foreground">
-              Loading servers...
-            </p>
-          )}
+          {!servers && !error && <SkeletonRows label="Loading servers" />}
           {servers?.length === 0 && (
             <div className="rounded-lg border border-dashed p-8 text-center">
               <h2 className="font-semibold">No servers yet</h2>

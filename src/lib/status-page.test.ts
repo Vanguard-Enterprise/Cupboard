@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  bucketSeries,
+  bucketTone,
+  secondsAgo,
+  uptimeLabel,
+  uptimeShare,
   accentEdge,
   accentEdges,
   accentForeground,
@@ -659,6 +664,12 @@ describe("status page helpers", () => {
       links: [],
       footerText: "",
       poweredBy: true,
+      showName: true,
+      headerTitle: "",
+      logoAlign: "left",
+      logoSize: "medium",
+      announcementIcon: "megaphone",
+      announcementTone: "neutral",
       logoVersion: null,
       components: [component("a", "operational")],
       maintenance: [],
@@ -736,5 +747,59 @@ describe("status page helpers", () => {
     expect(publicLogoPath("northstar", 7)).toBe(
       "/app-api/public/status/northstar/logo?v=7",
     );
+  });
+});
+
+describe("status history helpers", () => {
+  const bucket = (start: number, counts: Partial<Record<string, number>>) => ({
+    start,
+    operational: 0,
+    degraded: 0,
+    down: 0,
+    maintenance: 0,
+    unknown: 0,
+    latencyMs: null,
+    ...counts,
+  });
+
+  it("counts seconds, then minutes, for the Updated line", () => {
+    expect(secondsAgo(10_000, 12_000)).toBe("just now");
+    expect(secondsAgo(10_000, 15_000)).toBe("5 seconds ago");
+    expect(secondsAgo(0, 8 * 60_000)).toBe("8 minutes ago");
+    // A clock behind the server never reads as the future.
+    expect(secondsAgo(20_000, 10_000)).toBe("just now");
+  });
+
+  it("measures uptime over known, unplanned minutes", () => {
+    expect(uptimeShare([])).toBeNull();
+    expect(
+      uptimeShare([bucket(0, { maintenance: 60, unknown: 5 })]),
+    ).toBeNull();
+    expect(
+      uptimeShare([bucket(0, { operational: 50, degraded: 9, down: 1 })]),
+    ).toBeCloseTo(59 / 60);
+    expect(uptimeLabel(null)).toBe("No data");
+    expect(uptimeLabel(1)).toBe("100%");
+    // Any down minute keeps it under 100%.
+    expect(uptimeLabel(0.99999)).toBe("99.99%");
+    expect(uptimeLabel(0.95)).toBe("95.00%");
+  });
+
+  it("paints each bar with its worst state and fills gaps", () => {
+    expect(bucketTone(undefined)).toBe("empty");
+    expect(bucketTone(bucket(0, { operational: 59, down: 1 }))).toBe("down");
+    expect(bucketTone(bucket(0, { operational: 59, degraded: 1 }))).toBe(
+      "degraded",
+    );
+    expect(bucketTone(bucket(0, { operational: 1, maintenance: 1 }))).toBe(
+      "maintenance",
+    );
+    const series = bucketSeries([bucket(200, { operational: 1 })], 250, 100, 3);
+    expect(series.map((s) => s.start)).toEqual([0, 100, 200]);
+    expect(series.map((s) => s.bucket?.start)).toEqual([
+      undefined,
+      undefined,
+      200,
+    ]);
   });
 });

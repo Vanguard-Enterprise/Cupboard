@@ -32,14 +32,9 @@ const useMedia = (media: string) =>
     () => false,
   );
 
-/**
- * Space below bottom toasts: clear of a bar pinned to the bottom of the
- * screen or the content (a page publishes its height as
- * `--cupboard-bottom-bar` while it shows) or the home indicator, whichever is
- * taller, plus a gap.
- */
+/** Space below bottom toasts: clear of the home indicator, plus a gap. */
 const bottomGap = (gap: number) =>
-  `calc(max(var(--cupboard-bottom-bar, 0px), env(safe-area-inset-bottom, 0px)) + ${gap}px)`;
+  `calc(env(safe-area-inset-bottom, 0px) + ${gap}px)`;
 
 const shown = () => [
   ...document.querySelectorAll<HTMLElement>(
@@ -73,14 +68,6 @@ function focusedBox() {
   if (target.closest("[data-sonner-toaster]")) return null;
   return target.getBoundingClientRect();
 }
-
-/** The height of a bar pinned to the bottom (`--cupboard-bottom-bar`). */
-const bottomBar = () =>
-  parseFloat(
-    getComputedStyle(document.documentElement).getPropertyValue(
-      "--cupboard-bottom-bar",
-    ),
-  ) || 0;
 
 /**
  * Where toasts sit while they show: Sonner's position (fixed for their
@@ -139,7 +126,7 @@ function usePlacement(home: Placement) {
           ? list.dataset.yPosition === "top"
           : at.position.startsWith("top");
         const otherTop = fromTop
-          ? window.innerHeight - bottomBar() - at.gap - height
+          ? window.innerHeight - at.gap - height
           : at.gap;
         const other = new DOMRect(box.left, otherTop, box.width, height);
         if (otherTop >= 0 && !overlaps(other, focused))
@@ -184,10 +171,9 @@ function usePlacement(home: Placement) {
  * Toasts are for events the operator didn't just trigger in view (a
  * refresh failing, a session expiring). Each width has one home: top right
  * from 1280 pixels, bottom right on tablets (the top corner holds the
- * breadcrumb and title pills), and bottom center on phones, above a pinned
- * bar; pass `position` to choose another. A toast never moves after it
- * appears (see `usePlacement`). Every toast has a close button and Escape
- * closes them.
+ * breadcrumb and title pills), and bottom center on phones; pass `position` to choose another. A toast never moves after it
+ * appears (see `usePlacement`). Every toast has a close button, a countdown
+ * line, and swipes away; Escape closes them.
  */
 const Toaster = ({ position, style, ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
@@ -213,12 +199,19 @@ const Toaster = ({ position, style, ...props }: ToasterProps) => {
       position={at.position}
       offset={offset}
       mobileOffset={offset}
+      // Matches the countdown line in globals.css.
       duration={4000}
+      // Any direction swipes a toast away, sideways included at the top
+      // center, where Sonner alone would only take an upward swipe.
+      swipeDirections={["left", "right", "top", "bottom"]}
       closeButton
       toastOptions={{
         closeButtonAriaLabel: "Dismiss notification",
         classNames: {
           toast: "cn-toast",
+          // Sonner colors descriptions for its own themes, not ours: dark
+          // gray on our dark popover. The secondary text token reads on both.
+          description: "text-muted-foreground!",
         },
       }}
       className="toaster group"

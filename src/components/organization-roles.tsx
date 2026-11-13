@@ -17,6 +17,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { SkeletonRows } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -480,10 +481,17 @@ export function OrganizationRoles() {
     );
   }
   if (!ready) {
+    // The page's own header, with the list's shape below it.
     return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Loading roles...
-      </p>
+      <>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">Roles</h1>
+          <Button disabled>
+            <PlusIcon /> Add role
+          </Button>
+        </div>
+        <SkeletonRows label="Loading roles" className="rounded-xl" />
+      </>
     );
   }
 

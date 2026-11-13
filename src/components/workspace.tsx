@@ -114,7 +114,7 @@ export function Workspace({
       : pathname === serversPath
         ? {
             activeSection: "servers",
-            crumbs: ["Operations", "Game servers", "Server inventory"],
+            crumbs: ["Game servers"],
           }
         : undefined;
   const machinePage =

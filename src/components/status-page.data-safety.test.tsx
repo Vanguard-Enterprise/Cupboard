@@ -1,11 +1,5 @@
 // @vitest-environment jsdom
-import {
-  act,
-  fireEvent,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { mergeNotice, rebaseDraft } from "./status-page";
@@ -38,7 +32,7 @@ import {
   live,
   mount,
   ready,
-  savedInBar,
+  savedToast,
   said,
   stubImages,
   conflictError,
@@ -100,7 +94,7 @@ describe("Status page admin data safety", () => {
       await waitFor(() =>
         expect(bar.textContent).toContain("Changed in another session"),
       );
-      expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
       expect(screen.getByLabelText("Footer text")).toHaveProperty("value", "");
       expect(apiRequest).not.toHaveBeenCalledWith(
         "status-page",
@@ -127,7 +121,7 @@ describe("Status page admin data safety", () => {
         "Northstar Status",
       );
       vi.mocked(apiRequest).mockResolvedValueOnce({ ...live, revision: 4 });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() =>
         expect(apiRequest).toHaveBeenLastCalledWith(
           "status-page",
@@ -165,8 +159,8 @@ describe("Status page admin data safety", () => {
       });
       const saved = { ...live, revision: 3, name: "Northstar Status" };
       vi.mocked(apiRequest).mockResolvedValueOnce(saved);
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
-      await savedInBar();
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await savedToast();
       await act(async () => answerPoll(live));
       expect(screen.getByLabelText("Page name")).toHaveProperty(
         "value",
@@ -174,7 +168,7 @@ describe("Status page admin data safety", () => {
       );
       await user.type(screen.getByLabelText("Footer text"), "Hi");
       vi.mocked(apiRequest).mockResolvedValueOnce({ ...saved, revision: 4 });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() =>
         expect(apiRequest).toHaveBeenLastCalledWith(
           "status-page",
@@ -241,7 +235,7 @@ describe("Status page admin data safety", () => {
       await user.type(screen.getByLabelText("Footer text"), "Hi");
       await user.click(screen.getByRole("tab", { name: "Overview" }));
       await user.click(
-        screen.getByRole("button", { name: "Post an announcement" }),
+        screen.getByRole("button", { name: "Post announcement" }),
       );
       await user.type(
         screen.getByRole("textbox", { name: "Announcement" }),
@@ -249,15 +243,13 @@ describe("Status page admin data safety", () => {
       );
       const posted = { ...live, revision: 3, announcement: "Wipe at 7" };
       vi.mocked(apiRequest).mockResolvedValueOnce(posted);
-      await user.click(
-        screen.getByRole("button", { name: "Post announcement" }),
-      );
+      await user.click(screen.getByRole("button", { name: "Post" }));
       await said("Announcement posted.");
       await poll(posted);
       const bar = screen.getByRole("region", { name: "Unsaved changes" });
       expect(bar.textContent).not.toContain("another session");
       vi.mocked(apiRequest).mockResolvedValueOnce({ ...posted, revision: 4 });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() =>
         expect(apiRequest).toHaveBeenLastCalledWith(
           "status-page",
@@ -306,7 +298,7 @@ describe("Status page admin data safety", () => {
         ...reordered,
         revision: 4,
       });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() =>
         expect(apiRequest).toHaveBeenLastCalledWith(
           "status-page",
@@ -364,7 +356,7 @@ describe("Status page admin data safety", () => {
       screen.getByRole("button", { name: "Show EU main on the public page" }),
     );
     vi.mocked(apiRequest).mockRejectedValueOnce(conflictError);
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByRole("button", { name: "Load latest, keep my edits" });
     // Elsewhere: Wings host was renamed and a Store target was added.
     const store = {
@@ -395,7 +387,7 @@ describe("Status page admin data safety", () => {
       }),
     ).toBeTruthy();
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...live, revision: 6 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -479,7 +471,7 @@ describe("Status page admin data safety", () => {
     vi.mocked(apiRequest).mockRejectedValueOnce(
       new Error("That public address is already in use."),
     );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(
       await screen.findByText("That public address is already in use."),
     ).toBeTruthy();
@@ -492,7 +484,7 @@ describe("Status page admin data safety", () => {
       revision: 3,
       footerText: "Hi",
     });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(
       await screen.findByText(
         /Saved, except the new logo\. Choose a simpler logo image\./,
@@ -506,8 +498,8 @@ describe("Status page admin data safety", () => {
 
     // 3. Retrying sends only the logo.
     logoOk = true;
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await savedInBar();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await savedToast();
     expect(uploads()).toBe(2);
     expect(revisionSent()).toBe("3");
     expect(apiRequest).toHaveBeenCalledTimes(3);
@@ -527,7 +519,7 @@ describe("Status page admin data safety", () => {
     vi.mocked(apiRequest).mockImplementationOnce(
       () => new Promise((resolve) => (respond = resolve)),
     );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -564,7 +556,7 @@ describe("Status page admin data safety", () => {
       "Late",
     );
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...live, revision: 4 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -582,11 +574,9 @@ describe("Status page admin data safety", () => {
     );
   });
 
-  // a11y D-R8-01, D-R8-02, claude D-95, codex D-49: the "saved" toast
-  // landed 400 to 700 pixels from the Save button and, moving between screen
-  // edges, was announced 2 to 4 times. The bar the operator just pressed now
-  // says it, once, in a status region that was there before the text.
-  it("confirms Save in the save bar, announced once, with no toast", async () => {
+  // The operator asked for Save to confirm at the top, as a toast that
+  // counts down and swipes away, instead of the bar saying "Saved".
+  it("confirms Save with one top toast and lets the bar go", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValueOnce(live);
     mount();
@@ -595,53 +585,28 @@ describe("Status page admin data safety", () => {
     const name = screen.getByLabelText("Page name");
     await user.type(name, " now");
     const bar = screen.getByRole("region", { name: "Unsaved changes" });
-    const status = within(bar).getByRole("status");
-    expect(status.textContent).toBe("");
-    const changes: string[] = [];
-    const observer = new MutationObserver(() =>
-      changes.push(status.textContent ?? ""),
-    );
-    observer.observe(status, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...live,
       revision: 3,
       name: `${live.name} now`,
     });
-    const save = within(bar).getByRole("button", { name: "Save changes" });
+    const save = within(bar).getByRole("button", { name: "Save" });
     save.focus();
     await user.keyboard("{Enter}");
-    await waitFor(() => expect(status.textContent).toContain("Saved"));
-    observer.disconnect();
-
-    // The same node, filled once; nothing else on the page says it.
-    expect(status.isConnected).toBe(true);
-    expect(screen.getByRole("region", { name: "Changes saved" })).toBe(bar);
-    expect(new Set(changes.filter(Boolean))).toEqual(
-      new Set([status.textContent]),
-    );
-    const sayers = [
-      ...document.querySelectorAll("[aria-live], [role=status], [role=alert]"),
-    ].filter((element) => element.textContent?.includes("Saved"));
-    expect(sayers).toEqual([status]);
-    expect(toast.success).not.toHaveBeenCalled();
-    // No buttons left to press, and focus went back to the field.
-    expect(within(bar).queryByRole("button")).toBeNull();
+    await savedToast();
+    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith("Changes saved.", {
+      position: "top-center",
+      description: "Visitors see it now.",
+    });
+    // Nothing on the page repeats it, and focus went back to the field.
+    expect(screen.queryByText(/^Saved/)).toBeNull();
     expect(document.activeElement).toBe(screen.getByLabelText("Page name"));
-
     // The next edit brings the unsaved bar straight back.
     await user.type(screen.getByLabelText("Page name"), "!");
     expect(
-      screen.getByRole("region", { name: "Unsaved changes" }).textContent,
-    ).not.toContain("Saved");
-    expect(within(bar).getByRole("status").textContent).toBe("");
-    // Discarding that edit doesn't bring "Saved" back.
-    await user.click(within(bar).getByRole("button", { name: "Discard" }));
-    expect(screen.queryByRole("region", { name: "Changes saved" })).toBeNull();
+      screen.getByRole("region", { name: "Unsaved changes" }),
+    ).toBeTruthy();
   });
 
   // claude D-102, a11y D-R9-04: focus rested on the page for a moment
@@ -655,14 +620,18 @@ describe("Status page admin data safety", () => {
     const footer = screen.getByLabelText("Footer text");
     await user.type(footer, "Hi");
     const bar = screen.getByRole("region", { name: "Unsaved changes" });
-    const save = within(bar).getByRole("button", { name: "Save changes" });
+    const save = within(bar).getByRole("button", { name: "Save" });
     // Where focus is the moment Save leaves the page.
     let focusWhenGone: Element | null | undefined;
     const observer = new MutationObserver(() => {
       if (focusWhenGone === undefined && !save.isConnected)
         focusWhenGone = document.activeElement;
     });
-    observer.observe(bar, { childList: true, subtree: true });
+    // The whole bar leaves after Save, so watch the page that holds it.
+    observer.observe(bar.parentElement!.parentElement!, {
+      childList: true,
+      subtree: true,
+    });
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...live,
       revision: 3,
@@ -670,254 +639,31 @@ describe("Status page admin data safety", () => {
     });
     save.focus();
     await user.keyboard("{Enter}");
-    await savedInBar();
+    await savedToast();
     observer.disconnect();
     expect(focusWhenGone).toBe(footer);
     expect(document.activeElement).toBe(footer);
   });
 
-  // claude D-103: a pointer left resting on the bar after a click kept
-  // "Saved" up indefinitely. It has nothing to act on, so it leaves on time.
-  it("lets Saved go on time with the pointer resting on the bar", async () => {
+  it("floats the bar at the top, clear of the field in focus, and lets go when it leaves", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockResolvedValueOnce(live);
     mount();
     await ready();
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.type(screen.getByLabelText("Footer text"), "Hi");
-    vi.mocked(apiRequest).mockResolvedValueOnce({
-      ...live,
-      revision: 3,
-      footerText: `${live.footerText}Hi`,
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const save = screen.getByRole("button", { name: "Save changes" });
-      fireEvent.pointerEnter(save.closest('[role="region"]')!);
-      fireEvent.pointerOver(save);
-      fireEvent.click(save);
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      const bar = screen.getByRole("region", { name: "Changes saved" });
-      fireEvent.pointerEnter(bar);
-      fireEvent.pointerMove(bar);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6_000);
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
-      });
-      expect(
-        screen.queryByRole("region", { name: "Changes saved" }),
-      ).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps the Saved bar at least 6 seconds, then lets it go", async () => {
-    const user = userEvent.setup();
-    vi.mocked(apiRequest).mockResolvedValueOnce(live);
-    mount();
-    await ready();
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.type(screen.getByLabelText("Footer text"), "Hi");
-    vi.mocked(apiRequest).mockResolvedValueOnce({
-      ...live,
-      revision: 3,
-      footerText: `${live.footerText}Hi`,
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      const bar = screen.getByRole("region", { name: "Changes saved" });
-      expect(within(bar).getByRole("status").textContent).toContain("Saved");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(5_900);
-      });
-      expect(screen.getByRole("region", { name: "Changes saved" })).toBe(bar);
-      // Then it slides away.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(200);
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(300);
-      });
-      expect(
-        screen.queryByRole("region", { name: "Changes saved" }),
-      ).toBeNull();
-      expect(
-        screen.queryByRole("region", { name: "Unsaved changes" }),
-      ).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // claude D-97, codex D-50, a11y D-R9-01: when the Saved bar left, the page
-  // lost the space kept for it and, at the end of Settings, the browser
-  // clamped the scroll: the focused field dropped 65 to 161 pixels about 6
-  // seconds after Save. The space now stays until releasing it moves nothing.
-  describe.each([
-    // Tablets and desktops: sticky, in the page's flow, 66 pixels.
-    { position: "sticky", height: 66, end: 66 },
-    // Phones: fixed to the screen edge, the page pads its end by the bar
-    // and a 16 pixel gap.
-    { position: "fixed", height: 121, end: 137 },
-  ])("a $position save bar", ({ position, height, end }) => {
-    const isBar = (element: Element) =>
-      element.getAttribute("role") === "region" &&
-      ["Unsaved changes", "Changes saved"].includes(
-        element.getAttribute("aria-label") ?? "",
-      );
-    /** The bar's own height in the page's flow, or the space kept for it. */
-    const pageEnd = (page: HTMLElement) => {
-      const last = page.lastElementChild as HTMLElement | null;
-      const flow = !last
-        ? 0
-        : isBar(last)
-          ? position === "fixed"
-            ? 0
-            : height
-          : last.getAttribute("aria-hidden") === "true"
-            ? parseFloat(last.style.height || "0")
-            : 0;
-      return parseFloat(page.style.paddingBottom || "0") + flow;
-    };
-    function stubLayout() {
-      const real = window.getComputedStyle.bind(window);
-      vi.spyOn(window, "getComputedStyle").mockImplementation(
-        (element, pseudo) => {
-          const style = real(element, pseudo);
-          if (!isBar(element)) return style;
-          return new Proxy(style, {
-            get: (target, key) =>
-              key === "position" ? position : Reflect.get(target, key, target),
-          });
-        },
-      );
-      vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
-        function (this: HTMLElement) {
-          return isBar(this) ? height : 0;
-        },
-      );
-    }
-    async function saveAndWait() {
-      const user = userEvent.setup();
-      vi.mocked(apiRequest).mockResolvedValueOnce(live);
-      mount();
-      await ready();
-      await user.click(screen.getByRole("tab", { name: "Settings" }));
-      await user.type(screen.getByLabelText("Footer text"), "Hi");
-      const bar = screen.getByRole("region", { name: "Unsaved changes" });
-      const page = bar.parentElement!;
-      const before = pageEnd(page);
-      vi.mocked(apiRequest).mockResolvedValueOnce({
-        ...live,
-        revision: 3,
-        footerText: `${live.footerText}Hi`,
-      });
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      fireEvent.click(
-        within(bar).getByRole("button", { name: "Save changes" }),
-      );
-      await act(async () => {
-        await Promise.resolve();
-      });
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      return { bar, page, before };
-    }
-
-    it("keeps the page end where it was through Save and after the bar leaves", async () => {
-      stubLayout();
-      try {
-        const { bar, page, before } = await saveAndWait();
-        expect(before).toBe(end);
-        expect(screen.getByRole("region", { name: "Changes saved" })).toBe(bar);
-        expect(pageEnd(page)).toBe(end);
-        // Fixed, the Saved bar can shrink to one line from its top: the
-        // page keeps the space it had (claude D-101). In the flow, it keeps
-        // its height.
-        expect(bar.style.minHeight).toBe(
-          position === "fixed" ? "" : `${height}px`,
-        );
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(6_000);
-        });
-        expect(pageEnd(page)).toBe(end);
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(500);
-        });
-        expect(
-          screen.queryByRole("region", { name: "Changes saved" }),
-        ).toBeNull();
-        // Gone, and the page end has not moved.
-        expect(pageEnd(page)).toBe(end);
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(5_000);
-        });
-        expect(pageEnd(page)).toBe(end);
-        expect(document.activeElement).toBe(
-          screen.getByLabelText("Footer text"),
-        );
-      } finally {
-        vi.useRealTimers();
-      }
-      // Another tab replaces the page under it: the space goes with it.
-      fireEvent.mouseDown(screen.getByRole("tab", { name: "Overview" }));
-      fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
-      await waitFor(() =>
-        expect(
-          pageEnd(screen.getByRole("tabpanel").parentElement!.parentElement!),
-        ).toBe(0),
-      );
-    });
-
-    it("lets the space go once it is scrolled out of view, not before", async () => {
-      stubLayout();
-      try {
-        const { page } = await saveAndWait();
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(6_000);
-        });
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(500);
-        });
-        const space = page.lastElementChild as HTMLElement;
-        expect(space.getAttribute("aria-hidden")).toBe("true");
-        const top = { value: window.innerHeight - 40 };
-        vi.spyOn(space, "getBoundingClientRect").mockImplementation(
-          () => ({ top: top.value }) as DOMRect,
-        );
-        // Still on screen: kept, so nothing moves.
-        await act(async () => {
-          window.dispatchEvent(new Event("scroll"));
-          await vi.advanceTimersByTimeAsync(20);
-        });
-        expect(pageEnd(page)).toBe(end);
-        // Below the screen's bottom edge: letting it go moves nothing.
-        top.value = window.innerHeight + 10;
-        await act(async () => {
-          window.dispatchEvent(new Event("scroll"));
-          await vi.advanceTimersByTimeAsync(20);
-        });
-        expect(pageEnd(page)).toBe(0);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
+    const bar = screen.getByRole("region", { name: "Unsaved changes" });
+    // Fixed over the header, one compact row while it only reports edits.
+    expect(bar.parentElement!.className).toContain("fixed");
+    expect(bar.parentElement!.className).toContain("top-2");
+    expect(bar.textContent).toContain("Footer text");
+    // Keyboard scrolling keeps fields below the bar.
+    expect(document.documentElement.style.scrollPaddingTop).toMatch(/px$/);
+    await user.click(within(bar).getByRole("button", { name: "Discard" }));
+    expect(
+      screen.queryByRole("region", { name: "Unsaved changes" }),
+    ).toBeNull();
+    expect(document.documentElement.style.scrollPaddingTop).toBe("");
   });
 
   it("checks the page revision before a logo is removed or replaced (codex D-26)", async () => {
@@ -948,7 +694,7 @@ describe("Status page admin data safety", () => {
       await waitFor(() =>
         expect(bar.textContent).toContain("Changed in another session"),
       );
-      expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
       expect(apiRequest).not.toHaveBeenCalledWith(
         "status-page/logo/remove",
         expect.anything(),
@@ -968,7 +714,7 @@ describe("Status page admin data safety", () => {
         revision: 4,
         logoVersion: null,
       });
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() =>
         expect(apiRequest).toHaveBeenLastCalledWith(
           "status-page/logo/remove",
@@ -1003,7 +749,7 @@ describe("Status page admin data safety", () => {
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.type(screen.getByLabelText("Footer text"), "Mine");
     vi.mocked(apiRequest).mockRejectedValueOnce(conflictError);
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     let respond: (value: StatusPageState) => void = () => {};
     vi.mocked(apiRequest).mockImplementationOnce(
       () => new Promise((resolve) => (respond = resolve)),
@@ -1215,7 +961,7 @@ describe("Status page admin data safety", () => {
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.type(screen.getByLabelText("Footer text"), "Mine");
     vi.mocked(apiRequest).mockRejectedValueOnce(conflictError);
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...live,
       revision: 5,
@@ -1274,7 +1020,7 @@ describe("Status page admin data safety", () => {
         screen.getByRole("button", { name: `Show ${name} on the public page` }),
       );
     vi.mocked(apiRequest).mockRejectedValueOnce(conflictError);
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...many,
       revision: 5,
@@ -1378,13 +1124,11 @@ describe("Status page admin data safety", () => {
     act(() => window.history.back());
     const confirm = await screen.findByRole("alertdialog");
     expect(confirm.textContent).toContain("Leave without saving?");
-    expect(confirm.textContent).toContain(
-      "You have unsaved changes. They are lost if you leave.",
+    expect(confirm.textContent).toContain("Your change:");
+    expect(within(confirm).getByRole("listitem").textContent).toBe(
+      "1 target changed",
     );
-    expect(confirm.textContent).toContain("1 target changed.");
-    await user.click(
-      within(confirm).getByRole("button", { name: "Keep editing" }),
-    );
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(window.history.state?.cupboardUnsavedGuard).toBe(true);
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     // Discarding takes the extra entry back off.

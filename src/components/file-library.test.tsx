@@ -40,7 +40,7 @@ it("uploads into the current organization and confirms deletion", async () => {
     .mockResolvedValueOnce(Response.json({ deleted: true }));
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   await user.click(screen.getByRole("button", { name: "Upload file" }));
   const upload = new File(["configuration"], "config.txt");
   await user.upload(screen.getByLabelText("Upload a file"), upload);
@@ -63,7 +63,7 @@ it("uploads into the current organization and confirms deletion", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Delete config.txt" }));
   await user.click(screen.getByRole("button", { name: "Delete file" }));
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   expect(fetcher.mock.calls[2][0]).toBe("/app-api/files/file/delete");
 });
 it("keeps a failed upload selected and rejects oversized files before sending", async () => {
@@ -75,7 +75,7 @@ it("keeps a failed upload selected and rejects oversized files before sending", 
     );
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   await user.click(screen.getByRole("button", { name: "Upload file" }));
   const input = screen.getByLabelText("Upload a file") as HTMLInputElement;
   await user.upload(input, new File(["bytes"], "config.txt"));
@@ -217,7 +217,7 @@ it("accepts a dropped file and preserves the dialog when upload fails", async ()
     );
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   await user.click(screen.getByRole("button", { name: "Upload file" }));
   const dropped = new File(["config"], "dropped.cfg");
   fireEvent.drop(screen.getByText("Drop a file here"), {
@@ -322,7 +322,7 @@ it("creates folders from the empty-area context menu and retains invalid names f
     );
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   fireEvent.contextMenu(screen.getByLabelText("File browser"));
   await user.click(screen.getByRole("menuitem", { name: "New folder" }));
   await user.type(screen.getByLabelText("Name"), "../bad");
@@ -401,7 +401,7 @@ it("creates a slash-separated folder path and displays its nested folders", asyn
     .mockResolvedValueOnce(Response.json(folders));
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   await user.click(screen.getByRole("button", { name: "New folder" }));
   await user.type(screen.getByLabelText("Name"), "configs/plugins/custom");
   await user.click(screen.getByRole("button", { name: "Create folder" }));
@@ -462,7 +462,7 @@ it("ignores an older automatic update when a folder has just been created", asyn
     );
   const user = userEvent.setup();
   render(<FileLibrary identity={identity} />);
-  await screen.findByText("Your files, together");
+  await screen.findByText(/^Upload configs, plugins/);
   fireEvent.focus(window);
   await user.click(screen.getByRole("button", { name: "New folder" }));
   await user.type(screen.getByLabelText("Name"), "New folder");
