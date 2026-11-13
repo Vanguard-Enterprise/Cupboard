@@ -35,7 +35,7 @@ const INSTALL_KEY: &str = "discord_install";
 const INSTALL_TTL_SECONDS: i64 = 600;
 const MAX_BODY: usize = 64 * 1024;
 /// A guild object lists every role, emoji, and sticker, so busy guilds run
-/// well past `MAX_BODY`.
+/// well past `MAX_BODY`. The bot install's token response embeds one too.
 const GUILD_BODY: usize = 1 << 20;
 /// Guild pages call Discord only when the stored snapshot is older than this.
 const SNAPSHOT_FRESH_SECONDS: i64 = 600;
@@ -394,7 +394,7 @@ async fn install(
             .send()
             .await
             .map_err(|_| discord_failed())?,
-        MAX_BODY,
+        GUILD_BODY,
     )
     .await?;
     let installer: ApiResult<IdOnly> = read(

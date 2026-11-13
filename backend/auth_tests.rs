@@ -7210,6 +7210,12 @@ const DISCORD_GUILD: &str = "130000000000000001";
 const DISCORD_GONE_GUILD: &str = "130000000000000404";
 /// A guild whose member list Discord refuses, as without the members intent.
 const DISCORD_HIDDEN_MEMBERS_GUILD: &str = "130000000000000403";
+/// Enough emojis to push a guild object past 64 KiB, as busy guilds do.
+fn busy_guild_emojis() -> Vec<Value> {
+    (0..1200)
+        .map(|n| json!({"id":format!("6000000000000{n:05}"),"name":format!("emoji_{n:04}_padding_padding"),"animated":false}))
+        .collect()
+}
 const DISCORD_SECRETS: [&str; 3] = ["bot-token-secret", "client-secret-value", "user-access-"];
 
 async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
@@ -7238,7 +7244,10 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
         } else {
             return StatusCode::BAD_REQUEST.into_response();
         };
-        axum::Json(json!({"access_token":format!("user-access-{who}"),"token_type":"Bearer","guild":{"id":DISCORD_GUILD}})).into_response()
+        // A bot install's token response embeds the whole guild, which runs
+        // past 64 KiB for busy guilds.
+        let emojis = busy_guild_emojis();
+        axum::Json(json!({"access_token":format!("user-access-{who}"),"token_type":"Bearer","guild":{"id":DISCORD_GUILD,"emojis":emojis}})).into_response()
     }
     async fn me(headers: HeaderMap) -> axum::response::Response {
         match headers.get("authorization").and_then(|v| v.to_str().ok()) {
@@ -7291,9 +7300,7 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
             return StatusCode::NOT_FOUND.into_response();
         }
         // Busy guilds list hundreds of roles and emojis, well past 64 KiB.
-        let emojis: Vec<Value> = (0..1200)
-            .map(|n| json!({"id":format!("6000000000000{n:05}"),"name":format!("emoji_{n:04}_padding_padding"),"animated":false}))
-            .collect();
+        let emojis = busy_guild_emojis();
         axum::Json(json!({"id":id,"name":" Test guild ","icon":format!("a_{}", "0f".repeat(16)),"banner":"0a".repeat(16),"home_header":"0b".repeat(16),"owner_id":"200000000000000001","approximate_member_count":42,"emojis":emojis,"roles":[{"id":id,"name":"@everyone","color":0,"position":0},{"id":"300000000000000001","name":"Mods","color":255,"position":1,"hoist":true}]})).into_response()
     }
     async fn leave(State(mock): State<DiscordMock>, headers: HeaderMap) -> StatusCode {
