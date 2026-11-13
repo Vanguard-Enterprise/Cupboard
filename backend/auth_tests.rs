@@ -7397,7 +7397,7 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
         "130000000000000099".into(),
         "bot-token-secret".into(),
         "client-secret-value".into(),
-        "http://100.64.0.1:21700/discord/callback".into(),
+        "http://localhost:21700/discord/callback".into(),
         "21712.".into(),
         api,
     );
@@ -7406,7 +7406,7 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
         ..Default::default()
     };
     let app = router_with_auth(pool.clone(), auth.clone()).layer(axum::Extension(config));
-    let unconfigured = router_with_auth(pool.clone(), auth);
+    let unconfigured = router_with_auth(pool.clone(), auth.clone());
     let mut owner = Client::new(&app);
     let mut other = Client::new(&app);
     let mut viewer = Client::new(&app);
@@ -7479,11 +7479,36 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
     let url = start["url"].as_str().unwrap();
     assert!(url.starts_with("https://discord.com/oauth2/authorize?client_id=130000000000000099&"));
     assert!(url.contains("scope=bot%20identify"));
-    assert!(url.contains("redirect_uri=http%3A%2F%2F100.64.0.1%3A21700%2Fdiscord%2Fcallback"));
+    assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A21700%2Fdiscord%2Fcallback"));
     assert!(!url.contains("permissions="));
     let state = install_state(&start);
     assert!(state.starts_with("21712."));
     responses.push(start.to_string());
+
+    // An install started on a host Discord doesn't return to is refused,
+    // since the callback could never see this session.
+    let elsewhere = router_with_auth(pool.clone(), auth.clone()).layer(axum::Extension(
+        crate::discord::DiscordConfig::new(
+            "130000000000000099".into(),
+            "bot-token-secret".into(),
+            "client-secret-value".into(),
+            "http://100.64.0.1:21700/discord/callback".into(),
+            "21712.".into(),
+            "http://127.0.0.1:9".into(),
+        ),
+    ));
+    let mut elsewhere = Client {
+        app: elsewhere,
+        cookie: owner.cookie.clone(),
+        organization: owner.organization.clone(),
+    };
+    assert_eq!(
+        elsewhere
+            .request("POST", "discord/install/start", json!({}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
 
     // A wrong state consumes the pending install, so the right one no longer works.
     let (status, wrong) = owner
@@ -7708,7 +7733,7 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
         "130000000000000099".into(),
         "bot-token-secret".into(),
         "client-secret-value".into(),
-        "http://100.64.0.1:21700/discord/callback".into(),
+        "http://localhost:21700/discord/callback".into(),
         String::new(),
         api,
     );

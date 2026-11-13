@@ -83,12 +83,14 @@ struct Settings {
 
 impl Settings {
     fn refresh_lock(&self, guild_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        self.refreshing
+        let mut locks = self
+            .refreshing
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(guild_id.to_owned())
-            .or_default()
-            .clone()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Locks are only handed out under this mutex, so a lock nobody else
+        // holds a reference to is idle and can go, removed guilds included.
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        locks.entry(guild_id.to_owned()).or_default().clone()
     }
 }
 
@@ -313,6 +315,19 @@ async fn start(
     let Some(Extension(DiscordConfig(config))) = config else {
         return Err(unconfigured());
     };
+    // Discord sends the browser back to the redirect URI's host. Only that
+    // host has this session's cookie, so the install must start there.
+    let host = |url: &str| reqwest::Url::parse(url).ok()?.host_str().map(str::to_owned);
+    let origin = headers
+        .get("origin")
+        .and_then(|value| value.to_str().ok())
+        .and_then(host);
+    if origin.is_none() || origin != host(&config.redirect_uri) {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "Discord returns to a different address than this page. Open Cupboard at the address it was set up with, then add the guild.",
+        ));
+    }
     let state = format!("{}{}", config.state_prefix, crate::auth::secret());
     session
         .insert(
@@ -420,7 +435,13 @@ async fn exchange(
             ("token_type_hint", "access_token"),
         ]))
         .send();
-    let _ = tokio::time::timeout(REVOKE_TIMEOUT, revoke).await;
+    // Best effort: the bot is already in the guild, so a failed revoke must not
+    // fail the install. The token is never stored, carries only `identify`,
+    // and expires on its own.
+    let revoked = tokio::time::timeout(REVOKE_TIMEOUT, revoke).await;
+    if !matches!(revoked, Ok(Ok(ref response)) if response.status().is_success()) {
+        eprintln!("Discord didn't confirm revoking a guild installer's token.");
+    }
     let installer = installer?;
     let Some(guild_id) = token.guild.map(|guild| guild.id) else {
         return Err(discord_failed());
