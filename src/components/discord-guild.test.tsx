@@ -115,6 +115,8 @@ const overview: GuildOverview = {
   stickers: [],
   events: [],
   threads: [{ id: "t1", name: "Wipe day", messageCount: 7 }],
+  fetchedAt: Date.now() - 3 * 60_000,
+  stale: false,
 };
 beforeEach(() => vi.restoreAllMocks());
 afterEach(() => cleanup());
@@ -130,6 +132,7 @@ it("shows the guild's details, channels, roles, and members", async () => {
   ).toBeTruthy();
   expect(fetcher.mock.calls[0]![0]).toBe(`/app-api/discord/guilds/${guildId}`);
   expect(screen.getByText("Level 1, 3 boosts")).toBeTruthy();
+  expect(screen.getByText("Updated 3 minutes ago")).toBeTruthy();
 
   await user.click(screen.getByRole("tab", { name: "Channels" }));
   expect(screen.getByText("Read first")).toBeTruthy();
@@ -173,6 +176,28 @@ it("shows member counts as unknown when Discord withholds the member list", asyn
   expect(screen.queryByLabelText("Search members")).toBeNull();
   expect(
     screen.getByText(/didn’t share this guild’s member list/),
+  ).toBeTruthy();
+});
+
+it("flags saved readings and partial role counts", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    Response.json({
+      ...overview,
+      fetchedAt: Date.now() - 2 * 86_400_000,
+      stale: true,
+      members: { ...overview.members, complete: false },
+    }),
+  );
+  const user = userEvent.setup();
+  render(<DiscordGuild identity={identity} guildId={guildId} />);
+  expect(
+    await screen.findByText(
+      "Discord didn’t respond, so this is from 2 days ago.",
+    ),
+  ).toBeTruthy();
+  await user.click(screen.getByRole("tab", { name: "Roles" }));
+  expect(
+    screen.getByText("Role counts are based on the first 1,000 members."),
   ).toBeTruthy();
 });
 

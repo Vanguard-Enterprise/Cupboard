@@ -650,10 +650,12 @@ async fn snapshot(pool: &PgPool, guild_id: &str) -> ApiResult<Option<Snapshot>> 
 }
 
 /// Adds what differs between organizations and requests to a snapshot.
-fn respond(snapshot: Snapshot, connected_at: i64) -> Json<Value> {
+/// `stale` marks a snapshot served because Discord couldn't refresh it.
+fn respond(snapshot: Snapshot, connected_at: i64, stale: bool) -> Json<Value> {
     let mut data = snapshot.data;
     data["guild"]["connectedAt"] = json!(connected_at);
     data["fetchedAt"] = json!(snapshot.fetched_at);
+    data["stale"] = json!(stale);
     Json(data)
 }
 
@@ -684,13 +686,13 @@ async fn overview(
     drop(conn);
     let cached = match snapshot(&pool, &id).await? {
         Some(s) if s.age_seconds < SNAPSHOT_FRESH_SECONDS => {
-            return Ok(respond(s, connected_at));
+            return Ok(respond(s, connected_at, false));
         }
         other => other,
     };
     let Some(Extension(DiscordConfig(config))) = config else {
         return cached
-            .map(|s| respond(s, connected_at))
+            .map(|s| respond(s, connected_at, true))
             .ok_or_else(unconfigured);
     };
     let lock = config.refresh_lock(&id);
@@ -698,7 +700,7 @@ async fn overview(
     // Another request may have refreshed the guild while this one waited.
     let cached = match snapshot(&pool, &id).await? {
         Some(s) if s.age_seconds < SNAPSHOT_FRESH_SECONDS => {
-            return Ok(respond(s, connected_at));
+            return Ok(respond(s, connected_at, false));
         }
         other => other.or(cached),
     };
@@ -712,10 +714,11 @@ async fn overview(
                     age_seconds: 0,
                 },
                 connected_at,
+                false,
             ))
         }
         Err(error) if error.0 == StatusCode::CONFLICT => Err(error),
-        Err(error) => cached.map(|s| respond(s, connected_at)).ok_or(error),
+        Err(error) => cached.map(|s| respond(s, connected_at, true)).ok_or(error),
     }
 }
 
@@ -797,6 +800,9 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
     // Discord refuses the member list without the server members intent.
     // Unknown counts must not read as zero.
     let members_available = members.is_some();
+    let total = guild
+        .get("approximate_member_count")
+        .and_then(Value::as_u64);
 
     let members: Vec<Value> = items(&members)
         .iter()
@@ -827,7 +833,9 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
             let count = if !members_available {
                 None
             } else if role_id == id {
-                Some(members.len())
+                // Everyone holds @everyone, including members past the first
+                // 1,000, so Discord's total is the better count.
+                Some(total.map_or(members.len(), |total| total as usize))
             } else {
                 Some(
                     members
@@ -951,10 +959,9 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
         "members": {
             "items": members,
             "available": members_available,
-            "complete": members_available && guild
-                .get("approximate_member_count")
-                .and_then(Value::as_u64)
-                .is_none_or(|total| total as usize <= MAX_MEMBERS),
+            "complete": members_available
+                && (members.len() < MAX_MEMBERS
+                    || total.is_none_or(|total| total as usize <= MAX_MEMBERS)),
         },
         "emojis": list("emojis", &["id", "name", "animated"]),
         "stickers": list("stickers", &["id", "name", "format_type"]),

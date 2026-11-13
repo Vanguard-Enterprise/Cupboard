@@ -7706,7 +7706,8 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
     assert_eq!(channels[1]["topic"], "Mods only");
     let roles = overview["roles"].as_array().unwrap();
     assert_eq!(roles[0]["everyone"], true);
-    assert_eq!(roles[0]["memberCount"], 2);
+    // @everyone counts Discord's total, not only the members read.
+    assert_eq!(roles[0]["memberCount"], 42);
     assert_eq!(roles[1]["name"], "Mods");
     assert_eq!(roles[1]["memberCount"], 1);
     let members = overview["members"]["items"].as_array().unwrap();
@@ -7719,6 +7720,7 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
         assert!(!overview.to_string().contains(secret));
     }
     assert_eq!(overview["members"]["available"], true);
+    assert_eq!(overview["stale"], false);
     assert_eq!(overview["emojis"].as_array().unwrap().len(), 1200);
     // A refused member list reads as unknown, never as zero members.
     let (status, hidden) = owner
@@ -7769,6 +7771,11 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
     let (status, stale) = owner.request("GET", path, json!(null)).await;
     assert_eq!(status, StatusCode::OK, "{stale}");
     assert_eq!(stale["guild"], overview["guild"]);
+    assert_eq!(stale["stale"], true);
+    // The saved reading keeps its own time, an hour before the fresh one.
+    assert!(
+        stale["fetchedAt"].as_i64().unwrap() < cached["fetchedAt"].as_i64().unwrap() - 3_000_000
+    );
     assert_eq!(mock.reads.load(Ordering::SeqCst), reads + 1);
     let (status, _) = owner.request("GET", path, json!(null)).await;
     assert_eq!(status, StatusCode::OK);

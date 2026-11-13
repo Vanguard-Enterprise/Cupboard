@@ -25,6 +25,7 @@ import {
 } from "recharts";
 import { apiRequest, type Identity } from "@/lib/api-client";
 import { discordPath } from "@/lib/dashboard-navigation";
+import { timeAgo } from "@/lib/status-page";
 import { DiscordGuildIcon } from "@/components/discord-guild-icon";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -98,6 +99,10 @@ export type GuildOverview = {
   channels: Channel[];
   roles: Role[];
   members: { items: Member[]; available: boolean; complete: boolean };
+  /** When Cupboard read this from Discord, in milliseconds. */
+  fetchedAt: number;
+  /** Discord couldn't refresh the guild, so this is an older saved reading. */
+  stale: boolean;
   emojis: { id: string; name: string; animated: boolean | null }[];
   stickers: { id: string; name: string }[];
   events: {
@@ -264,7 +269,7 @@ export function DiscordGuild({
           <Channels channels={data.channels} />
         </TabsContent>
         <TabsContent value="roles">
-          <Roles roles={roles} />
+          <Roles roles={roles} members={data.members} />
         </TabsContent>
         <TabsContent value="members">
           <Members
@@ -283,6 +288,12 @@ export function DiscordGuild({
 
 function GuildHeader({ overview }: { overview: GuildOverview }) {
   const { guild } = overview;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(tick);
+  }, []);
+  const age = timeAgo(overview.fetchedAt, now);
   const background = guild.bannerHash
     ? `${cdn}/banners/${guild.id}/${guild.bannerHash}.png?size=1024`
     : guild.homeHeaderHash
@@ -329,6 +340,13 @@ function GuildHeader({ overview }: { overview: GuildOverview }) {
                 {guild.description}
               </p>
             )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              <time dateTime={new Date(overview.fetchedAt).toISOString()}>
+                {overview.stale
+                  ? `Discord didn’t respond, so this is from ${age}.`
+                  : `Updated ${age}`}
+              </time>
+            </p>
           </div>
         </div>
         <dl className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
@@ -623,43 +641,56 @@ function RoleDot({ role }: { role: Pick<Role, "color"> }) {
   );
 }
 
-function Roles({ roles }: { roles: Role[] }) {
+function Roles({
+  roles,
+  members,
+}: {
+  roles: Role[];
+  members: GuildOverview["members"];
+}) {
   const yes = (value: boolean) => (value ? "Yes" : "No");
   return (
-    <div className="rounded-xl border border-border bg-card">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="pl-5">Role</TableHead>
-            <TableHead className="text-right">Members</TableHead>
-            <TableHead>Shown separately</TableHead>
-            <TableHead>Mentionable</TableHead>
-            <TableHead className="pr-5">Managed by an app</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {roles.map((role) => (
-            <TableRow key={role.id}>
-              <TableCell className="pl-5">
-                <span className="flex items-center gap-2 font-medium">
-                  <RoleDot role={role} />
-                  {role.name}
-                </span>
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {role.memberCount === null ? (
-                  <span className="text-muted-foreground">Unknown</span>
-                ) : (
-                  numbers.format(role.memberCount)
-                )}
-              </TableCell>
-              <TableCell>{yes(role.hoist)}</TableCell>
-              <TableCell>{yes(role.mentionable)}</TableCell>
-              <TableCell className="pr-5">{yes(role.managed)}</TableCell>
+    <div className="space-y-4">
+      {members.available && !members.complete && (
+        <p className="text-sm text-muted-foreground">
+          Role counts are based on the first 1,000 members.
+        </p>
+      )}
+      <div className="rounded-xl border border-border bg-card">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="pl-5">Role</TableHead>
+              <TableHead className="text-right">Members</TableHead>
+              <TableHead>Shown separately</TableHead>
+              <TableHead>Mentionable</TableHead>
+              <TableHead className="pr-5">Managed by an app</TableHead>
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {roles.map((role) => (
+              <TableRow key={role.id}>
+                <TableCell className="pl-5">
+                  <span className="flex items-center gap-2 font-medium">
+                    <RoleDot role={role} />
+                    {role.name}
+                  </span>
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {role.memberCount === null ? (
+                    <span className="text-muted-foreground">Unknown</span>
+                  ) : (
+                    numbers.format(role.memberCount)
+                  )}
+                </TableCell>
+                <TableCell>{yes(role.hoist)}</TableCell>
+                <TableCell>{yes(role.mentionable)}</TableCell>
+                <TableCell className="pr-5">{yes(role.managed)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }
