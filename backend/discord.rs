@@ -39,6 +39,10 @@ const MAX_BODY: usize = 64 * 1024;
 const GUILD_BODY: usize = 1 << 20;
 /// Guild pages call Discord only when the stored snapshot is older than this.
 const SNAPSHOT_FRESH_SECONDS: i64 = 600;
+/// The most time one request spends on Discord. The web proxy gives Discord
+/// routes 25 seconds, so a slow Discord answers with a clear error instead of
+/// the proxy's generic outage.
+const DISCORD_DEADLINE: Duration = Duration::from_secs(20);
 /// How long to stop calling Discord when it rate limits without saying.
 const DEFAULT_BACKOFF_SECONDS: i64 = 60;
 /// application/x-www-form-urlencoded leaves these unreserved bytes as they are.
@@ -348,38 +352,12 @@ async fn read<T: DeserializeOwned>(response: reqwest::Response, limit: usize) ->
     serde_json::from_slice(&bytes).map_err(|_| discord_failed())
 }
 
-async fn install(
-    State(pool): State<PgPool>,
-    config: Option<Extension<DiscordConfig>>,
-    auth: AuthSession,
-    session: Session,
-    headers: HeaderMap,
-    input: Result<Json<InstallInput>, axum::extract::rejection::JsonRejection>,
-) -> ApiResult<Json<Guild>> {
-    let (mut conn, org) = access(&pool, &auth, &session, &headers, "integrations.manage").await?;
-    let Some(Extension(DiscordConfig(config))) = config else {
-        return Err(unconfigured());
-    };
-    // The state is single use: remove it before anything can fail.
-    let pending: Option<PendingInstall> =
-        session.remove(INSTALL_KEY).await.map_err(|_| internal())?;
-    let Json(input) = input.map_err(|_| {
-        ApiError(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Discord returned an incomplete installation.",
-        )
-    })?;
-    if !pending.is_some_and(|pending| {
-        pending.state == input.state && pending.organization_id == org && pending.expires_at > now()
-    }) {
-        return Err(ApiError(
-            StatusCode::BAD_REQUEST,
-            "This Discord installation expired or was started elsewhere. Add the guild again.",
-        ));
-    }
-    if input.code.is_empty() || input.code.len() > 256 {
-        return Err(discord_failed());
-    }
+/// Exchanges the install's code, identifies the installer, and reads the
+/// guild Discord added the bot to.
+async fn exchange(
+    config: &Settings,
+    input: &InstallInput,
+) -> ApiResult<(IdOnly, String, DiscordGuild)> {
     let client = client()?;
     let token: TokenResponse = read(
         client
@@ -422,7 +400,7 @@ async fn install(
     let Some(guild_id) = token.guild.map(|guild| guild.id) else {
         return Err(discord_failed());
     };
-    if !snowflake(&guild_id) || input.guild_id.is_some_and(|id| id != guild_id) {
+    if !snowflake(&guild_id) || input.guild_id.as_ref().is_some_and(|id| *id != guild_id) {
         return Err(discord_failed());
     }
     let guild: DiscordGuild = read(
@@ -435,6 +413,45 @@ async fn install(
         GUILD_BODY,
     )
     .await?;
+    Ok((installer, guild_id, guild))
+}
+
+async fn install(
+    State(pool): State<PgPool>,
+    config: Option<Extension<DiscordConfig>>,
+    auth: AuthSession,
+    session: Session,
+    headers: HeaderMap,
+    input: Result<Json<InstallInput>, axum::extract::rejection::JsonRejection>,
+) -> ApiResult<Json<Guild>> {
+    let (mut conn, org) = access(&pool, &auth, &session, &headers, "integrations.manage").await?;
+    let Some(Extension(DiscordConfig(config))) = config else {
+        return Err(unconfigured());
+    };
+    // The state is single use: remove it before anything can fail.
+    let pending: Option<PendingInstall> =
+        session.remove(INSTALL_KEY).await.map_err(|_| internal())?;
+    let Json(input) = input.map_err(|_| {
+        ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Discord returned an incomplete installation.",
+        )
+    })?;
+    if !pending.is_some_and(|pending| {
+        pending.state == input.state && pending.organization_id == org && pending.expires_at > now()
+    }) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "This Discord installation expired or was started elsewhere. Add the guild again.",
+        ));
+    }
+    if input.code.is_empty() || input.code.len() > 256 {
+        return Err(discord_failed());
+    }
+    let (installer, guild_id, guild) =
+        tokio::time::timeout(DISCORD_DEADLINE, exchange(&config, &input))
+            .await
+            .map_err(|_| discord_failed())??;
     let name = guild.name.trim();
     if guild.id != guild_id || name.is_empty() || name.chars().count() > 100 {
         return Err(discord_failed());
@@ -695,8 +712,14 @@ async fn overview(
             .map(|s| respond(s, connected_at, true))
             .ok_or_else(unconfigured);
     };
+    // Waiting for another request's refresh counts toward the deadline too.
+    let deadline = tokio::time::Instant::now() + DISCORD_DEADLINE;
     let lock = config.refresh_lock(&id);
-    let _refreshing = lock.lock().await;
+    let Ok(_refreshing) = tokio::time::timeout_at(deadline, lock.lock()).await else {
+        return cached
+            .map(|s| respond(s, connected_at, true))
+            .ok_or_else(discord_unavailable);
+    };
     // Another request may have refreshed the guild while this one waited.
     let cached = match snapshot(&pool, &id).await? {
         Some(s) if s.age_seconds < SNAPSHOT_FRESH_SECONDS => {
@@ -704,7 +727,10 @@ async fn overview(
         }
         other => other.or(cached),
     };
-    match read_guild(&config, &id).await {
+    let read = tokio::time::timeout_at(deadline, read_guild(&config, &id))
+        .await
+        .unwrap_or_else(|_| Err(discord_unavailable()));
+    match read {
         Ok(data) => {
             let fetched_at = store(&pool, &id, &data).await?;
             Ok(respond(

@@ -540,6 +540,7 @@ it("forwards the page organization with Discord guild reads", async () => {
 it("forwards only the Discord install and bounded guild removal paths", async () => {
   const fetcher = vi.fn<typeof fetch>(async () => Response.json({}));
   vi.stubGlobal("fetch", fetcher);
+  const timeout = vi.spyOn(AbortSignal, "timeout");
   const post = (path: string) =>
     proxyApi(
       new Request(`http://localhost:5173/app-api/${path}`, {
@@ -568,6 +569,10 @@ it("forwards only the Discord install and bounded guild removal paths", async ()
   ])
     expect((await post(path)).status).toBe(404);
   expect(fetcher).toHaveBeenCalledTimes(4);
+  // The API spends up to 20 seconds on Discord, inside this budget.
+  expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([
+    25000, 25000, 25000, 25000,
+  ]);
   for (const call of fetcher.mock.calls)
     expect(new Headers(call[1]?.headers).get("x-cupboard-organization")).toBe(
       "org",

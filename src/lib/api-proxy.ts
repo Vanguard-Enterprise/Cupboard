@@ -197,9 +197,12 @@ export async function proxyApi(
       signal: AbortSignal.timeout(
         fileUpload || fileDownload || logoDownload || path.startsWith("files/")
           ? 60000
-          : path.startsWith("integrations/pelican") ||
+          : // Pelican and Discord routes wait on those services; the API gives
+            // Discord at most 20 seconds.
+            path.startsWith("integrations/pelican") ||
               path.startsWith("servers/pelican/") ||
-              path.includes("/panel/")
+              path.includes("/panel/") ||
+              path.startsWith("discord/")
             ? 25000
             : 15000,
       ),
