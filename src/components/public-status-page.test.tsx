@@ -1028,6 +1028,7 @@ describe("Public status page", () => {
       maintenance: 0,
       unknown: 0,
       latencyMs,
+      latencyCount: latencyMs === null ? 0 : 60,
     });
     vi.mocked(apiRequest).mockResolvedValueOnce({
       now,

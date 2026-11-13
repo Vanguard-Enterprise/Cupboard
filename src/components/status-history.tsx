@@ -8,6 +8,7 @@ import {
   bucketSeries,
   bucketTone,
   durationLabel,
+  meanLatency,
   statusLabel,
   timeParts,
   uptimeLabel,
@@ -150,6 +151,29 @@ function dayLabel(start: number, format: TimeFormat) {
   });
 }
 
+/**
+ * Arrow keys step through a chart's spans, Home and End jump to its ends;
+ * the first key starts from the newest. `first` is the oldest span shown.
+ */
+function stepThrough(
+  event: KeyboardEvent,
+  length: number,
+  first: number,
+  setActive: (update: (index: number | null) => number) => void,
+) {
+  const step =
+    event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+  if (event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    setActive(() => (event.key === "Home" ? first : length - 1));
+  } else if (step) {
+    event.preventDefault();
+    setActive((i) =>
+      Math.min(length - 1, Math.max(first, (i ?? length) + step)),
+    );
+  }
+}
+
 function bucketText(bucket: HealthBucket | undefined) {
   const tone = bucketTone(bucket);
   if (!bucket || tone === "empty") return "No data";
@@ -179,26 +203,13 @@ function DayStrip({
   const shown = active === null ? null : series[active];
   const strip = useRef<HTMLDivElement | null>(null);
   const keys = (event: KeyboardEvent) => {
-    const step =
-      event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
     // Narrow strips hide the oldest bars; keys stay on the ones shown.
     const bars = [...(strip.current?.children ?? [])];
     const first = Math.max(
       0,
       bars.findIndex((bar) => getComputedStyle(bar).display !== "none"),
     );
-    if (event.key === "Home" || event.key === "End") {
-      event.preventDefault();
-      setActive(event.key === "Home" ? first : series.length - 1);
-    } else if (step) {
-      event.preventDefault();
-      setActive((i) =>
-        Math.min(
-          series.length - 1,
-          Math.max(first, (i ?? series.length) + step),
-        ),
-      );
-    }
+    stepThrough(event, series.length, first, setActive);
   };
   return (
     <div>
@@ -271,10 +282,9 @@ function ResponseChart({
   const values = series.map((s) => s.bucket?.latencyMs ?? null);
   const measured = values.filter((v): v is number => v !== null);
   const top = niceMax(Math.max(...measured));
-  const average = Math.round(
-    measured.reduce((sum, v) => sum + v, 0) / measured.length,
-  );
+  const average = meanLatency(hours) ?? 0;
   const [active, setActive] = useState<number | null>(null);
+  const label = useId();
   const width = 240;
   const height = 64;
   const x = (i: number) => (i / (series.length - 1)) * width;
@@ -290,7 +300,9 @@ function ResponseChart({
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3">
-        <p className={cn(metaSize, "font-medium")}>Response time</p>
+        <p id={label} className={cn(metaSize, "font-medium")}>
+          Response time
+        </p>
         <p aria-live="polite" className={cn(metaText, "tabular-nums")}>
           {shown
             ? `${hourText(shown.start)}: ${
@@ -313,7 +325,13 @@ function ResponseChart({
           <span className="-mb-2.5">0</span>
         </div>
         <div
-          className="relative h-16"
+          tabIndex={0}
+          role="group"
+          aria-labelledby={label}
+          aria-describedby={`${label}-keys`}
+          onKeyDown={(event) => stepThrough(event, series.length, 0, setActive)}
+          onBlur={() => setActive(null)}
+          className={cn("relative h-16 rounded-xs", focusRing)}
           onMouseLeave={() => setActive(null)}
           onMouseMove={(event) => {
             const box = event.currentTarget.getBoundingClientRect();
@@ -398,6 +416,9 @@ function ResponseChart({
           <span>Now</span>
         </div>
       </div>
+      <span id={`${label}-keys`} className="sr-only">
+        Use the arrow keys to read each hour.
+      </span>
     </div>
   );
 }

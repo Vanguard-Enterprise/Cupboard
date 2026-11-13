@@ -25,13 +25,26 @@ const bucket = (start: number, counts: Partial<HealthBucket> = {}) => ({
   maintenance: 0,
   unknown: 0,
   latencyMs: null,
+  latencyCount: 0,
   ...counts,
 });
 const format = { timeZone: "UTC", locale: "en-US" };
 
 const history: TargetHistory = {
   now,
-  hours: [bucket(today + 14 * HOUR_MS, { operational: 60, latencyMs: 120 })],
+  // A full hour of fast checks, then this partial hour's one slow check.
+  hours: [
+    bucket(today + 14 * HOUR_MS, {
+      operational: 60,
+      latencyMs: 100,
+      latencyCount: 60,
+    }),
+    bucket(today + 15 * HOUR_MS, {
+      operational: 30,
+      latencyMs: 1000,
+      latencyCount: 1,
+    }),
+  ],
   days: [
     bucket(today, { operational: 900 }),
     bucket(today - DAY_MS, { operational: 1380, down: 60 }),
@@ -55,6 +68,25 @@ describe("TargetHistoryPanel", () => {
     expect(screen.getByText("24 hours")).toBeTruthy();
     expect(screen.getByText("90 days")).toBeTruthy();
     expect(screen.queryByText("Loading history")).toBeNull();
+  });
+
+  it("weights the response average by checks and reads each hour by keyboard", async () => {
+    render(<TargetHistoryPanel load={async () => history} format={format} />);
+    const chart = await screen.findByRole("group", { name: "Response time" });
+    const said = () =>
+      chart.parentElement!.parentElement!.querySelector("[aria-live]")!
+        .textContent;
+    // 60 checks at 100 ms and one at 1000 ms average 115, not 550.
+    expect(said()).toBe("Average 115 ms");
+    expect(chart.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(chart, { key: "End" });
+    expect(said()).toContain("1000 ms");
+    fireEvent.keyDown(chart, { key: "ArrowLeft" });
+    expect(said()).toContain("100 ms");
+    fireEvent.keyDown(chart, { key: "Home" });
+    expect(said()).toContain("No data");
+    fireEvent.blur(chart);
+    expect(said()).toBe("Average 115 ms");
   });
 
   it("offers Retry when the history can't load, and loads again", async () => {

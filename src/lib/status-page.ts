@@ -978,6 +978,8 @@ export type HealthBucket = {
   unknown: number;
   /** Mean URL response time in the span, when one was measured. */
   latencyMs: number | null;
+  /** How many response times `latencyMs` averages. */
+  latencyCount: number;
 };
 export type StatusIncident = {
   startedAt: number;
@@ -991,6 +993,21 @@ export type TargetHistory = {
   days: HealthBucket[];
   incidents: StatusIncident[];
 };
+
+/**
+ * Mean response time over several spans, each weighted by how many times it
+ * was measured, so a partial hour counts for what it holds. Null with none.
+ */
+export function meanLatency(buckets: HealthBucket[]) {
+  let total = 0;
+  let count = 0;
+  for (const b of buckets)
+    if (b.latencyMs !== null && b.latencyCount > 0) {
+      total += b.latencyMs * b.latencyCount;
+      count += b.latencyCount;
+    }
+  return count ? Math.round(total / count) : null;
+}
 
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 24 * HOUR_MS;

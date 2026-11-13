@@ -1354,32 +1354,42 @@ async fn probe(value: &str, allows: fn(IpAddr) -> bool) -> Probe {
     }
 }
 
-/// Probe URL targets independently of browser sessions. Claimed rows move their
-/// next check forward first, so replicas never probe the same target at once.
+/// Probe URL targets and sample history independently of browser sessions.
+/// Claimed rows move their next run forward first, so replicas never do the
+/// same work at once. The two run side by side: a backlog of slow URL probes
+/// never holds back the minute samples of every other target.
 pub async fn monitor(pool: PgPool) {
-    loop {
+    let probes = async {
         loop {
-            match check_due(&pool, crate::pelican::public_ip).await {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(_) => {
-                    eprintln!("Status page URL checks failed; retrying shortly.");
-                    break;
+            loop {
+                match check_due(&pool, crate::pelican::public_ip).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(_) => {
+                        eprintln!("Status page URL checks failed; retrying shortly.");
+                        break;
+                    }
                 }
             }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
+    };
+    let samples = async {
         loop {
-            match sample_due(&pool).await {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(_) => {
-                    eprintln!("Status page history sampling failed; retrying shortly.");
-                    break;
+            loop {
+                match sample_due(&pool).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(_) => {
+                        eprintln!("Status page history sampling failed; retrying shortly.");
+                        break;
+                    }
                 }
             }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
+    };
+    tokio::join!(probes, samples);
 }
 
 pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiResult<bool> {
@@ -1401,7 +1411,14 @@ pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiR
         .await;
     for (org, id, url, probe) in results {
         // A result only lands if the target still watches the same address.
+        // Like a sample, it waits for a save in progress, so a response time
+        // never lands under a target the save just re-pointed.
         let at = now();
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT 1 FROM status_pages WHERE organization_id=$1 FOR SHARE")
+            .bind(&org)
+            .execute(&mut *tx)
+            .await?;
         let landed = sqlx::query("UPDATE status_page_url_checks SET checked_at=$4,result=$5,status_code=$6,latency_ms=$7,error=$8 WHERE organization_id=$1 AND component_id=$2 AND url=$3")
             .bind(&org)
             .bind(&id)
@@ -1411,7 +1428,7 @@ pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiR
             .bind(probe.status_code)
             .bind(probe.latency_ms)
             .bind(probe.error)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?
             .rows_affected()
             > 0;
@@ -1421,9 +1438,10 @@ pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiR
                 .bind(&id)
                 .bind(at.div_euclid(HOUR_MS) * HOUR_MS)
                 .bind(i64::from(latency))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
     }
     Ok(true)
 }
@@ -1597,6 +1615,8 @@ struct HealthBucket {
     maintenance: i64,
     unknown: i64,
     latency_ms: Option<i64>,
+    /// How many response times `latency_ms` averages.
+    latency_count: i64,
 }
 #[derive(Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -1625,7 +1645,7 @@ async fn history_of(
     component: &str,
     now: i64,
 ) -> ApiResult<History> {
-    const COUNTS: &str = "sum(operational)::bigint AS operational,sum(degraded)::bigint AS degraded,sum(down)::bigint AS down,sum(maintenance)::bigint AS maintenance,sum(unknown)::bigint AS unknown,CASE WHEN sum(latency_count)>0 THEN (sum(latency_total)/sum(latency_count))::bigint END AS latency_ms";
+    const COUNTS: &str = "sum(operational)::bigint AS operational,sum(degraded)::bigint AS degraded,sum(down)::bigint AS down,sum(maintenance)::bigint AS maintenance,sum(unknown)::bigint AS unknown,CASE WHEN sum(latency_count)>0 THEN (sum(latency_total)/sum(latency_count))::bigint END AS latency_ms,sum(latency_count)::bigint AS latency_count";
     let this_hour = now.div_euclid(HOUR_MS) * HOUR_MS;
     let hours = sqlx::query_as(&format!(
         "SELECT hour AS start,{COUNTS} FROM status_page_health_hours WHERE organization_id=$1 AND component_id=$2 AND hour>$3 GROUP BY hour ORDER BY hour"

@@ -44,6 +44,7 @@ import {
   type MaintenanceWindow,
   type StatusComponent,
   type StatusPageState,
+  meanLatency,
 } from "./status-page";
 
 const component = (
@@ -759,7 +760,19 @@ describe("status history helpers", () => {
     maintenance: 0,
     unknown: 0,
     latencyMs: null,
+    latencyCount: 0,
     ...counts,
+  });
+
+  it("weights the mean response time by how many checks each span holds", () => {
+    expect(meanLatency([])).toBeNull();
+    expect(
+      meanLatency([
+        bucket(0, { latencyMs: 100, latencyCount: 60 }),
+        bucket(1, { latencyMs: 1000, latencyCount: 1 }),
+        bucket(2, {}),
+      ]),
+    ).toBe(115);
   });
 
   it("counts seconds, then minutes, for the Updated line", () => {

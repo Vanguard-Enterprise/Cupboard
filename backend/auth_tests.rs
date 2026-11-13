@@ -6786,6 +6786,16 @@ async fn status_page_is_scoped_authorized_revisioned_and_schedules_maintenance()
             .unwrap()
     );
     responder.abort();
+    // The response time lands in the target's history with its result.
+    let measured: i32 = sqlx::query_scalar(
+        "SELECT latency_count FROM status_page_health_hours WHERE organization_id=$1 AND component_id=$2",
+    )
+    .bind(&org)
+    .bind(&website_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(measured, 1);
     let (_, checked) = owner.request("GET", "status-page", json!(null)).await;
     assert_eq!(checked["components"][0]["health"], "operational");
     assert!(
