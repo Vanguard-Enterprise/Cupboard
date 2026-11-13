@@ -985,6 +985,16 @@ describe("Status page admin data safety", () => {
     );
     expect(bar.textContent).toContain("Check the merged changes");
     expect(bar.querySelector(".truncate")).toBeNull();
+    // Pinned at every width, so a long list scrolls inside the bar's cap and
+    // Save stays on screen (codex).
+    expect(bar.className).toContain("max-h-[50dvh]");
+    const list = within(bar).getByRole("group", { name: "Merged changes" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(
+      within(bar)
+        .getByRole("button", { name: "Save" })
+        .closest('[role="group"]'),
+    ).toBeNull();
   });
 
   it("folds a long merge notice on phones behind Show all (a11y D-71)", async () => {

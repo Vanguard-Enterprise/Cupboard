@@ -4050,9 +4050,10 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               // The pill's corners follow the buttons' inside it: its radius is
               // theirs plus the 8 pixels between them.
               quietBar ? "p-2 pl-4" : "px-4 py-3",
-              // It never takes more than half the screen: the merge list
-              // scrolls inside, title and actions stay (a11y D-71).
-              "max-sm:flex max-sm:max-h-[50dvh] max-sm:flex-col",
+              // Fixed, it never takes more than half the screen at any width:
+              // the merge list scrolls inside, title and actions stay
+              // (a11y D-71).
+              "flex max-h-[50dvh] flex-col",
             )}
           >
             <div
@@ -4060,17 +4061,14 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 "flex flex-wrap items-center gap-x-4 gap-y-3",
                 quietBar
                   ? "flex-nowrap"
-                  : "max-sm:min-h-0 max-sm:flex-col max-sm:flex-nowrap max-sm:items-stretch",
+                  : "min-h-0 flex-col flex-nowrap items-stretch",
               )}
             >
               <div
                 className={cn(
                   "min-w-0 flex-1",
-                  !quietBar && "basis-56",
-                  // A merge warning gets the bar's full width, actions below.
-                  notice?.warn && !conflicted && "basis-full",
-                  !quietBar &&
-                    "max-sm:flex max-sm:min-h-0 max-sm:basis-auto max-sm:flex-col",
+                  // The report above, the actions below it.
+                  !quietBar && "flex min-h-0 basis-auto flex-col",
                 )}
               >
                 {/* The plain "Unsaved changes" summary is not spoken: the
@@ -4084,10 +4082,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     Unsaved changes
                   </p>
                 )}
-                <div
-                  aria-live="polite"
-                  className="max-sm:flex max-sm:min-h-0 max-sm:flex-col"
-                >
+                <div aria-live="polite" className="flex min-h-0 flex-col">
                   {conflicted ? (
                     <>
                       <p className="flex items-center gap-1.5 text-sm font-medium text-warning">
@@ -4142,9 +4137,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         </p>
                       )}
                       {(() => {
-                        // On phones the bar is pinned over the page, so the list
-                        // scrolls inside the bar's cap, and a long one shows
-                        // three decisions until Show all (a11y D-71).
+                        // The bar is pinned over the page, so the list scrolls
+                        // inside its cap; on phones a long one shows three
+                        // decisions until Show all (a11y D-71).
                         const items = notice.items ?? [];
                         const folds = phoneScreen && items.length > 3;
                         const open = !folds || openNotice === notice;
@@ -4158,7 +4153,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                             ))}
                           </ul>
                         );
-                        if (!phoneScreen) return list;
                         return (
                           <>
                             <ScrollCue label="Merged changes">{list}</ScrollCue>
@@ -4202,7 +4196,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               <div
                 className={cn(
                   "flex gap-1.5 sm:ml-auto",
-                  !quietBar && "max-sm:w-full",
+                  !quietBar && "shrink-0 max-sm:w-full sm:self-end",
                 )}
               >
                 {errorCount > 0 && (
