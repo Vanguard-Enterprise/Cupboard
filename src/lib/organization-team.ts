@@ -24,6 +24,12 @@ export const permissionDefinitions = [
     group: "Servers",
   },
   {
+    id: "community.view",
+    label: "View community",
+    description: "See the Discord guilds the organization owns or manages.",
+    group: "Community",
+  },
+  {
     id: "players.moderate",
     label: "Moderate players",
     description: "Review reports and apply moderation actions.",

@@ -2,6 +2,7 @@ pub mod alerts;
 pub mod auth;
 #[cfg(any(debug_assertions, test))]
 pub mod dev_seed;
+pub mod discord;
 mod files;
 mod logos;
 pub mod storage;

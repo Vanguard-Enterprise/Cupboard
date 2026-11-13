@@ -142,6 +142,7 @@ describe("organization profile", () => {
       "/dashboard/infrastructure/machines",
       "/dashboard/infrastructure/maintenance",
       "/dashboard/files",
+      "/dashboard/community/discord",
       "/dashboard/organization/team/users",
       "/dashboard/organization/team/roles",
       "/dashboard/organization/integrations/connections",

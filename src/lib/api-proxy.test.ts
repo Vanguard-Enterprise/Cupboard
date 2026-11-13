@@ -518,3 +518,63 @@ it("forwards status page logo uploads and serves public logos as cacheable image
   ])
     expect((await get(invalid)).status).toBe(404);
 });
+
+it("forwards the page organization with Discord guild reads", async () => {
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json([]));
+  vi.stubGlobal("fetch", fetcher);
+  const response = await proxyApi(
+    new Request("http://localhost:5173/app-api/discord/guilds", {
+      headers: { "x-cupboard-organization": "org" },
+    }),
+    "discord/guilds",
+  );
+  expect(response.status).toBe(200);
+  expect(fetcher.mock.calls[0][0]).toMatch(/\/app-api\/discord\/guilds$/);
+  expect(
+    new Headers(fetcher.mock.calls[0][1]?.headers).get(
+      "x-cupboard-organization",
+    ),
+  ).toBe("org");
+});
+
+it("forwards only the Discord install and bounded guild removal paths", async () => {
+  const fetcher = vi.fn<typeof fetch>(async () => Response.json({}));
+  vi.stubGlobal("fetch", fetcher);
+  const timeout = vi.spyOn(AbortSignal, "timeout");
+  const post = (path: string) =>
+    proxyApi(
+      new Request(`http://localhost:5173/app-api/${path}`, {
+        method: "POST",
+        headers: {
+          origin: "http://localhost:5173",
+          "content-type": "application/json",
+          "x-cupboard-request": "1",
+          "x-cupboard-organization": "org",
+        },
+        body: "{}",
+      }),
+      path,
+    );
+  for (const path of [
+    "discord/install/start",
+    "discord/install",
+    "discord/guilds/130000000000000001/remove",
+    "discord/guilds/130000000000000001",
+  ])
+    expect((await post(path)).status).toBe(200);
+  for (const path of [
+    "discord/guilds/abc/remove",
+    "discord/guilds/130000000000000001/delete",
+    "discord/install/finish",
+  ])
+    expect((await post(path)).status).toBe(404);
+  expect(fetcher).toHaveBeenCalledTimes(4);
+  // The API spends up to 20 seconds on Discord, inside this budget.
+  expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([
+    25000, 25000, 25000, 25000,
+  ]);
+  for (const call of fetcher.mock.calls)
+    expect(new Headers(call[1]?.headers).get("x-cupboard-organization")).toBe(
+      "org",
+    );
+});

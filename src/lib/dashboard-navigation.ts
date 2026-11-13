@@ -118,16 +118,7 @@ export const dashboardNavigation: NavigationGroup[] = [
       {
         title: "Discord",
         icon: "discord",
-        sections: [
-          {
-            id: "discord-connections",
-            title: "Guilds & roles",
-          },
-          {
-            id: "discord-automation",
-            title: "Messages & automation",
-          },
-        ],
+        id: "discord",
       },
     ],
   },
@@ -220,6 +211,7 @@ export const machinesPath = "/dashboard/infrastructure/machines";
 export const maintenancePath = "/dashboard/infrastructure/maintenance";
 export const filesPath = "/dashboard/files";
 export const serversPath = "/dashboard/servers";
+export const discordPath = "/dashboard/community/discord";
 export const profilePath = "/dashboard/organization/settings/profile";
 export const usagePath = "/dashboard/organization/settings/usage";
 export const credentialsPath =
@@ -238,6 +230,7 @@ export function navigationHref(id: string): string | undefined {
   if (id === "maintenance") return maintenancePath;
   if (id === "file-library") return filesPath;
   if (id === "servers") return serversPath;
+  if (id === "discord") return discordPath;
   if (id === "connections") return connectionsPath;
   if (id === "organization") return profilePath;
   if (id === "billing") return usagePath;

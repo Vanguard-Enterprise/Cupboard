@@ -25,6 +25,9 @@ const paths = new Set([
   "files/folders",
   "public-files/download",
   "servers/health",
+  "discord/guilds",
+  "discord/install/start",
+  "discord/install",
   "organizations",
   "invitations/accept",
   "alerts",
@@ -81,6 +84,7 @@ export async function proxyApi(
     !/^status-page\/maintenance\/[0-9a-f-]{36}(?:\/(?:complete|remove))?$/.test(
       path,
     ) &&
+    !/^discord\/guilds\/[0-9]{17,20}(?:\/remove)?$/.test(path) &&
     !(
       /^public\/status\/[a-z0-9-]{1,40}(?:\/components\/[0-9a-f-]{36}\/history)?$/.test(
         path,
@@ -113,7 +117,8 @@ export async function proxyApi(
     path.startsWith("alerts/") ||
     path === "organization/export" ||
     path === "status-page" ||
-    path.startsWith("status-page/")
+    path.startsWith("status-page/") ||
+    path.startsWith("discord/")
   ) {
     const organization = request.headers.get("x-cupboard-organization");
     if (organization) headers.set("x-cupboard-organization", organization);
@@ -194,9 +199,12 @@ export async function proxyApi(
       signal: AbortSignal.timeout(
         fileUpload || fileDownload || logoDownload || path.startsWith("files/")
           ? 60000
-          : path.startsWith("integrations/pelican") ||
+          : // Pelican and Discord routes wait on those services; the API gives
+            // Discord at most 20 seconds.
+            path.startsWith("integrations/pelican") ||
               path.startsWith("servers/pelican/") ||
-              path.includes("/panel/")
+              path.includes("/panel/") ||
+              path.startsWith("discord/")
             ? 25000
             : 15000,
       ),

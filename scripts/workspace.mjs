@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:net";
+import { relayPort } from "./discord.mjs";
 
 export function workspaceIdentity(cwd = process.cwd()) {
   return `cupboard-dev-${createHash("sha256").update(realpathSync(cwd)).digest("hex").slice(0, 16)}`;
@@ -72,10 +73,15 @@ export async function prepareWorkspace(cwd = process.cwd(), env = process.env) {
   const project = workspaceIdentity(cwd);
   const saved = readWorkspace(cwd);
   const seed = Number.parseInt(project.slice(-4), 16) % 12000;
-  const ports = new Set();
+  // The Discord install relay always listens on its own fixed port.
+  const ports = new Set([relayPort]);
   async function choose(requested, initial) {
     let port = validPort(requested ?? initial);
     if (requested !== undefined) {
+      if (port === relayPort)
+        throw new Error(
+          `Port ${relayPort} is reserved for the Discord relay. Choose a different CUPBOARD_PORT / CUPBOARD_API_BIND, or correct .dev-stack/workspace.json.`,
+        );
       if (ports.has(port) || !(await portAvailable(port)))
         throw new Error(
           `Port ${port} is already in use. Stop its process or choose a different CUPBOARD_PORT / CUPBOARD_API_BIND.`,
