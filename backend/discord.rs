@@ -39,10 +39,17 @@ const MAX_BODY: usize = 64 * 1024;
 const GUILD_BODY: usize = 1 << 20;
 /// Guild pages call Discord only when the stored snapshot is older than this.
 const SNAPSHOT_FRESH_SECONDS: i64 = 600;
-/// The most time one request spends on Discord. The web proxy gives Discord
-/// routes 25 seconds, so a slow Discord answers with a clear error instead of
-/// the proxy's generic outage.
+/// The most time a guild page spends on Discord, including waiting for
+/// another request's refresh. The web proxy gives Discord routes 25 seconds,
+/// so a slow Discord answers with a clear error instead of the proxy's
+/// generic outage.
 const DISCORD_DEADLINE: Duration = Duration::from_secs(20);
+/// Installs give Discord this long for the code exchange, the installer
+/// lookup, and the guild read together. Revoking the installer's token has
+/// its own budget on top, so a slow Discord never skips it, and the total
+/// still fits the proxy's 25 seconds.
+const INSTALL_DEADLINE: Duration = Duration::from_secs(15);
+const REVOKE_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long to stop calling Discord when it rate limits without saying.
 const DEFAULT_BACKOFF_SECONDS: i64 = 60;
 /// application/x-www-form-urlencoded leaves these unreserved bytes as they are.
@@ -352,41 +359,59 @@ async fn read<T: DeserializeOwned>(response: reqwest::Response, limit: usize) ->
     serde_json::from_slice(&bytes).map_err(|_| discord_failed())
 }
 
+/// Runs install work against the install deadline.
+async fn by<T>(
+    deadline: tokio::time::Instant,
+    work: impl Future<Output = ApiResult<T>>,
+) -> ApiResult<T> {
+    tokio::time::timeout_at(deadline, work)
+        .await
+        .unwrap_or_else(|_| Err(discord_failed()))
+}
+
 /// Exchanges the install's code, identifies the installer, and reads the
 /// guild Discord added the bot to.
 async fn exchange(
     config: &Settings,
     input: &InstallInput,
 ) -> ApiResult<(IdOnly, String, DiscordGuild)> {
+    let deadline = tokio::time::Instant::now() + INSTALL_DEADLINE;
     let client = client()?;
-    let token: TokenResponse = read(
-        client
-            .post(format!("{}/oauth2/token", config.api))
-            .basic_auth(&config.application_id, Some(&config.client_secret))
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(form(&[
-                ("grant_type", "authorization_code"),
-                ("code", &input.code),
-                ("redirect_uri", &config.redirect_uri),
-            ]))
-            .send()
-            .await
-            .map_err(|_| discord_failed())?,
-        GUILD_BODY,
-    )
+    let token: TokenResponse = by(deadline, async {
+        read(
+            client
+                .post(format!("{}/oauth2/token", config.api))
+                .basic_auth(&config.application_id, Some(&config.client_secret))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(form(&[
+                    ("grant_type", "authorization_code"),
+                    ("code", &input.code),
+                    ("redirect_uri", &config.redirect_uri),
+                ]))
+                .send()
+                .await
+                .map_err(|_| discord_failed())?,
+            GUILD_BODY,
+        )
+        .await
+    })
     .await?;
-    let installer: ApiResult<IdOnly> = read(
-        client
-            .get(format!("{}/users/@me", config.api))
-            .bearer_auth(&token.access_token)
-            .send()
-            .await
-            .map_err(|_| discord_failed())?,
-        MAX_BODY,
-    )
+    let installer: ApiResult<IdOnly> = by(deadline, async {
+        read(
+            client
+                .get(format!("{}/users/@me", config.api))
+                .bearer_auth(&token.access_token)
+                .send()
+                .await
+                .map_err(|_| discord_failed())?,
+            MAX_BODY,
+        )
+        .await
+    })
     .await;
-    // Cupboard needs the operator's token only for this request.
-    let _ = client
+    // Cupboard needs the operator's token only for this request. Revoking
+    // it runs outside the install deadline, so a slow lookup can't skip it.
+    let revoke = client
         .post(format!("{}/oauth2/token/revoke", config.api))
         .basic_auth(&config.application_id, Some(&config.client_secret))
         .header("content-type", "application/x-www-form-urlencoded")
@@ -394,8 +419,8 @@ async fn exchange(
             ("token", &token.access_token),
             ("token_type_hint", "access_token"),
         ]))
-        .send()
-        .await;
+        .send();
+    let _ = tokio::time::timeout(REVOKE_TIMEOUT, revoke).await;
     let installer = installer?;
     let Some(guild_id) = token.guild.map(|guild| guild.id) else {
         return Err(discord_failed());
@@ -403,15 +428,18 @@ async fn exchange(
     if !snowflake(&guild_id) || input.guild_id.as_ref().is_some_and(|id| *id != guild_id) {
         return Err(discord_failed());
     }
-    let guild: DiscordGuild = read(
-        client
-            .get(format!("{}/guilds/{guild_id}?with_counts=true", config.api))
-            .header("authorization", format!("Bot {}", config.bot_token))
-            .send()
-            .await
-            .map_err(|_| discord_failed())?,
-        GUILD_BODY,
-    )
+    let guild: DiscordGuild = by(deadline, async {
+        read(
+            client
+                .get(format!("{}/guilds/{guild_id}?with_counts=true", config.api))
+                .header("authorization", format!("Bot {}", config.bot_token))
+                .send()
+                .await
+                .map_err(|_| discord_failed())?,
+            GUILD_BODY,
+        )
+        .await
+    })
     .await?;
     Ok((installer, guild_id, guild))
 }
@@ -448,10 +476,7 @@ async fn install(
     if input.code.is_empty() || input.code.len() > 256 {
         return Err(discord_failed());
     }
-    let (installer, guild_id, guild) =
-        tokio::time::timeout(DISCORD_DEADLINE, exchange(&config, &input))
-            .await
-            .map_err(|_| discord_failed())??;
+    let (installer, guild_id, guild) = exchange(&config, &input).await?;
     let name = guild.name.trim();
     if guild.id != guild_id || name.is_empty() || name.chars().count() > 100 {
         return Err(discord_failed());
