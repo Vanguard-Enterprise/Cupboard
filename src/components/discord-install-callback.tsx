@@ -25,6 +25,15 @@ export function DiscordInstallCallback({
 }: Callback & { identity: Identity }) {
   const { push } = useGuardedNavigation();
   const started = useRef(false);
+  // Tracks the page, not one effect run: under StrictMode the effect runs
+  // twice but sends one request, whose result must still be handled.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const initial =
     error === "access_denied"
       ? "The bot wasn’t added because the installation was cancelled in Discord."
@@ -42,16 +51,18 @@ export function DiscordInstallCallback({
       { code, state, ...(guildId ? { guildId } : {}) },
       organization,
     )
-      .then((guild) =>
-        push(`${discordPath}?added=${encodeURIComponent(guild.id)}`),
-      )
-      .catch((cause) =>
-        setFailure(
-          cause instanceof Error
-            ? cause.message
-            : "The request could not be completed.",
-        ),
-      );
+      .then((guild) => {
+        if (mounted.current)
+          push(`${discordPath}?added=${encodeURIComponent(guild.id)}`);
+      })
+      .catch((cause) => {
+        if (mounted.current)
+          setFailure(
+            cause instanceof Error
+              ? cause.message
+              : "The request could not be completed.",
+          );
+      });
   }, [initial, code, state, guildId, organization, push]);
 
   const shown = initial || failure;

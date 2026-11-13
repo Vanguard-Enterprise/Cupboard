@@ -100,7 +100,8 @@ export function DiscordGuilds({
         {},
         organization,
       );
-      window.location.assign(url);
+      // Leaving the page while Discord's URL loads cancels the install.
+      if (mounted.current) window.location.assign(url);
     } catch (cause) {
       if (mounted.current) {
         setAddError(message(cause));

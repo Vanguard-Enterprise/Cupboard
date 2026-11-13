@@ -113,7 +113,15 @@ const overview: GuildOverview = {
   },
   emojis: [],
   stickers: [],
-  events: [],
+  events: [
+    {
+      id: "e1",
+      name: "Force wipe",
+      startsAt: "2027-03-05T18:30:00Z",
+      status: 1,
+      userCount: 12,
+    },
+  ],
   threads: [{ id: "t1", name: "Wipe day", messageCount: 7 }],
   fetchedAt: Date.now() - 3 * 60_000,
   stale: false,
@@ -151,6 +159,10 @@ it("shows the guild's details, channels, roles, and members", async () => {
 
   await user.click(screen.getByRole("tab", { name: "Emojis and events" }));
   expect(screen.getByText("Wipe day")).toBeTruthy();
+  // Event starts show the time, not only the day.
+  expect(
+    screen.getByText("Force wipe").nextElementSibling!.textContent,
+  ).toMatch(/\d{1,2}:30\s[AP]M .+, 12 interested$/);
 });
 
 it("shows member counts as unknown when Discord withholds the member list", async () => {

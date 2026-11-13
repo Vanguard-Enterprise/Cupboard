@@ -117,6 +117,15 @@ export type GuildOverview = {
 
 const numbers = new Intl.NumberFormat("en-US");
 const dates = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" });
+// Event starts carry the time and zone, so operators know when to attend.
+const times = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
 const days = new Intl.DateTimeFormat("en-US", {
   month: "short",
   day: "numeric",
@@ -869,7 +878,7 @@ function Extras({ overview }: { overview: GuildOverview }) {
               >
                 <span className="font-medium">{event.name}</span>
                 <span className="shrink-0 text-muted-foreground tabular-nums">
-                  {event.startsAt ? dates.format(new Date(event.startsAt)) : ""}
+                  {event.startsAt ? times.format(new Date(event.startsAt)) : ""}
                   {event.userCount !== null &&
                     `, ${numbers.format(event.userCount)} interested`}
                 </span>

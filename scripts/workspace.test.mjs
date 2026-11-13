@@ -85,6 +85,9 @@ describe("worktree isolation", () => {
     await expect(
       prepareWorkspace(directory(), { CUPBOARD_PORT: "0" }),
     ).rejects.toThrow("Development ports");
+    await expect(
+      prepareWorkspace(directory(), { CUPBOARD_PORT: "21700" }),
+    ).rejects.toThrow("reserved for the Discord relay");
     expect(databasePort("127.0.0.1:55432\n")).toBe(55432);
     expect(() => databasePort("0.0.0.0:55432")).toThrow("PostgreSQL port");
   });

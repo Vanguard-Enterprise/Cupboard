@@ -7196,7 +7196,8 @@ async fn discord_guilds_are_scoped_to_the_organization_and_need_community_view()
 
 #[derive(Clone, Default)]
 struct DiscordMock {
-    revoked: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    /// User tokens Cupboard revoked with the application's credentials.
+    revoked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     left: std::sync::Arc<std::sync::atomic::AtomicU16>,
     /// 0 leaves normally, 1 fails, 2 answers that the bot already left.
     leave_mode: std::sync::Arc<std::sync::atomic::AtomicU16>,
@@ -7250,8 +7251,28 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
             _ => StatusCode::UNAUTHORIZED.into_response(),
         }
     }
-    async fn revoke(State(mock): State<DiscordMock>) -> axum::response::Response {
-        mock.revoked.fetch_add(1, Ordering::SeqCst);
+    async fn revoke(
+        State(mock): State<DiscordMock>,
+        headers: HeaderMap,
+        body: String,
+    ) -> axum::response::Response {
+        // Basic base64("130000000000000099:client-secret-value")
+        let expected = "Basic MTMwMDAwMDAwMDAwMDAwMDk5OmNsaWVudC1zZWNyZXQtdmFsdWU=";
+        let token = body
+            .split('&')
+            .find_map(|field| field.strip_prefix("token="))
+            .map(str::to_owned);
+        if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(expected)
+            || !body
+                .split('&')
+                .any(|field| field == "token_type_hint=access_token")
+        {
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+        let Some(token) = token else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        mock.revoked.lock().unwrap().push(token);
         axum::Json(json!({})).into_response()
     }
     async fn guild(
@@ -7509,7 +7530,8 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
     assert_eq!(guild["iconHash"], format!("a_{}", "0f".repeat(16)));
     assert_eq!(guild["bannerHash"], "0a".repeat(16));
     assert_eq!(guild["homeHeaderHash"], "0b".repeat(16));
-    assert_eq!(mock.revoked.load(Ordering::SeqCst), 1);
+    // The installer's own token is revoked, with the application's credentials.
+    assert_eq!(*mock.revoked.lock().unwrap(), ["user-access-owner"]);
     responses.push(guild.to_string());
     assert_eq!(
         owner
@@ -7535,7 +7557,8 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
             .0,
         StatusCode::NOT_FOUND
     );
-    // A state started in one organization is refused after switching to another.
+    // A state is bound to the session's organization: a header naming
+    // another organization is refused before the state is read.
     let state = install_state(
         &owner
             .request("POST", "discord/install/start", json!({}))
@@ -7558,6 +7581,28 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
             .0,
         StatusCode::CONFLICT
     );
+    // The same state is refused after the operator switches organizations,
+    // and Discord never sees the code.
+    let first = owner.organization.clone();
+    owner.create_organization().await;
+    assert_ne!(owner.organization, first);
+    assert_eq!(
+        owner
+            .request(
+                "POST",
+                "discord/install",
+                json!({"code":"owner-code","state":state}),
+            )
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(mock.revoked.lock().unwrap().len(), 1);
+    let (status, _) = owner
+        .request("POST", "auth/organization", json!({"id":first}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    owner.organization = first;
 
     let state = install_state(
         &other
@@ -7574,6 +7619,10 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
         .await;
     assert_eq!(status, StatusCode::OK, "{managed}");
     assert_eq!(managed["access"], "manager");
+    assert_eq!(
+        *mock.revoked.lock().unwrap(),
+        ["user-access-owner", "user-access-manager"]
+    );
     let (_, owner_list) = owner.request("GET", "discord/guilds", json!(null)).await;
     assert_eq!(owner_list.as_array().unwrap().len(), 1);
     assert_eq!(owner_list[0]["access"], "owner");
