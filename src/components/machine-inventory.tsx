@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { apiRequest, type Identity } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton, SkeletonRows } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -378,9 +378,23 @@ export function MachineInventory({ identity }: { identity: Identity }) {
             </p>
           )}
           {!machines && !error && (
-            <p role="status" className="text-sm text-muted-foreground">
-              Loading machines...
-            </p>
+            // The shape of the list or empty state that replaces it, so a
+            // quick load never flashes text.
+            <div className="space-y-5">
+              {/* The toolbar: search on the left, two filters on the right. */}
+              <div
+                aria-hidden="true"
+                className="flex flex-wrap items-center gap-3"
+              >
+                <Skeleton className="h-10 w-full md:w-72 lg:mr-auto" />
+                <Skeleton className="h-10 flex-1 sm:w-44 sm:flex-none" />
+                <Skeleton className="h-10 flex-1 sm:w-44 sm:flex-none" />
+              </div>
+              <SkeletonRows
+                label="Loading machines"
+                className="rounded-none border-x-0"
+              />
+            </div>
           )}
           {machines && (
             <div className="space-y-5">

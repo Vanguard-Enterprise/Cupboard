@@ -121,22 +121,24 @@ describe("Status page admin", () => {
     await user.click(screen.getByRole("tab", { name: "Settings" }));
     await user.type(screen.getByLabelText("Footer text"), "Draft footer");
     await user.click(screen.getByRole("tab", { name: "Overview" }));
-    await user.click(
-      screen.getByRole("button", { name: "Post an announcement" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Post announcement" }));
     const dialog = await screen.findByRole("dialog");
-    await user.type(
-      within(dialog).getByLabelText("Announcement"),
-      "Wipe on Thursday.",
-    );
+    // Post is never disabled: an empty post says what is missing instead.
+    const calls = vi.mocked(apiRequest).mock.calls.length;
+    await user.click(within(dialog).getByRole("button", { name: "Post" }));
+    const field = within(dialog).getByLabelText("Announcement");
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+    expect(within(dialog).getByText(/Write the announcement/)).toBeTruthy();
+    expect(document.activeElement).toBe(field);
+    expect(vi.mocked(apiRequest).mock.calls.length).toBe(calls);
+    await user.type(field, "Wipe on Thursday.");
+    expect(field.getAttribute("aria-invalid")).toBeNull();
     vi.mocked(apiRequest).mockResolvedValueOnce({
       ...live,
       revision: 3,
       announcement: "Wipe on Thursday.",
     });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Post announcement" }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: "Post" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -148,10 +150,176 @@ describe("Status page admin", () => {
       ),
     );
     expect(await screen.findByText("Wipe on Thursday.")).toBeTruthy();
-    // The drafted footer is still waiting for Save changes.
+    // The drafted footer is still waiting for Save.
     expect(
       screen.getByRole("region", { name: "Unsaved changes" }).textContent,
     ).toContain("Footer text");
+  });
+
+  it("styles an announcement and clears it from the card", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...live,
+      announcement: "Wipe on Thursday.",
+    });
+    mount();
+    await ready();
+    const card = screen.getByRole("region", { name: /^Announcement/ });
+    await user.click(
+      within(card).getByRole("button", { name: "Edit announcement" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Edit announcement",
+    });
+    // Only the text, its icon, and its color: no label, counter, or Remove.
+    expect(within(dialog).queryByText("Announcement")).toBeNull();
+    expect(within(dialog).queryByText(/of 500/)).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /Remove/ })).toBeNull();
+    await user.click(
+      within(dialog).getByRole("radio", { name: "Maintenance" }),
+    );
+    await user.click(within(dialog).getByRole("radio", { name: "Amber" }));
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...live,
+      revision: 3,
+      announcement: "Wipe on Thursday.",
+      announcementIcon: "wrench",
+      announcementTone: "warning",
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Update" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({
+          announcement: "Wipe on Thursday.",
+          announcementIcon: "wrench",
+          announcementTone: "warning",
+        }),
+        "org-one",
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...live,
+      revision: 4,
+      announcement: "",
+      announcementIcon: "wrench",
+      announcementTone: "warning",
+    });
+    await user.click(
+      within(card).getByRole("button", { name: "Clear announcement" }),
+    );
+    // Clearing asks first; Cancel changes nothing.
+    const confirm = await screen.findByRole("alertdialog", {
+      name: "Clear the announcement?",
+    });
+    expect(confirm.textContent).not.toContain("Players stop seeing it");
+    const calls = vi.mocked(apiRequest).mock.calls.length;
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(vi.mocked(apiRequest).mock.calls.length).toBe(calls);
+    await user.click(
+      within(card).getByRole("button", { name: "Clear announcement" }),
+    );
+    await user.click(
+      within(
+        await screen.findByRole("alertdialog", {
+          name: "Clear the announcement?",
+        }),
+      ).getByRole("button", { name: "Clear announcement" }),
+    );
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({ announcement: "" }),
+        "org-one",
+      ),
+    );
+    expect(await within(card).findByText("No announcement")).toBeTruthy();
+    // Empty, the card's middle holds the way to post one.
+    expect(
+      within(card).getByRole("button", { name: "Post announcement" }),
+    ).toBeTruthy();
+    expect(
+      within(card).queryByRole("button", { name: "Clear announcement" }),
+    ).toBeNull();
+  });
+
+  it("titles the top bar with the page name until the operator writes one", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    const branding = screen.getByRole("region", { name: "Branding" });
+    const title = within(branding).getByLabelText("Title") as HTMLInputElement;
+    // It comes first in Branding, before the logo.
+    expect(
+      title.compareDocumentPosition(within(branding).getByText("Logo")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(title.value).toBe("");
+    expect(title.placeholder).toBe(empty.name);
+    expect(within(branding).queryByText(/Uses the page name/)).toBeNull();
+    await user.type(title, "Northstar");
+    const preview = screen.getByRole("region", { name: "Public preview" });
+    expect(preview.textContent).toContain("Northstar");
+    // Hidden, the title still names the logo, so it stays editable.
+    await user.click(
+      within(branding).getByRole("switch", { name: "Show title" }),
+    );
+    expect(title.disabled).toBe(false);
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...empty,
+      revision: 1,
+      headerTitle: "Northstar",
+      showName: false,
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({ headerTitle: "Northstar", showName: false }),
+        "org-one",
+      ),
+    );
+  });
+
+  it("saves where the logo sits", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockResolvedValueOnce(empty);
+    mount();
+    await ready();
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    const branding = screen.getByRole("region", { name: "Branding" });
+    expect(
+      within(branding)
+        .getByRole("radio", { name: "Left" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    // Size only shows while a logo stands in for the title.
+    expect(
+      within(branding).queryByRole("radiogroup", { name: "Size" }),
+    ).toBeNull();
+    // The logo is its own section: the image, then where it sits.
+    const logo = within(branding).getByRole("region", { name: "Logo" });
+    expect(within(logo).getByText("Image")).toBeTruthy();
+    expect(
+      within(logo).getByRole("radiogroup", { name: "Position" }),
+    ).toBeTruthy();
+    await user.click(within(branding).getByRole("radio", { name: "Center" }));
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      ...empty,
+      revision: 1,
+      logoAlign: "center",
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(apiRequest).toHaveBeenLastCalledWith(
+        "status-page",
+        expect.objectContaining({ logoAlign: "center", logoSize: "medium" }),
+        "org-one",
+      ),
+    );
   });
 
   it("lets the page follow each visitor's system theme", async () => {
@@ -172,7 +340,7 @@ describe("Status page admin", () => {
       revision: 1,
       theme: "system",
     });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -249,7 +417,7 @@ describe("Status page admin", () => {
 
     // The header link must be HTTPS; the client says so by the field.
     await enter(screen.getByLabelText("Accent color"), "#12");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(apiRequest).toHaveBeenCalledTimes(1);
     const accent = screen.getByLabelText("Accent color");
     const link = screen.getByLabelText("Link 1 Address");
@@ -271,7 +439,7 @@ describe("Status page admin", () => {
       preview.querySelector('a[href="https://northstar.example"]'),
     ).toBeTruthy();
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",

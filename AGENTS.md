@@ -135,6 +135,12 @@ through the full review cycle:
   source. The dev stack reports its health over SSH using the local key and a
   verified known-host entry. Each worktree keeps a separate machine credential.
   Do not copy a credential between organizations or weaken production HTTPS.
+- Seeding also adds an example fleet: four Rust servers (busy, steady, RCON
+  rejected, offline) and four machines (steady, busy, database, silent).
+  `npm run dev` runs `scripts/dev-fleet.mjs`, which serves the servers' WebRCON
+  and A2S on loopback and reports the machines' health, so the API checks them
+  like real ones. Their ids, ports, credentials, and RCON password live in
+  `.dev-stack/dev-account.json`; the password is sealed with the worktree's key.
 - Use `npm run dev:seed -- --all` when asked to refresh all saved development
   environments. It seeds their managed databases without editing other worktrees'
   source files. Stopped applications begin receiving reports when started.

@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import {
   Fragment,
   type FocusEvent as ReactFocusEvent,
@@ -25,7 +26,6 @@ import {
   ChevronRightIcon,
   ChevronsUpDownIcon,
   CircleAlertIcon,
-  CircleCheckIcon,
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
@@ -51,6 +51,9 @@ import {
   TriangleAlertIcon,
   XIcon,
   type LucideIcon,
+  AlignCenterIcon,
+  AlignLeftIcon,
+  AlignRightIcon,
 } from "lucide-react";
 import { apiRequest, type Identity } from "@/lib/api-client";
 import {
@@ -70,8 +73,6 @@ import {
   moveComponent,
   publicMaintenance,
   publicPath,
-  activeMaintenance,
-  atText,
   publicSummary,
   relativeTime,
   sameDraft,
@@ -97,6 +98,14 @@ import {
   type StatusPageState,
   type StatusSource,
   type StatusTheme,
+  announcementIcons,
+  announcementTones,
+  type AnnouncementIcon,
+  type AnnouncementTone,
+  logoAligns,
+  logoSizes,
+  type LogoAlign,
+  type LogoSize,
 } from "@/lib/status-page";
 import { copyText } from "@/lib/clipboard";
 import { StatusLogoEditor } from "@/components/status-logo-editor";
@@ -176,8 +185,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
-  SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
@@ -185,7 +194,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ToneIcon, toneClass } from "@/components/status-indicators";
+import {
+  AnnouncementGlyph,
+  ToneIcon,
+  announcementIconOptions,
+  announcementToneOptions,
+  toneClass,
+} from "@/components/status-indicators";
 import { PublicStatusView } from "@/components/public-status-page";
 import { statusFontFamily } from "@/components/status-fonts";
 
@@ -308,6 +323,10 @@ const draftLabels: Partial<Record<keyof PageDraft, string>> = {
   links: "header links",
   footerText: "footer text",
   poweredBy: "Powered by Cupboard",
+  showName: "title visibility",
+  headerTitle: "title",
+  logoAlign: "logo position",
+  logoSize: "logo size",
 };
 
 /**
@@ -560,6 +579,10 @@ export function rebaseDraft(
     links: field("links"),
     footerText: field("footerText"),
     poweredBy: field("poweredBy"),
+    showName: field("showName"),
+    headerTitle: field("headerTitle"),
+    logoAlign: field("logoAlign"),
+    logoSize: field("logoSize"),
     components,
   };
   const replacedList = [...replaced];
@@ -1211,15 +1234,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   const [saving, setSaving] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Errors>({});
   const [saveError, setSaveError] = useState("");
-  // A Save that went through: the bar says "Saved" where the operator
-  // pressed Save, at the height it had, then leaves (a11y D-R8-01, D-R8-02,
-  // claude D-95, codex D-49). Never a toast.
-  const [savedBar, setSavedBar] = useState<{
-    height: number;
-    /** Fixed to the screen edge (phones): it can shrink from its top. */
-    fixed: boolean;
-    leaving: boolean;
-  } | null>(null);
   const [conflict, setConflict] = useState(false);
   // What "Load latest, keep my edits" did. `warn` when it overrode, restored,
   // or removed something the other session decided.
@@ -1242,7 +1256,14 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   const [announcing, setAnnouncing] = useState<{
     text: string;
     error: string;
+    icon: AnnouncementIcon;
+    tone: AnnouncementTone;
+    /** Post was pressed with nothing to post. */
+    empty?: boolean;
   } | null>(null);
+  /** Clear asks first; a failed Clear stays in its confirmation. */
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearError, setClearError] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
 
   // Dialogs
@@ -1426,65 +1447,34 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       ? pendingChanges(edit.draft, edit.base, state.published, !!pendingLogo)
       : [];
   useUnsavedChanges(dirty && canManage, {
-    changes: leaveLine.length
-      ? `${sentenceCase(joinList(leaveLine))}.`
-      : undefined,
+    changes: leaveLine.map(sentenceCase),
   });
 
-  // The save bar never hides the control in focus: while it is pinned, the
-  // scroller's scroll-padding-bottom matches its height, the page reserves
-  // that space, and a control that receives focus under it scrolls clear.
+  // The save bar floats at the top center of the content, over the header,
+  // like a toolbar. It never hides the control in focus: the scroller's
+  // scroll-padding-top clears it, and a control that receives focus under it
+  // scrolls clear.
   const barRef = useRef<HTMLDivElement | null>(null);
-  // What the bar takes at the page end: the padding a fixed bar needs, or
-  // the height a bar in the flow has.
-  const [barSpace, setBarSpace] = useState({ pad: 0, end: 0 });
-  const savedShown = savedBar !== null && !dirty && !saveError && !conflict;
+  // The content's left edge, so the bar centers on the page, not the sidebar.
+  const [barLeft, setBarLeft] = useState(0);
   const barShown =
-    !!edit &&
-    canManage &&
-    (dirty || !!saveError || conflict || behind || savedShown);
-  // While "Saved" shows, the page keeps the space it had when Save was
-  // pressed, so a phone bar can shrink to one line and nothing moves.
-  // Set before the browser lays out the shrunken bar, so its resize is
-  // never measured.
-  const holdSpace = useRef(false);
-  const holdFixed = savedShown && !!savedBar?.fixed;
+    !!edit && canManage && (dirty || !!saveError || conflict || behind);
   useLayoutEffect(() => {
-    holdSpace.current = holdFixed;
-  }, [holdFixed]);
-  useEffect(() => {
     const bar = barRef.current;
     if (!barShown || !bar) return;
     const root = document.documentElement;
-    const before = root.style.scrollPaddingBottom;
+    const before = root.style.scrollPaddingTop;
+    const content = bar.closest<HTMLElement>('[data-slot="sidebar-inset"]');
     const measure = () => {
-      const position = getComputedStyle(bar).position;
-      const pinned = position === "fixed" || position === "sticky";
-      const height = pinned ? bar.offsetHeight + 16 : 0;
-      if (!holdSpace.current) {
-        root.style.scrollPaddingBottom = pinned ? `${height}px` : before;
-        // A fixed bar covers the page end, so reserve its height there too.
-        setBarSpace(
-          position === "fixed"
-            ? { pad: height, end: height }
-            : { pad: 0, end: bar.offsetHeight },
-        );
-        // Bottom toasts (phones and tablets) sit above a pinned bar: a
-        // fixed one at the screen edge, or a sticky one 1rem above it (the
-        // Toaster reads this).
-        root.style.setProperty(
-          "--cupboard-bottom-bar",
-          position === "fixed"
-            ? `${bar.offsetHeight}px`
-            : position === "sticky"
-              ? `${bar.offsetHeight + 16}px`
-              : "0px",
-        );
-      }
+      root.style.scrollPaddingTop = `${bar.getBoundingClientRect().bottom + 16}px`;
+      setBarLeft(
+        Math.max(0, Math.round(content?.getBoundingClientRect().left ?? 0)),
+      );
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(bar);
+    if (content) observer.observe(content);
     window.addEventListener("resize", measure);
     const focusIn = (event: FocusEvent) => {
       const target = event.target;
@@ -1494,16 +1484,16 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       )
         return;
       window.requestAnimationFrame(() => {
-        const position = getComputedStyle(bar).position;
-        if (position !== "fixed" && position !== "sticky") return;
-        const top = bar.getBoundingClientRect().top;
+        const box = bar.getBoundingClientRect();
         const rect = target.getBoundingClientRect();
         if (
-          rect.bottom <= top - 8 ||
-          rect.top >= bar.getBoundingClientRect().bottom
+          rect.top >= box.bottom + 8 ||
+          rect.bottom <= box.top ||
+          rect.right <= box.left ||
+          rect.left >= box.right
         )
           return;
-        scrollParent(target).scrollBy({ top: rect.bottom - top + 16 });
+        scrollParent(target).scrollBy({ top: rect.top - box.bottom - 16 });
       });
     };
     document.addEventListener("focusin", focusIn);
@@ -1511,54 +1501,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       observer.disconnect();
       window.removeEventListener("resize", measure);
       document.removeEventListener("focusin", focusIn);
-      root.style.scrollPaddingBottom = before;
-      root.style.removeProperty("--cupboard-bottom-bar");
+      root.style.scrollPaddingTop = before;
     };
   }, [barShown]);
-
-  // When the bar goes (Saved leaving, Discard), the space it took at the page
-  // end stays, empty, so the browser never clamps the scroll and moves the
-  // field in focus (claude D-97, codex D-50, a11y D-R9-01). It goes with the
-  // tab, when the bar comes back, or once it is scrolled out of view, where
-  // letting it go moves nothing.
-  const [heldSpace, setHeldSpace] = useState<{
-    height: number;
-    tab: string;
-  } | null>(null);
-  const [wasShown, setWasShown] = useState(barShown);
-  if (barShown !== wasShown) {
-    setWasShown(barShown);
-    setHeldSpace(
-      barShown || barSpace.end === 0 ? null : { height: barSpace.end, tab },
-    );
-  }
-  if (heldSpace && heldSpace.tab !== tab) setHeldSpace(null);
-  const spaceRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!heldSpace) return;
-    let frame = 0;
-    const check = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        const space = spaceRef.current;
-        if (!space) return;
-        const scroller = scrollParent(space);
-        const bottom =
-          scroller === document.scrollingElement ||
-          scroller === document.documentElement
-            ? window.innerHeight
-            : scroller.getBoundingClientRect().bottom;
-        if (space.getBoundingClientRect().top >= bottom) setHeldSpace(null);
-      });
-    };
-    window.addEventListener("scroll", check, { capture: true, passive: true });
-    window.addEventListener("resize", check);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("scroll", check, { capture: true });
-      window.removeEventListener("resize", check);
-    };
-  }, [heldSpace]);
 
   // Where the operator was before reaching the save bar. When the bar goes
   // away under focus (after Save or Discard), focus returns there instead of
@@ -1593,28 +1538,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     return () => window.cancelAnimationFrame(frame);
   }, [barShown]);
 
-  // "Saved" stays 6 seconds, or until the next edit, then the bar fades
-  // away (at once with reduced motion). It holds nothing to act on, so a
-  // pointer resting on it doesn't keep it (claude D-103).
-  // The next edit ends "Saved" for good, so Discard can't bring it back.
-  // Adjusted while rendering, as React recommends for a changed value.
-  const [wasDirty, setWasDirty] = useState(dirty);
-  if (dirty !== wasDirty) {
-    setWasDirty(dirty);
-    if (dirty && savedBar) setSavedBar(null);
-  }
-  const savedLeaving = savedBar?.leaving ?? false;
-  useEffect(() => {
-    if (!savedShown) return;
-    const timer = window.setTimeout(
-      () => {
-        if (savedLeaving) setSavedBar(null);
-        else setSavedBar((value) => value && { ...value, leaving: true });
-      },
-      savedLeaving ? 200 : 6000,
-    );
-    return () => window.clearTimeout(timer);
-  }, [savedShown, savedLeaving]);
   // Save and Discard go when the bar says "Saved" or closes: focus goes back
   // to where the operator was, without scrolling, never into the
   // confirmation. Called before the bar changes, so focus never drops to the
@@ -1815,11 +1738,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       return;
     }
     setFieldErrors({});
-    // "Saved" keeps the height the bar had when Save was pressed ("Saving
-    // changes..." can wrap it at 834 with the sidebar open).
-    const height = barRef.current?.offsetHeight ?? 0;
-    const fixed =
-      !!barRef.current && getComputedStyle(barRef.current).position === "fixed";
     setSaving(true);
     // Fields stay editable while Save runs: what was sent is kept apart so
     // edits typed in the meantime survive as the next draft.
@@ -1842,6 +1760,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             slug,
             published: state.published,
             announcement: state.announcement,
+            announcementIcon: state.announcementIcon,
+            announcementTone: state.announcementTone,
             supportUrl: draft.supportUrl.trim(),
             theme: draft.theme,
             accentColor: draft.accentColor.trim().toLowerCase(),
@@ -1852,6 +1772,10 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             })),
             footerText: draft.footerText,
             poweredBy: draft.poweredBy,
+            showName: draft.showName,
+            headerTitle: draft.headerTitle,
+            logoAlign: draft.logoAlign,
+            logoSize: draft.logoSize,
             components: draft.components,
           },
           organization.id,
@@ -1909,7 +1833,14 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         // Focus goes back to the field before Save and Discard go, so it
         // never rests on the page in between (claude D-102, a11y D-R9-04).
         focusFromBar();
-        setSavedBar({ height, fixed, leaving: false });
+        // The bar goes; a short toast at the top says it worked, counts
+        // down, and can be swiped or pressed away.
+        toast.success("Changes saved.", {
+          position: "top-center",
+          description: next.published
+            ? "Visitors see it now."
+            : "Visitors see it once the page is published.",
+        });
       }
     } catch (cause) {
       const text = friendly(cause);
@@ -1991,7 +1922,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 
   /** Overview actions go live at once and never touch the draft. */
   async function commitLive(
-    change: { published?: boolean; announcement?: string },
+    change: {
+      published?: boolean;
+      announcement?: string;
+      announcementIcon?: AnnouncementIcon;
+      announcementTone?: AnnouncementTone;
+    },
     done: string | ((next: StatusPageState) => string),
     fail: (message: string) => void,
   ) {
@@ -2007,6 +1943,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           slug: state.slug,
           published: state.published,
           announcement: state.announcement,
+          announcementIcon: state.announcementIcon,
+          announcementTone: state.announcementTone,
           supportUrl: state.supportUrl,
           theme: state.theme,
           accentColor: state.accentColor,
@@ -2014,6 +1952,10 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
           links: state.links,
           footerText: state.footerText,
           poweredBy: state.poweredBy,
+          showName: state.showName,
+          headerTitle: state.headerTitle,
+          logoAlign: state.logoAlign,
+          logoSize: state.logoSize,
           components: saved.components,
           ...change,
         },
@@ -2052,7 +1994,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     }
   }
 
-  /* ---------------- Logo (staged until Save changes) ---------------- */
+  /* ---------------- Logo (staged until Save) ---------------- */
 
   function editLogoFile(file: File | undefined) {
     if (logoInput.current) logoInput.current.value = "";
@@ -2101,7 +2043,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       // logo's URL belongs to its loader, so keep the cropped copy instead.
       source: logoEditing.owned ? logoEditing.url : ownUrl(png),
     });
-    announce("Logo ready. Save changes to put it on the page.");
+    announce("Logo ready. Save to put it on the page.");
     return true;
   }
 
@@ -2132,6 +2074,18 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   }
 
   /* ---------------- Maintenance ---------------- */
+
+  /** Opens the announcement dialog; Close returns focus to `focusKey`. */
+  function openAnnouncement(focusKey: string) {
+    if (!state) return;
+    returnFocus.current = focusKey;
+    setAnnouncing({
+      text: state.announcement,
+      error: "",
+      icon: state.announcementIcon,
+      tone: state.announcementTone,
+    });
+  }
 
   function openSchedule(window: MaintenanceWindow | null, focusKey: string) {
     returnFocus.current = focusKey;
@@ -2399,12 +2353,12 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         ...list,
         { id: null, kind: form.kind, ...values },
       ]);
-      announce(`Added ${name}. Save changes to put it on the page.`);
+      announce(`Added ${name}. Save to put it on the page.`);
     } else {
       updateComponents((list) =>
         list.map((c, i) => (i === index ? { ...c, ...values } : c)),
       );
-      announce(`Updated ${name}. Save changes to apply it.`);
+      announce(`Updated ${name}. Save to apply it.`);
     }
     returnFocus.current = `actions-${key}`;
     setComponentForm(null);
@@ -2612,7 +2566,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     const at = peers.indexOf(removed);
     const neighbor = peers[at + 1] ?? peers[at - 1] ?? null;
     updateComponents((items) => items.filter((_, i) => i !== index));
-    announce(`Removed ${removed.name}. Save changes to take it off the page.`);
+    announce(`Removed ${removed.name}. Save to take it off the page.`);
     focusByKey(neighbor && `actions-${componentKey(neighbor)}`, "add-target");
   }
 
@@ -2648,6 +2602,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
     return {
       name: draft.name.trim() || state.name,
       announcement: state.announcement,
+      announcementIcon: state.announcementIcon,
+      announcementTone: state.announcementTone,
       supportUrl: draft.supportUrl.trim(),
       theme: draft.theme,
       accentColor: validColor(draft.accentColor.trim().toLowerCase())
@@ -2659,6 +2615,10 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         .filter((link) => link.label && link.url),
       footerText: draft.footerText.trim(),
       poweredBy: draft.poweredBy,
+      showName: draft.showName,
+      headerTitle: draft.headerTitle,
+      logoAlign: draft.logoAlign,
+      logoSize: draft.logoSize,
       logoVersion: shownLogo ? (state.logoVersion ?? 0) : null,
       updatedAt: checkedAt ?? now,
       components: shown,
@@ -2678,6 +2638,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       now={now}
       // Under 640 pixels the toggle is hidden: the screen is a phone already.
       width={phoneScreen ? "phone" : previewWidth}
+      fill
     />
   );
   const sidePreview = (
@@ -2710,14 +2671,11 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       stale={refreshFailed}
       refreshing={refreshing}
       onRetry={() => void load()}
-      onManage={() => setTab("targets")}
-      phone={phoneScreen}
     />
   );
 
   const conflicted = conflict || behind;
-  const showBar =
-    canManage && (dirty || !!saveError || conflicted || savedShown);
+  const showBar = canManage && (dirty || !!saveError || conflicted);
   const errorCount = Object.keys(fieldErrors).length;
   // The bar with nothing to report but the edits themselves.
   const quietBar =
@@ -2726,12 +2684,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
   /* ---------------- Render ---------------- */
 
   return (
-    <div
-      className="space-y-6"
-      style={
-        showBar && barSpace.pad ? { paddingBottom: barSpace.pad } : undefined
-      }
-    >
+    <div className="space-y-6">
       <p aria-live="polite" className="sr-only">
         {announcement}
       </p>
@@ -2849,19 +2802,15 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
               </TabsTrigger>
             ))}
           </TabsList>
-          {/* Preview lives where public-facing edits happen: Targets and
-              Settings, at every width, with unsaved changes and on a
-              private page. Wide Settings shows its own preview column. */}
-          {(tab === "targets" || tab === "settings") && (
+          {/* Preview lives with the branding edits on Settings, at every
+              width, with unsaved changes and on a private page. Wide
+              Settings also shows its own preview column. */}
+          {tab === "settings" && (
             <Button
               type="button"
               variant="ghost"
               data-focus-key="preview-page"
-              className={cn(
-                "shrink-0 px-3 max-sm:px-0",
-                touch,
-                tab === "settings" && "xl:hidden",
-              )}
+              className={cn("shrink-0 px-3 max-sm:px-0", touch, "xl:hidden")}
               onClick={() => {
                 returnFocus.current = "preview-page";
                 setPreviewOpen(true);
@@ -2877,15 +2826,16 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 
         {/* ---------------- Overview ---------------- */}
         <TabsContent value="overview" className="mt-5 space-y-6">
-          {/* The true status of every target leads (or the setup steps on
-              an empty page), full width; Maintenance and the Announcement
-              sit side by side below it on wide screens. DOM order is
-              reading order at every width (a11y D-30). */}
-          {components.length > 0 ? healthCard : setup}
-          <div className="grid items-start gap-6 lg:grid-cols-2">
+          {/* Maintenance and the Announcement lead, side by side and the
+              same height on wide screens, so they are one glance from the
+              tabs however long the target list grows. The status of every
+              target (or the setup steps on an empty page) follows, full
+              width. DOM order is reading order at every width (a11y D-30). */}
+          <div className="grid gap-6 lg:grid-cols-2">
             <Card
               id="maintenance"
               title="Maintenance"
+              className="flex flex-col"
               action={
                 // Empty, the card's own button sits under its message.
                 canManage &&
@@ -2904,150 +2854,189 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 )
               }
             >
-              {!hasWindows ? (
-                // Stacked like the Machines empty state: icon, message, then
-                // the button below (claude D-118). Compact padding keeps it
-                // close to one window's height (claude D-117).
-                <Empty className="gap-0 rounded-none border-0 px-4 py-4 md:px-5">
-                  {/* The tile a window row carries, so the empty card
+              {/* A long schedule scrolls inside the card. */}
+              <div
+                tabIndex={hasWindows ? 0 : undefined}
+                role={hasWindows ? "group" : undefined}
+                aria-label={hasWindows ? "Maintenance windows" : undefined}
+                className="max-h-96 min-h-0 flex-1 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              >
+                {!hasWindows ? (
+                  // Stacked like the Machines empty state: icon, message, then
+                  // the button below (claude D-118). Compact padding keeps it
+                  // close to one window's height (claude D-117).
+                  <Empty className="gap-0 rounded-none border-0 px-4 py-4 md:px-5">
+                    {/* The tile a window row carries, so the empty card
                       reads as the same list with nothing in it. */}
-                  <EmptyMedia
-                    variant="icon"
-                    className="mb-2 border border-border-strong bg-surface-elevated text-foreground/80"
-                  >
-                    <CalendarClockIcon aria-hidden="true" />
-                  </EmptyMedia>
-                  {/* A paragraph, not a heading: the card's Maintenance
-                      heading already names the section. */}
-                  <p className="text-sm font-medium">
-                    No maintenance scheduled
-                  </p>
-                  {canManage && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      data-focus-key="schedule-empty"
-                      className={cn("mt-3 px-3", touch)}
-                      onClick={() => openSchedule(null, "schedule-empty")}
+                    <EmptyMedia
+                      variant="icon"
+                      className="mb-2 border border-border-strong bg-surface-elevated text-foreground/80"
                     >
-                      <PlusIcon aria-hidden="true" />
-                      Schedule maintenance
-                    </Button>
-                  )}
-                </Empty>
-              ) : (
-                <ul className="divide-y divide-border">
-                  {[...current, ...upcoming].map(({ window, phase }) => (
-                    <MaintenanceRow
-                      key={window.id}
-                      window={window}
-                      phase={phase}
-                      now={now}
-                      components={components}
-                      canManage={canManage}
-                      onEdit={() => openSchedule(window, `window-${window.id}`)}
-                      onComplete={() => {
-                        returnFocus.current = `window-${window.id}`;
-                        setCompleting(window);
-                      }}
-                      onRemove={() => {
-                        returnFocus.current = `window-${window.id}`;
-                        setRemoving(window);
-                      }}
-                    />
-                  ))}
-                </ul>
-              )}
-              {past.length > 0 && (
-                <Collapsible className="group/past border-t border-border">
-                  <CollapsibleTrigger
-                    data-focus-key="past-windows"
-                    className={cn(
-                      "flex h-11 w-full items-center gap-2 px-4 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-surface-elevated/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:px-5",
+                      <CalendarClockIcon aria-hidden="true" />
+                    </EmptyMedia>
+                    {/* A paragraph, not a heading: the card's Maintenance
+                      heading already names the section. */}
+                    <p className="text-sm font-medium">
+                      No maintenance scheduled
+                    </p>
+                    {canManage && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        data-focus-key="schedule-empty"
+                        className={cn("mt-3 px-3", touch)}
+                        onClick={() => openSchedule(null, "schedule-empty")}
+                      >
+                        <PlusIcon aria-hidden="true" />
+                        Schedule maintenance
+                      </Button>
                     )}
-                  >
-                    <ChevronRightIcon
-                      aria-hidden="true"
-                      className="size-4 transition-transform group-data-[state=open]/past:rotate-90"
-                    />
-                    Past windows
-                    <span className="ml-auto text-xs tabular-nums">
-                      {past.length}
-                    </span>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <ul className="divide-y divide-border border-t border-border">
-                      {past.map(({ window, phase }) => (
-                        <MaintenanceRow
-                          key={window.id}
-                          window={window}
-                          phase={phase}
-                          now={now}
-                          components={components}
-                          canManage={canManage}
-                          onRemove={() => {
-                            returnFocus.current = "past-windows";
-                            setRemoving(window);
-                          }}
-                        />
-                      ))}
-                    </ul>
-                  </CollapsibleContent>
-                </Collapsible>
-              )}
+                  </Empty>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {[...current, ...upcoming].map(({ window, phase }) => (
+                      <MaintenanceRow
+                        key={window.id}
+                        window={window}
+                        phase={phase}
+                        now={now}
+                        components={components}
+                        canManage={canManage}
+                        onEdit={() =>
+                          openSchedule(window, `window-${window.id}`)
+                        }
+                        onComplete={() => {
+                          returnFocus.current = `window-${window.id}`;
+                          setCompleting(window);
+                        }}
+                        onRemove={() => {
+                          returnFocus.current = `window-${window.id}`;
+                          setRemoving(window);
+                        }}
+                      />
+                    ))}
+                  </ul>
+                )}
+                {past.length > 0 && (
+                  <Collapsible className="group/past border-t border-border">
+                    <CollapsibleTrigger
+                      data-focus-key="past-windows"
+                      className={cn(
+                        "flex h-11 w-full items-center gap-2 px-4 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-surface-elevated/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:px-5",
+                      )}
+                    >
+                      <ChevronRightIcon
+                        aria-hidden="true"
+                        className="size-4 transition-transform group-data-[state=open]/past:rotate-90"
+                      />
+                      Past windows
+                      <span className="ml-auto text-xs tabular-nums">
+                        {past.length}
+                      </span>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <ul className="divide-y divide-border border-t border-border">
+                        {past.map(({ window, phase }) => (
+                          <MaintenanceRow
+                            key={window.id}
+                            window={window}
+                            phase={phase}
+                            now={now}
+                            components={components}
+                            canManage={canManage}
+                            onRemove={() => {
+                              returnFocus.current = "past-windows";
+                              setRemoving(window);
+                            }}
+                          />
+                        ))}
+                      </ul>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
+              </div>
             </Card>
 
             <Card
               id="announcement"
               title="Announcement"
+              className="flex flex-col"
               action={
-                canManage && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    data-focus-key="announcement"
-                    aria-label={
-                      state.announcement
-                        ? "Edit announcement"
-                        : "Post an announcement"
-                    }
-                    className={cn("px-3", touch)}
-                    onClick={() => {
-                      returnFocus.current = "announcement";
-                      setAnnouncing({
-                        text: state.announcement,
-                        error: "",
-                      });
-                    }}
-                  >
-                    {state.announcement ? (
-                      <>
-                        <PencilIcon aria-hidden="true" />
-                        Edit
-                      </>
-                    ) : (
-                      <>
-                        <MegaphoneIcon aria-hidden="true" />
-                        Post
-                      </>
-                    )}
-                  </Button>
+                // Empty, the card's own button sits under its message.
+                canManage &&
+                state.announcement && (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      data-focus-key="clear-announcement"
+                      aria-label="Clear announcement"
+                      className={cn("px-3", touch)}
+                      onClick={() => {
+                        setClearError("");
+                        setClearOpen(true);
+                      }}
+                    >
+                      <XIcon aria-hidden="true" />
+                      Clear
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      data-focus-key="announcement"
+                      aria-label="Edit announcement"
+                      className={cn("px-3", touch)}
+                      onClick={() => openAnnouncement("announcement")}
+                    >
+                      <PencilIcon aria-hidden="true" />
+                      Edit
+                    </Button>
+                  </div>
                 )
               }
             >
-              <div className="px-4 py-4 md:px-5">
-                {state.announcement ? (
-                  <p className="text-sm whitespace-pre-line">
-                    {state.announcement}
-                  </p>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    No announcement.
-                  </p>
-                )}
-              </div>
+              {state.announcement ? (
+                <div className="flex-1 px-4 py-4 md:px-5">
+                  {/* As players see it: the chosen glyph in its color. */}
+                  <div className="flex items-start gap-3">
+                    <AnnouncementGlyph
+                      icon={state.announcementIcon}
+                      tone={state.announcementTone}
+                      className="mt-0.5 size-4 shrink-0"
+                    />
+                    <p className="min-w-0 text-sm break-words whitespace-pre-line">
+                      {state.announcement}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                // Stacked like the Maintenance card's empty state: icon,
+                // message, then the button in the middle of the card.
+                <Empty className="flex-1 gap-0 rounded-none border-0 px-4 py-4 md:px-5">
+                  <EmptyMedia
+                    variant="icon"
+                    className="mb-2 border border-border-strong bg-surface-elevated text-foreground/80"
+                  >
+                    <MegaphoneIcon aria-hidden="true" />
+                  </EmptyMedia>
+                  <p className="text-sm font-medium">No announcement</p>
+                  {canManage && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      data-focus-key="announcement-empty"
+                      className={cn("mt-3 px-3", touch)}
+                      onClick={() => openAnnouncement("announcement-empty")}
+                    >
+                      <PlusIcon aria-hidden="true" />
+                      Post announcement
+                    </Button>
+                  )}
+                </Empty>
+              )}
             </Card>
           </div>
+          {components.length > 0 ? healthCard : setup}
         </TabsContent>
 
         {/* ---------------- Targets ---------------- */}
@@ -3551,188 +3540,254 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 
                 <Card id="branding" title="Branding">
                   <div className="grid gap-6 px-4 py-5 md:px-5">
-                    <div className="space-y-2">
-                      <p className="text-sm leading-none font-medium">Logo</p>
-                      <div className="flex flex-wrap items-center gap-4">
-                        <div className="relative shrink-0">
-                          <button
-                            type="button"
-                            data-focus-key="logo"
-                            aria-label={shownLogo ? "Edit logo" : "Add logo"}
-                            aria-describedby={cn(
-                              logoError && "logo-error",
-                              "logo-hint",
-                            )}
-                            onClick={() => {
-                              returnFocus.current = "logo";
-                              if (pendingLogo?.kind === "upload")
-                                setLogoEditing({
-                                  url: pendingLogo.source,
-                                  owned: true,
-                                });
-                              else if (shownLogo)
-                                setLogoEditing({
-                                  url: shownLogo,
-                                  owned: false,
-                                });
-                              else logoInput.current?.click();
-                            }}
-                            onDragOver={(event) => {
-                              if (!canManage) return;
-                              event.preventDefault();
-                              setLogoDrop(true);
-                            }}
-                            onDragLeave={() => setLogoDrop(false)}
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              setLogoDrop(false);
-                              if (canManage)
-                                editLogoFile(event.dataTransfer.files[0]);
-                            }}
-                            className={cn(
-                              "group/logo relative flex h-20 w-36 items-center justify-center overflow-hidden rounded-xl border bg-surface-elevated transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-default",
-                              shownLogo
-                                ? "border-border"
-                                : "border-dashed border-input hover:border-muted-foreground",
-                              logoError && "border-destructive",
-                              logoDrop && "border-ring bg-ring/10",
-                            )}
-                          >
-                            {shownLogo ? (
-                              <>
-                                {/* A same-origin object URL for the re-encoded PNG. */}
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                  src={shownLogo}
-                                  alt="Current logo"
-                                  className="max-h-12 max-w-28 object-contain"
-                                />
-                                <span
-                                  aria-hidden="true"
-                                  className="absolute inset-0 flex items-center justify-center gap-1.5 bg-background/80 text-xs font-medium opacity-0 transition-opacity group-hover/logo:opacity-100 group-focus-visible/logo:opacity-100 group-disabled/logo:hidden"
-                                >
-                                  <PencilIcon className="size-3.5" />
-                                  Edit
-                                </span>
-                              </>
-                            ) : (
-                              <span className="flex flex-col items-center gap-1 text-xs text-muted-foreground">
-                                <ImageIcon
-                                  aria-hidden="true"
-                                  className="size-5"
-                                />
-                                Add logo
-                              </span>
-                            )}
-                          </button>
-                          {shownLogo && canManage && (
-                            <Popover
-                              open={logoRemoveOpen}
-                              onOpenChange={setLogoRemoveOpen}
-                            >
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <PopoverTrigger asChild>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      size="icon-sm"
-                                      aria-label="Remove logo"
-                                      className={cn(
-                                        "absolute -top-2.5 -right-2.5 rounded-full bg-popover text-muted-foreground shadow-sm hover:text-destructive dark:bg-popover",
-                                        touchIcon,
-                                      )}
-                                    >
-                                      <Trash2Icon aria-hidden="true" />
-                                    </Button>
-                                  </PopoverTrigger>
-                                </TooltipTrigger>
-                                <TooltipContent>Remove logo</TooltipContent>
-                              </Tooltip>
-                              <PopoverContent
-                                align="start"
-                                className="w-72 space-y-3 p-3"
-                              >
-                                <div className="space-y-1">
-                                  <p className="text-sm font-medium">
-                                    Remove the logo?
-                                  </p>
-                                  <p className="text-xs leading-5 text-muted-foreground">
-                                    Your page shows its initial instead.
-                                  </p>
-                                </div>
-                                <div className="flex justify-end gap-2">
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    className={cn("px-3", touch)}
-                                    onClick={() => setLogoRemoveOpen(false)}
-                                  >
-                                    Cancel
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    variant="destructive-solid"
-                                    className={cn("px-3", touch)}
-                                    onClick={() => {
-                                      setPendingLogo(
-                                        state.logoVersion === null
-                                          ? null
-                                          : { kind: "remove" },
-                                      );
-                                      setLogoRemoveOpen(false);
-                                      setLogoError("");
-                                      announce(
-                                        "Logo removed. Save changes to update the page.",
-                                      );
-                                      focusByKey("logo");
-                                    }}
-                                  >
-                                    Remove
-                                  </Button>
-                                </div>
-                              </PopoverContent>
-                            </Popover>
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1 basis-40 space-y-1.5">
-                          {pendingLogo && (
-                            <Tag
-                              tone={
-                                pendingLogo.kind === "upload"
-                                  ? "draft"
-                                  : "muted"
-                              }
-                            >
-                              {pendingLogo.kind === "upload"
-                                ? "New logo"
-                                : "Logo removed"}
-                            </Tag>
-                          )}
-                          {logoError && (
-                            <FieldMessage id="logo-error" alert>
-                              {logoError}
-                            </FieldMessage>
-                          )}
-                          {/* A refused file says the formats in its
-                              error; screen readers hear them up front. */}
-                          <p id="logo-hint" className="sr-only">
-                            PNG, JPEG, WebP, GIF, or SVG, up to 20 MB
-                          </p>
-                        </div>
-                        <input
-                          ref={logoInput}
-                          type="file"
-                          accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                          className="sr-only"
-                          tabIndex={-1}
-                          aria-label="Logo file"
-                          onChange={(event) =>
-                            editLogoFile(event.target.files?.[0])
+                    {/* The top bar's title: the page name until the operator
+                        writes their own. Hidden, the logo is the title and
+                        this stays its name for screen readers, so it stays
+                        editable. */}
+                    <div className="space-y-3">
+                      <Field
+                        id="status-header-title"
+                        label="Title"
+                        error={fieldErrors.headerTitle}
+                        hint={
+                          !draft.showName && !shownLogo
+                            ? "Add a logo to show it in place of the title."
+                            : undefined
+                        }
+                      >
+                        {(aria) => (
+                          <Input
+                            {...aria}
+                            maxLength={80}
+                            value={draft.headerTitle}
+                            placeholder={draft.name.trim() || state.name}
+                            onChange={(e) =>
+                              updateDraft(
+                                { headerTitle: e.target.value },
+                                "headerTitle",
+                              )
+                            }
+                          />
+                        )}
+                      </Field>
+                      <div className="flex items-center justify-between gap-4">
+                        <Label htmlFor="status-show-name">Show title</Label>
+                        <Switch
+                          id="status-show-name"
+                          checked={draft.showName}
+                          onCheckedChange={(showName) =>
+                            updateDraft({ showName })
                           }
+                          size="lg"
+                          className="after:-inset-y-2.5"
                         />
                       </div>
                     </div>
+
+                    {/* The logo is a section of its own: the image on the
+                        left, where it sits and how large beside it. */}
+                    <section
+                      aria-labelledby="status-logo-heading"
+                      className="space-y-3 border-t border-border pt-5"
+                    >
+                      <h3
+                        id="status-logo-heading"
+                        className="text-sm font-semibold"
+                      >
+                        Logo
+                      </h3>
+                      <div className="flex flex-wrap items-start gap-x-6 gap-y-4">
+                        <div className="shrink-0 space-y-2">
+                          <p className="text-sm leading-none font-medium">
+                            Image
+                          </p>
+                          <div className="relative w-fit">
+                            <button
+                              type="button"
+                              data-focus-key="logo"
+                              aria-label={shownLogo ? "Edit logo" : "Add logo"}
+                              aria-describedby={cn(
+                                logoError && "logo-error",
+                                "logo-hint",
+                              )}
+                              onClick={() => {
+                                returnFocus.current = "logo";
+                                if (pendingLogo?.kind === "upload")
+                                  setLogoEditing({
+                                    url: pendingLogo.source,
+                                    owned: true,
+                                  });
+                                else if (shownLogo)
+                                  setLogoEditing({
+                                    url: shownLogo,
+                                    owned: false,
+                                  });
+                                else logoInput.current?.click();
+                              }}
+                              onDragOver={(event) => {
+                                if (!canManage) return;
+                                event.preventDefault();
+                                setLogoDrop(true);
+                              }}
+                              onDragLeave={() => setLogoDrop(false)}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                setLogoDrop(false);
+                                if (canManage)
+                                  editLogoFile(event.dataTransfer.files[0]);
+                              }}
+                              className={cn(
+                                "group/logo relative flex h-20 w-36 items-center justify-center overflow-hidden rounded-xl border bg-surface-elevated transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card disabled:cursor-default",
+                                shownLogo
+                                  ? "border-border"
+                                  : "border-dashed border-input hover:border-muted-foreground",
+                                logoError && "border-destructive",
+                                logoDrop && "border-ring bg-ring/10",
+                              )}
+                            >
+                              {shownLogo ? (
+                                <>
+                                  {/* A same-origin object URL for the re-encoded PNG. */}
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={shownLogo}
+                                    alt="Current logo"
+                                    className="max-h-12 max-w-28 object-contain"
+                                  />
+                                  <span
+                                    aria-hidden="true"
+                                    className="absolute inset-0 flex items-center justify-center gap-1.5 bg-background/80 text-xs font-medium opacity-0 transition-opacity group-hover/logo:opacity-100 group-focus-visible/logo:opacity-100 group-disabled/logo:hidden"
+                                  >
+                                    <PencilIcon className="size-3.5" />
+                                    Edit
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="flex flex-col items-center gap-1 text-xs text-muted-foreground">
+                                  <ImageIcon
+                                    aria-hidden="true"
+                                    className="size-5"
+                                  />
+                                  Add logo
+                                </span>
+                              )}
+                            </button>
+                            {shownLogo && canManage && (
+                              <Popover
+                                open={logoRemoveOpen}
+                                onOpenChange={setLogoRemoveOpen}
+                              >
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <PopoverTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="icon-sm"
+                                        aria-label="Remove logo"
+                                        className={cn(
+                                          "absolute -top-2.5 -right-2.5 rounded-full bg-popover text-muted-foreground shadow-sm hover:text-destructive dark:bg-popover",
+                                          touchIcon,
+                                        )}
+                                      >
+                                        <Trash2Icon aria-hidden="true" />
+                                      </Button>
+                                    </PopoverTrigger>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Remove logo</TooltipContent>
+                                </Tooltip>
+                                <PopoverContent
+                                  align="start"
+                                  className="w-72 space-y-3 p-3"
+                                >
+                                  <div className="space-y-1">
+                                    <p className="text-sm font-medium">
+                                      Remove the logo?
+                                    </p>
+                                    <p className="text-xs leading-5 text-muted-foreground">
+                                      Your page shows its initial instead.
+                                    </p>
+                                  </div>
+                                  <div className="flex justify-end gap-2">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className={cn("px-3", touch)}
+                                      onClick={() => setLogoRemoveOpen(false)}
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="destructive-solid"
+                                      className={cn("px-3", touch)}
+                                      onClick={() => {
+                                        setPendingLogo(
+                                          state.logoVersion === null
+                                            ? null
+                                            : { kind: "remove" },
+                                        );
+                                        setLogoRemoveOpen(false);
+                                        setLogoError("");
+                                        announce(
+                                          "Logo removed. Save to update the page.",
+                                        );
+                                        focusByKey("logo");
+                                      }}
+                                    >
+                                      Remove
+                                    </Button>
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            )}
+                          </div>
+                          <div className="max-w-36 space-y-1.5 empty:hidden">
+                            {pendingLogo && (
+                              <Tag
+                                tone={
+                                  pendingLogo.kind === "upload"
+                                    ? "draft"
+                                    : "muted"
+                                }
+                              >
+                                {pendingLogo.kind === "upload"
+                                  ? "New logo"
+                                  : "Logo removed"}
+                              </Tag>
+                            )}
+                            {logoError && (
+                              <FieldMessage id="logo-error" alert>
+                                {logoError}
+                              </FieldMessage>
+                            )}
+                            {/* A refused file says the formats in its
+                              error; screen readers hear them up front. */}
+                            <p id="logo-hint" className="sr-only">
+                              PNG, JPEG, WebP, GIF, or SVG, up to 20 MB
+                            </p>
+                          </div>
+                          <input
+                            ref={logoInput}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-label="Logo file"
+                            onChange={(event) =>
+                              editLogoFile(event.target.files?.[0])
+                            }
+                          />
+                        </div>
+                        <LogoLayoutFields
+                          align={draft.logoAlign}
+                          size={draft.logoSize}
+                          // Size only matters while the logo is the title.
+                          showSize={!!shownLogo && !draft.showName}
+                          onChange={(change) => updateDraft(change)}
+                        />
+                      </div>
+                    </section>
 
                     <div className="space-y-2">
                       <Label id="status-theme-label">Theme</Label>
@@ -3753,11 +3808,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                           />
                         ))}
                       </ToggleGroup>
-                      {draft.theme === "system" && (
-                        <p className="text-xs leading-5 text-muted-foreground">
-                          Matches each visitor&apos;s device.
-                        </p>
-                      )}
                     </div>
 
                     <AccentField
@@ -3984,72 +4034,41 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
       </Tabs>
 
       {showBar && (
+        // Fixed over the header, centered on the content (Shopify-style).
         <div
-          ref={barRef}
-          role="region"
-          aria-label={savedShown ? "Changes saved" : "Unsaved changes"}
-          // In the page's flow, "Saved" keeps the height the bar had, so
-          // nothing under or beside it moves. Fixed to a phone's edge, it
-          // shrinks to one line from its top while the page keeps the space
-          // (claude D-101).
-          style={
-            savedShown && !savedBar?.fixed
-              ? { minHeight: savedBar?.height }
-              : undefined
-          }
-          className={cn(
-            // Pinned only when the viewport is tall enough to spare it: below
-            // 30rem (short windows, 400% zoom) it sits after the content.
-            "z-40 border-border-strong bg-surface-elevated px-4 pt-3 shadow-lg",
-            "max-sm:border-t max-sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]",
-            "max-sm:[@media(min-height:30rem)]:fixed max-sm:[@media(min-height:30rem)]:inset-x-0 max-sm:[@media(min-height:30rem)]:bottom-0",
-            // Pinned, it never takes more than half the screen: the merge
-            // list scrolls inside, title and actions stay (a11y D-71).
-            "max-sm:[@media(min-height:30rem)]:flex max-sm:[@media(min-height:30rem)]:max-h-[50dvh] max-sm:[@media(min-height:30rem)]:flex-col",
-            "max-sm:[@media(max-height:30rem)]:rounded-xl max-sm:[@media(max-height:30rem)]:border",
-            "sm:rounded-xl sm:border sm:pb-3 sm:[@media(min-height:30rem)]:sticky sm:[@media(min-height:30rem)]:bottom-4",
-            // Beside the Settings preview the bar stays in the editor column.
-            tab === "settings" && "xl:max-w-[34rem]",
-            savedShown && "flex flex-col justify-center",
-            "transition-[opacity,translate] duration-200 motion-reduce:transition-none",
-            savedLeaving && "translate-y-2 opacity-0",
-          )}
+          className="pointer-events-none fixed top-2 right-0 z-40 flex justify-center px-2"
+          style={{ left: barLeft }}
         >
-          {/* Always here while the bar is, and empty until a Save goes
-              through, so "Saved" is said once, by every screen reader. */}
-          <p
-            role="status"
-            className={
-              savedShown
-                ? "flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm"
-                : "sr-only"
-            }
-          >
-            {savedShown && (
-              <>
-                <span className="flex items-center gap-1.5 self-center font-medium">
-                  <CircleCheckIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-primary"
-                  />
-                  Saved<span className="sr-only">.</span>
-                </span>{" "}
-                <span className="text-xs leading-5 text-muted-foreground">
-                  {state.published
-                    ? "Visitors see it now."
-                    : "Visitors see it once the page is published."}
-                </span>
-              </>
+          <div
+            ref={barRef}
+            role="region"
+            aria-label="Unsaved changes"
+            className={cn(
+              "pointer-events-auto w-full max-w-xl rounded-xl border border-border-strong bg-surface-elevated shadow-lg sm:w-auto",
+              // Only the edits to report: one compact row. Anything more
+              // (a conflict, errors, a merge) opens into a card below.
+              // The pill's corners follow the buttons' inside it: its radius is
+              // theirs plus the 8 pixels between them.
+              quietBar ? "p-2 pl-4" : "px-4 py-3",
+              // Fixed, it never takes more than half the screen at any width:
+              // the merge list scrolls inside, title and actions stay
+              // (a11y D-71).
+              "flex max-h-[50dvh] flex-col",
             )}
-          </p>
-          {!savedShown && (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-3 max-sm:min-h-0 max-sm:flex-col max-sm:flex-nowrap max-sm:items-stretch">
+          >
+            <div
+              className={cn(
+                "flex flex-wrap items-center gap-x-4 gap-y-3",
+                quietBar
+                  ? "flex-nowrap"
+                  : "min-h-0 flex-col flex-nowrap items-stretch",
+              )}
+            >
               <div
                 className={cn(
-                  "min-w-0 flex-1 basis-56",
-                  // A merge warning gets the bar's full width, actions below.
-                  notice?.warn && !conflicted && "basis-full",
-                  "max-sm:flex max-sm:min-h-0 max-sm:basis-auto max-sm:flex-col",
+                  "min-w-0 flex-1",
+                  // The report above, the actions below it.
+                  !quietBar && "flex min-h-0 basis-auto flex-col",
                 )}
               >
                 {/* The plain "Unsaved changes" summary is not spoken: the
@@ -4059,12 +4078,11 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     did not just do is said here: a conflict, errors, a
                     failed save, or a merge result. */}
                 {quietBar && (
-                  <p className="text-sm font-medium">Unsaved changes</p>
+                  <p className="text-sm font-medium whitespace-nowrap">
+                    Unsaved changes
+                  </p>
                 )}
-                <div
-                  aria-live="polite"
-                  className="max-sm:flex max-sm:min-h-0 max-sm:flex-col"
-                >
+                <div aria-live="polite" className="flex min-h-0 flex-col">
                   {conflicted ? (
                     <>
                       <p className="flex items-center gap-1.5 text-sm font-medium text-warning">
@@ -4119,9 +4137,9 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                         </p>
                       )}
                       {(() => {
-                        // On phones the bar is pinned over the page, so the list
-                        // scrolls inside the bar's cap, and a long one shows
-                        // three decisions until Show all (a11y D-71).
+                        // The bar is pinned over the page, so the list scrolls
+                        // inside its cap; on phones a long one shows three
+                        // decisions until Show all (a11y D-71).
                         const items = notice.items ?? [];
                         const folds = phoneScreen && items.length > 3;
                         const open = !folds || openNotice === notice;
@@ -4135,7 +4153,6 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                             ))}
                           </ul>
                         );
-                        if (!phoneScreen) return list;
                         return (
                           <>
                             <ScrollCue label="Merged changes">{list}</ScrollCue>
@@ -4168,17 +4185,25 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     </p>
                   ) : null}
                 </div>
+                {/* What changed, for anyone reading the region; the compact
+                  bar shows only that something did. */}
                 {quietBar && !notice?.text && changes.length > 0 && (
-                  <p className="text-xs leading-5 text-pretty text-muted-foreground">
+                  <p className="sr-only">
                     {`${sentenceCase(joinList(changes))}.`}
                   </p>
                 )}
               </div>
-              <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
+              <div
+                className={cn(
+                  "flex gap-1.5 sm:ml-auto",
+                  !quietBar && "shrink-0 max-sm:w-full sm:self-end",
+                )}
+              >
                 {errorCount > 0 && (
                   <Button
                     type="button"
                     variant="ghost"
+                    size="sm"
                     className={cn("px-3", touch)}
                     onClick={() => {
                       const first = validate()[0];
@@ -4194,11 +4219,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     <Button
                       type="button"
                       variant="outline"
-                      className={cn(
-                        "flex-1 px-4 sm:flex-none",
-                        touch,
-                        busyLook,
-                      )}
+                      size="sm"
+                      className={cn("px-3 max-sm:flex-1", touch, busyLook)}
                       aria-disabled={saving || undefined}
                       onClick={() => {
                         if (!saving) setDiscardOpen(true);
@@ -4208,11 +4230,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     </Button>
                     <Button
                       type="button"
-                      className={cn(
-                        "flex-1 px-4 sm:flex-none",
-                        touch,
-                        busyLook,
-                      )}
+                      size="sm"
+                      className={cn("px-3 max-sm:flex-1", touch, busyLook)}
                       aria-disabled={saving || undefined}
                       onClick={() => {
                         if (!saving) void reloadKeepingEdits();
@@ -4227,11 +4246,8 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     <Button
                       type="button"
                       variant="outline"
-                      className={cn(
-                        "flex-1 px-4 sm:flex-none",
-                        touch,
-                        busyLook,
-                      )}
+                      size="sm"
+                      className={cn("px-3 max-sm:flex-1", touch, busyLook)}
                       aria-disabled={saving || undefined}
                       disabled={!dirty}
                       onClick={() => {
@@ -4242,41 +4258,29 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                     </Button>
                     <Button
                       type="button"
-                      className={cn(
-                        "flex-1 px-4 sm:flex-none",
-                        touch,
-                        busyLook,
-                      )}
+                      size="sm"
+                      className={cn("px-3 max-sm:flex-1", touch, busyLook)}
                       aria-disabled={saving || undefined}
                       disabled={!dirty}
                       onClick={() => void save()}
                     >
                       {saving && <Spinner aria-hidden="true" />}
-                      {saving ? "Saving changes..." : "Save changes"}
+                      {saving ? "Saving..." : "Save"}
                     </Button>
                   </>
                 )}
               </div>
             </div>
-          )}
+          </div>
         </div>
-      )}
-
-      {!showBar && heldSpace && (
-        // The space the bar took, kept so its leaving moves nothing.
-        <div
-          ref={spaceRef}
-          aria-hidden="true"
-          style={{ height: heldSpace.height }}
-        />
       )}
 
       <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
         <SheetContent
           side="right"
-          // Wide enough for the desktop page at real size on a laptop.
-          className="w-full gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-[66rem]"
-          closeButtonClassName={touchIcon}
+          // The whole screen: the page at the size visitors see it.
+          className="w-full gap-0 p-0 data-[side=right]:w-full data-[side=right]:border-l-0 data-[side=right]:sm:max-w-none"
+          showCloseButton={false}
           // Titled and nothing more: the frame shows what it shows.
           aria-describedby={undefined}
           onCloseAutoFocus={(event) => {
@@ -4285,18 +4289,30 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             focusByKey(returnFocus.current, "preview-page");
           }}
         >
-          <SheetHeader className="border-b border-border pr-14">
-            <SheetTitle>Public preview</SheetTitle>
-            {/* Under 640 pixels the sheet is a phone already: no toggle. */}
-            <div className="pt-2 max-sm:hidden">
+          {/* The width choice and Close share one bar; Escape closes too. */}
+          <div className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2">
+            <SheetTitle className="sr-only">Public preview</SheetTitle>
+            {/* Under 640 pixels the screen is a phone already: no toggle. */}
+            <div className="max-sm:hidden">
               <WidthToggle width={previewWidth} onWidth={setPreviewWidth} />
             </div>
-          </SheetHeader>
+            <SheetClose asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className={cn("ml-auto", touchIcon)}
+              >
+                <XIcon aria-hidden="true" />
+                <span className="sr-only">Close preview</span>
+              </Button>
+            </SheetClose>
+          </div>
           <div
             tabIndex={0}
             role="group"
             aria-label="Scrollable preview"
-            className="min-h-0 flex-1 overflow-y-auto bg-background p-3 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+            className="min-h-0 flex-1 overflow-y-auto bg-background outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           >
             {preview}
           </div>
@@ -4609,6 +4625,7 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         <DialogContent
           scrollable
           className="sm:max-w-lg"
+          aria-describedby={undefined}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             focusByKey(returnFocus.current, "schedule", "schedule-empty");
@@ -4639,9 +4656,14 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
         <DialogContent
           scrollable
           className="sm:max-w-lg"
+          aria-describedby={undefined}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            focusByKey(returnFocus.current, "announcement");
+            focusByKey(
+              returnFocus.current,
+              "announcement",
+              "announcement-empty",
+            );
           }}
         >
           <form
@@ -4649,13 +4671,27 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
             noValidate
             onSubmit={async (event) => {
               event.preventDefault();
-              if (!announcing) return;
+              if (!announcing || liveBusy) return;
               const text = announcing.text.trim();
+              if (!text) {
+                // The button stays where players' eyes expect it; an empty
+                // post says what is missing instead (Clear on the card
+                // removes one).
+                setAnnouncing(
+                  (value) => value && { ...value, error: "", empty: true },
+                );
+                document.getElementById("status-announcement")?.focus();
+                return;
+              }
               setAnnouncing((value) => value && { ...value, error: "" });
               if (
                 await commitLive(
-                  { announcement: text },
-                  text ? "Announcement posted." : "Announcement removed.",
+                  {
+                    announcement: text,
+                    announcementIcon: announcing.icon,
+                    announcementTone: announcing.tone,
+                  },
+                  "Announcement posted.",
                   (error) =>
                     setAnnouncing((value) => value && { ...value, error }),
                 )
@@ -4669,64 +4705,47 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                   ? "Edit announcement"
                   : "Post an announcement"}
               </DialogTitle>
-              <DialogDescription>
-                Goes live on your page when you post it.
-              </DialogDescription>
             </DialogHeader>
             <DialogBody>
               <div className="space-y-2">
-                <Label htmlFor="status-announcement">Announcement</Label>
                 <Textarea
                   id="status-announcement"
+                  aria-label="Announcement"
                   maxLength={500}
                   rows={4}
                   value={announcing?.text ?? ""}
-                  aria-describedby="status-announcement-count"
+                  aria-invalid={announcing?.empty || undefined}
+                  aria-describedby={
+                    announcing?.empty ? "status-announcement-error" : undefined
+                  }
                   onChange={(e) =>
                     setAnnouncing((value) =>
-                      value ? { text: e.target.value, error: "" } : value,
+                      value
+                        ? {
+                            ...value,
+                            text: e.target.value,
+                            error: "",
+                            empty: false,
+                          }
+                        : value,
                     )
                   }
-                  placeholder="Wipe day is Thursday at 19:00 UTC."
+                  placeholder="EU servers are offline while we investigate a network outage. Next update in 30 minutes."
                 />
-                <p
-                  id="status-announcement-count"
-                  className="text-right text-xs text-muted-foreground tabular-nums"
-                >
-                  {announcing?.text.length ?? 0} of 500
-                </p>
+                {announcing?.empty && (
+                  <FieldMessage id="status-announcement-error">
+                    Write the announcement before posting it.
+                  </FieldMessage>
+                )}
               </div>
-              {state.announcement && (
-                <div className="border-t border-border pt-4">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className={cn(
-                      "-ml-3 px-3 text-destructive hover:text-destructive",
-                      touch,
-                    )}
-                    disabled={liveBusy}
-                    onClick={async () => {
-                      setAnnouncing(
-                        (value) => value && { ...value, error: "" },
-                      );
-                      if (
-                        await commitLive(
-                          { announcement: "" },
-                          "Announcement removed.",
-                          (error) =>
-                            setAnnouncing(
-                              (value) => value && { ...value, error },
-                            ),
-                        )
-                      )
-                        setAnnouncing(null);
-                    }}
-                  >
-                    <Trash2Icon aria-hidden="true" />
-                    Remove announcement
-                  </Button>
-                </div>
+              {announcing && (
+                <AnnouncementStylePicker
+                  icon={announcing.icon}
+                  tone={announcing.tone}
+                  onChange={(change) =>
+                    setAnnouncing((value) => value && { ...value, ...change })
+                  }
+                />
               )}
               {announcing?.error && (
                 <ActionError>{announcing.error}</ActionError>
@@ -4746,17 +4765,66 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
                 type="submit"
                 className={cn("px-4", touch, busyLook)}
                 aria-disabled={liveBusy || undefined}
-                disabled={!announcing?.text.trim()}
               >
                 {liveBusy && <Spinner aria-hidden="true" />}
-                {state.announcement
-                  ? "Update announcement"
-                  : "Post announcement"}
+                {state.announcement ? "Update" : "Post"}
               </Button>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={clearOpen}
+        onOpenChange={(open) => {
+          if (open || liveBusy) return;
+          setClearOpen(false);
+          setClearError("");
+        }}
+      >
+        <AlertDialogContent
+          // The title says it all; nothing else to describe.
+          aria-describedby={undefined}
+          onCloseAutoFocus={(event) => {
+            // Back to Clear, or to the empty card's Post once cleared.
+            event.preventDefault();
+            focusByKey("clear-announcement", "announcement-empty");
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear the announcement?</AlertDialogTitle>
+          </AlertDialogHeader>
+          {clearError && <ActionError>{clearError}</ActionError>}
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={liveBusy}
+              className={cn("h-10 px-4", touch)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive-solid"
+              className={cn("h-10 px-4", touch, busyLook)}
+              aria-disabled={liveBusy || undefined}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (liveBusy) return;
+                setClearError("");
+                if (
+                  await commitLive(
+                    { announcement: "" },
+                    "Announcement cleared.",
+                    setClearError,
+                  )
+                )
+                  setClearOpen(false);
+              }}
+            >
+              {liveBusy ? "Clearing..." : "Clear announcement"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={publishOpen}
@@ -4945,31 +5013,26 @@ export function StatusPageAdmin({ identity }: { identity: Identity }) {
 /* ------------------------------------------------------------------ */
 
 function AdminSkeleton() {
-  // Same shape as the header: identity, then the action row (its own rows on
-  // phones), then the tabs.
+  // Same shape as the loaded page: the title and its publication pill, the
+  // tabs, then the Overview's health card over Maintenance and Announcement.
   return (
     <div aria-label="Loading status page" role="status" className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-        <div className="min-w-0 flex-1 basis-72 space-y-2">
-          <Skeleton className="h-8 w-44" />
-          <Skeleton className="h-4 w-32" />
-          <Skeleton className="h-4 w-72 max-w-full" />
-        </div>
-        <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:flex-nowrap">
-          <Skeleton className="h-10 flex-1 sm:w-40 sm:flex-none" />
-          <Skeleton className="size-10" />
-          <Skeleton className="h-10 basis-full sm:w-52 sm:basis-auto" />
-        </div>
+      <div className="flex min-h-11 items-center gap-3">
+        <Skeleton className="h-8 w-44" />
+        <Skeleton className="h-6 w-24 rounded-full" />
       </div>
-      <div className="flex gap-4 border-b border-border pb-2.5">
-        <Skeleton className="h-5 w-16" />
-        <Skeleton className="h-5 w-14" />
-        <Skeleton className="h-5 w-16" />
+      <div className="flex h-10 items-center gap-6 border-b border-border px-2 sm:px-3">
+        <Skeleton className="h-4 w-16" />
+        <Skeleton className="h-4 w-14" />
+        <Skeleton className="h-4 w-16" />
       </div>
-      <Skeleton className="h-32 w-full rounded-xl" />
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <Skeleton className="h-80 rounded-xl" />
-        <Skeleton className="h-48 rounded-xl" />
+      <div className="space-y-6 pt-1">
+        {/* Phones stack Manage targets under the summary. */}
+        <Skeleton className="h-44 w-full rounded-xl sm:h-36" />
+        <div className="grid items-start gap-6 lg:grid-cols-2">
+          <Skeleton className="h-52 rounded-xl" />
+          <Skeleton className="h-28 rounded-xl" />
+        </div>
       </div>
     </div>
   );
@@ -5285,11 +5348,12 @@ function SetupCard({
 }
 
 /**
- * The Overview's first card: the true status of every target, hidden ones
- * included, from each target's observed health. Maintenance is shown beside
- * the health in words and never stands in for it, so a target that is down
- * during a window still needs attention. What players are told stays on the
- * public page and in the editors' preview.
+ * The Overview's status card: the true status of every target, hidden ones
+ * included, from each target's observed health, laid out like the public
+ * page (groups in the page's order, every row in view). Maintenance is shown
+ * beside the health in words and never stands in for it, so a target that is
+ * down during a window still needs attention. What players are told stays on
+ * the public page and in the editors' preview.
  */
 function TargetHealth({
   components,
@@ -5299,8 +5363,6 @@ function TargetHealth({
   stale,
   refreshing,
   onRetry,
-  onManage,
-  phone,
 }: {
   components: StatusComponent[];
   maintenance: MaintenanceWindow[];
@@ -5309,255 +5371,141 @@ function TargetHealth({
   stale: boolean;
   refreshing: boolean;
   onRetry: () => void;
-  onManage: () => void;
-  /** On phones Manage targets closes the card as a row of its own. */
-  phone: boolean;
 }) {
-  // Worst first: what an operator should look at before anything else.
-  const rows = components
-    .map((component) => ({
-      component,
-      health: component.health,
-      maintained:
-        componentStatus(component, maintenance, now) === "maintenance",
-    }))
-    .sort((a, b) => severity[a.health] - severity[b.health]);
-  const attention = rows.filter((r) => r.health !== "operational");
-  const working = rows.filter(
-    (r) => r.health === "operational" && r.maintained,
-  );
-  const online = rows.filter(
-    (r) => r.health === "operational" && !r.maintained,
-  );
-  const hidden = rows.filter((r) => !r.component.public).length;
-  // A window running on any target is said beside the count, so a healthy
-  // headline never hides it (claude D-111). The latest end is when the
-  // maintenance is over.
-  const running = activeMaintenance(maintenance, now).filter((w) =>
-    rows.some(
-      (r) =>
-        w.componentIds.length === 0 || w.componentIds.includes(r.component.id),
-    ),
-  );
-  const runningUntil = running.length
-    ? Math.max(...running.map(windowEnd))
-    : null;
-  const tone: ComponentStatus = attention[0]?.health ?? "operational";
+  const attention = components.filter((c) => c.health !== "operational");
+  const tone: ComponentStatus =
+    [...attention].sort((a, b) => severity[a.health] - severity[b.health])[0]
+      ?.health ?? "operational";
   const headline = attention.length
     ? `${plural(attention.length, "target")} ${attention.length === 1 ? "needs" : "need"} attention`
-    : rows.length === 1
-      ? "Your target is operational"
-      : `All ${rows.length} targets operational`;
+    : "Systems Operational";
   // A headline a refresh changes is said once; the first one never is.
   const [heard, setHeard] = useState({ headline, spoken: "" });
   if (headline !== heard.headline) setHeard({ headline, spoken: headline });
 
-  const row = ({ component, health, maintained }: (typeof rows)[number]) => (
-    <li key={component.id} className="flex items-start gap-3 px-4 py-3 md:px-5">
-      <ToneIcon
-        tone={health}
-        className={cn("mt-0.5 size-4 shrink-0", toneClass[health])}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <p className="min-w-0 text-sm font-medium break-words">
-            {component.name}
+  const row = (component: StatusComponent) => {
+    const health = component.health;
+    const maintained =
+      componentStatus(component, maintenance, now) === "maintenance";
+    return (
+      <li
+        key={component.id}
+        className="flex items-start gap-3 px-4 py-3 md:px-5"
+      >
+        <ToneIcon
+          tone={health}
+          className={cn("mt-0.5 size-4 shrink-0", toneClass[health])}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="min-w-0 text-sm font-medium break-words">
+              {component.name}
+            </p>
+            {!component.public && <Tag>Hidden</Tag>}
+            {maintained && (
+              <Tag>
+                <CalendarClockIcon aria-hidden="true" className="size-3" />
+                Maintenance
+              </Tag>
+            )}
+          </div>
+          <p className="mt-0.5 text-xs leading-5 break-words text-muted-foreground">
+            {component.detail ??
+              (component.sourceName === null
+                ? `Removed ${kindLabel[component.kind].toLowerCase()}`
+                : component.sourceName !== component.name
+                  ? component.sourceName
+                  : kindLabel[component.kind])}
           </p>
-          {!component.public && <Tag>Hidden</Tag>}
-          {maintained && (
-            <Tag>
-              <CalendarClockIcon aria-hidden="true" className="size-3" />
-              Maintenance
-            </Tag>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className={cn("text-xs leading-5 font-medium", toneClass[health])}>
+            {statusLabel[health]}
+          </p>
+          {component.observedAt !== null && (
+            <Time
+              at={component.observedAt}
+              now={now}
+              className="text-xs leading-5 text-muted-foreground"
+            />
           )}
         </div>
-        <p className="mt-0.5 text-xs leading-5 break-words text-muted-foreground">
-          {component.detail ??
-            (component.sourceName === null
-              ? `Removed ${kindLabel[component.kind].toLowerCase()}`
-              : component.sourceName !== component.name
-                ? component.sourceName
-                : kindLabel[component.kind])}
-        </p>
-      </div>
-      <div className="shrink-0 text-right">
-        <p className={cn("text-xs leading-5 font-medium", toneClass[health])}>
-          {statusLabel[health]}
-        </p>
-        {component.observedAt !== null && (
-          <Time
-            at={component.observedAt}
-            now={now}
-            className="text-xs leading-5 text-muted-foreground"
-          />
-        )}
-      </div>
-    </li>
-  );
+      </li>
+    );
+  };
   return (
     <section
       aria-labelledby="health-heading"
       className="min-w-0 overflow-hidden rounded-xl border border-border bg-card"
     >
-      {/* On phones Manage targets is the card's last row, so it never
-          squeezes the headline or sits alone under it (claude D-115). */}
-      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 px-4 pt-4 pb-4 md:px-5 md:pt-5">
-        <div className="min-w-0 flex-1 basis-[20rem]">
-          <h2
-            id="health-heading"
+      <div className="px-4 py-4 md:px-5 md:py-5">
+        <h2
+          id="health-heading"
+          className={cn(
+            "flex items-start gap-2.5 text-xl font-semibold tracking-tight text-balance sm:text-2xl",
+            stale && "text-muted-foreground",
+          )}
+        >
+          <ToneIcon
+            tone={tone}
             className={cn(
-              "flex items-start gap-2.5 text-xl font-semibold tracking-tight text-balance sm:text-2xl",
-              stale && "text-muted-foreground",
+              "mt-0.5 size-6 shrink-0 sm:mt-1",
+              toneClass[tone],
+              stale && "opacity-60",
             )}
-          >
-            <ToneIcon
-              tone={tone}
-              className={cn(
-                "mt-0.5 size-6 shrink-0 sm:mt-1",
-                toneClass[tone],
-                stale && "opacity-60",
-              )}
+          />
+          {headline}
+        </h2>
+        <p role="status" className="sr-only">
+          {heard.spoken}
+        </p>
+        {stale && checkedAt !== null && (
+          // A failed refresh is a fact about this connection, so the card
+          // keeps the last known status and says when it was read.
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs leading-5 text-muted-foreground sm:pl-8.5">
+            <TriangleAlertIcon
+              aria-hidden="true"
+              className="size-3.5 text-warning"
             />
-            {headline}
-          </h2>
-          <p role="status" className="sr-only">
-            {heard.spoken}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs leading-5 text-muted-foreground sm:pl-8.5">
-            <span className="tabular-nums">
-              {plural(rows.length, "target")}
-              {hidden ? `, ${hidden} hidden` : ""}.
+            <span>
+              Couldn&apos;t refresh. Last checked{" "}
+              <Time at={checkedAt} now={now} relative={false} />.
             </span>
-            {runningUntil !== null && (
-              <span className="flex items-center gap-1.5 text-foreground/80">
-                <CalendarClockIcon aria-hidden="true" className="size-3.5" />
-                <span>
-                  {/* Short enough for one line on phones (claude D-120). */}
-                  Maintenance until{" "}
-                  <time
-                    dateTime={new Date(runningUntil).toISOString()}
-                    className="whitespace-nowrap"
-                  >
-                    {atText(runningUntil, now)}
-                  </time>
-                  .
-                </span>
-              </span>
-            )}
-            {checkedAt !== null &&
-              (stale ? (
-                // A failed refresh is a fact about this connection, so the
-                // card keeps the last known status and says when it was read.
-                <span className="flex flex-wrap items-center gap-x-1.5">
-                  <TriangleAlertIcon
-                    aria-hidden="true"
-                    className="size-3.5 text-warning"
-                  />
-                  <span>
-                    Couldn&apos;t refresh. Last checked{" "}
-                    <Time at={checkedAt} now={now} relative={false} />.
-                  </span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className={cn("px-2", touch)}
-                    disabled={refreshing}
-                    onClick={onRetry}
-                  >
-                    <RefreshCwIcon
-                      aria-hidden="true"
-                      className={cn(refreshing && "animate-spin")}
-                    />
-                    Retry
-                  </Button>
-                </span>
-              ) : (
-                <span>
-                  Updated{" "}
-                  <time dateTime={new Date(checkedAt).toISOString()}>
-                    {atText(checkedAt, now)}
-                  </time>
-                  .
-                </span>
-              ))}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn("px-2", touch)}
+              disabled={refreshing}
+              onClick={onRetry}
+            >
+              <RefreshCwIcon
+                aria-hidden="true"
+                className={cn(refreshing && "animate-spin")}
+              />
+              Retry
+            </Button>
           </div>
-        </div>
-        {!phone && (
-          <Button
-            type="button"
-            variant="ghost"
-            className={cn("-mt-1 shrink-0 px-3", touch)}
-            onClick={onManage}
-          >
-            Manage targets
-          </Button>
         )}
       </div>
-      {attention.length > 0 && (
-        <div className="border-t border-border">
-          <h3
-            id="attention-heading"
-            className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground md:px-5"
-          >
-            Needs attention
-          </h3>
-          <ul
-            aria-labelledby="attention-heading"
-            className="divide-y divide-border"
-          >
-            {attention.map(row)}
-          </ul>
-        </div>
-      )}
-      {working.length > 0 && (
-        <div className="border-t border-border">
-          <h3
-            id="working-heading"
-            className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground md:px-5"
-          >
-            Under maintenance
-          </h3>
-          <ul
-            aria-labelledby="working-heading"
-            className="divide-y divide-border"
-          >
-            {working.map(row)}
-          </ul>
-        </div>
-      )}
-      {online.length > 0 && (
-        <Collapsible className="group/online border-t border-border">
-          <CollapsibleTrigger className="flex h-11 w-full items-center gap-2 px-4 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-surface-elevated/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset md:px-5">
-            <ChevronRightIcon
-              aria-hidden="true"
-              className="size-4 transition-transform group-data-[state=open]/online:rotate-90"
-            />
-            <ToneIcon tone="operational" className="size-4 text-primary" />
-            {online.length === 1
-              ? "1 target operational"
-              : `${online.length} targets operational`}
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <ul className="divide-y divide-border border-t border-border">
-              {online.map(row)}
-            </ul>
-          </CollapsibleContent>
-        </Collapsible>
-      )}
-      {phone && (
-        <button
-          type="button"
-          onClick={onManage}
-          className="flex h-11 w-full items-center justify-between gap-2 border-t border-border px-4 text-left text-sm font-medium transition-colors outline-none hover:bg-surface-elevated/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      {groupComponents(components).map((group, index) => (
+        <div
+          key={group.name || `ungrouped-${index}`}
+          className="border-t border-border"
         >
-          Manage targets
-          <ChevronRightIcon
-            aria-hidden="true"
-            className="size-4 text-muted-foreground"
-          />
-        </button>
-      )}
+          {group.name && (
+            <h3 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground md:px-5">
+              {group.name}
+            </h3>
+          )}
+          <ul
+            aria-label={group.name || "Ungrouped targets"}
+            className="divide-y divide-border"
+          >
+            {group.items.map(row)}
+          </ul>
+        </div>
+      ))}
     </section>
   );
 }
@@ -5847,11 +5795,10 @@ function MaintenanceFields({
     <form onSubmit={onSubmit} className="contents" noValidate>
       <DialogHeader>
         <DialogTitle>
-          {form.window ? "Edit maintenance window" : "Schedule maintenance"}
+          {form.window
+            ? "Edit maintenance window"
+            : "Create Scheduled Maintenance"}
         </DialogTitle>
-        <DialogDescription>
-          Players see it as soon as you save.
-        </DialogDescription>
       </DialogHeader>
       <DialogBody>
         <div className="space-y-2">
@@ -5863,7 +5810,7 @@ function MaintenanceFields({
             value={form.title}
             {...aria("title")}
             onChange={(e) => onChange({ title: e.target.value }, "title")}
-            placeholder="Monthly wipe"
+            placeholder="Network upgrade"
           />
           {err("title") && (
             <FieldMessage id="maintenance-title-error">
@@ -5879,7 +5826,7 @@ function MaintenanceFields({
             rows={3}
             value={form.message}
             onChange={(e) => onChange({ message: e.target.value })}
-            placeholder="Optional details for players"
+            placeholder="Players may see brief disconnects while we move to new network hardware."
           />
         </div>
 
@@ -6247,11 +6194,7 @@ function MaintenanceFields({
         </Button>
         <Button type="submit" className={cn("px-4", touch)} disabled={busy}>
           {busy && <Spinner aria-hidden="true" />}
-          {busy
-            ? "Saving window..."
-            : form.window
-              ? "Save window"
-              : "Schedule maintenance"}
+          {busy ? "Saving window..." : form.window ? "Save window" : "Schedule"}
         </Button>
       </DialogFooter>
     </form>
@@ -6487,6 +6430,181 @@ function AccentField({
   );
 }
 
+/** Where the logo sits in the top bar, and its size when it is the title. */
+function LogoLayoutFields({
+  align,
+  size,
+  showSize,
+  onChange,
+}: {
+  align: LogoAlign;
+  size: LogoSize;
+  showSize: boolean;
+  onChange: (change: { logoAlign?: LogoAlign; logoSize?: LogoSize }) => void;
+}) {
+  const chooseAlign = (value: string) => {
+    if ((logoAligns as readonly string[]).includes(value))
+      onChange({ logoAlign: value as LogoAlign });
+  };
+  const chooseSize = (value: string) => {
+    if ((logoSizes as readonly string[]).includes(value))
+      onChange({ logoSize: value as LogoSize });
+  };
+  const alignIcons = {
+    left: AlignLeftIcon,
+    center: AlignCenterIcon,
+    right: AlignRightIcon,
+  } as const;
+  const label = (value: string) => value[0].toUpperCase() + value.slice(1);
+  return (
+    <div className="min-w-0 flex-1 basis-56 space-y-4">
+      <div className="space-y-2">
+        <Label id="status-logo-align-label">Position</Label>
+        <ToggleGroup
+          type="single"
+          value={align}
+          onValueChange={chooseAlign}
+          {...selectOnArrow(chooseAlign)}
+          aria-labelledby="status-logo-align-label"
+          variant="segmented"
+          className="w-full bg-surface-elevated"
+        >
+          {logoAligns.map((value) => {
+            const Icon = alignIcons[value];
+            return (
+              <ToggleGroupItem
+                key={value}
+                value={value}
+                data-value={value}
+                className="flex-1 gap-1.5"
+              >
+                <Icon aria-hidden="true" />
+                {label(value)}
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+      </div>
+      {showSize && (
+        <div className="space-y-2">
+          <Label id="status-logo-size-label">Size</Label>
+          <ToggleGroup
+            type="single"
+            value={size}
+            onValueChange={chooseSize}
+            {...selectOnArrow(chooseSize)}
+            aria-labelledby="status-logo-size-label"
+            variant="segmented"
+            className="w-full bg-surface-elevated"
+          >
+            {logoSizes.map((value) => (
+              <ToggleGroupItem
+                key={value}
+                value={value}
+                data-value={value}
+                className="flex-1"
+              >
+                {label(value)}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The announcement's glyph and color, each a single-choice row. */
+function AnnouncementStylePicker({
+  icon,
+  tone,
+  onChange,
+}: {
+  icon: AnnouncementIcon;
+  tone: AnnouncementTone;
+  onChange: (change: {
+    icon?: AnnouncementIcon;
+    tone?: AnnouncementTone;
+  }) => void;
+}) {
+  const chooseIcon = (value: string) => {
+    if ((announcementIcons as readonly string[]).includes(value))
+      onChange({ icon: value as AnnouncementIcon });
+  };
+  const chooseTone = (value: string) => {
+    if ((announcementTones as readonly string[]).includes(value))
+      onChange({ tone: value as AnnouncementTone });
+  };
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <Label id="announcement-icon-label">Icon</Label>
+        <ToggleGroup
+          type="single"
+          value={icon}
+          onValueChange={chooseIcon}
+          {...selectOnArrow(chooseIcon)}
+          aria-labelledby="announcement-icon-label"
+          variant="outline"
+          spacing={1}
+          className="flex-wrap"
+        >
+          {announcementIcons.map((value) => {
+            const { label, Icon } = announcementIconOptions[value];
+            return (
+              <ToggleGroupItem
+                key={value}
+                value={value}
+                data-value={value}
+                aria-label={label}
+                title={label}
+                className="px-0 data-[state=on]:border-ring data-[state=on]:ring-1 data-[state=on]:ring-ring"
+              >
+                <Icon
+                  aria-hidden="true"
+                  className={announcementToneOptions[tone].text}
+                />
+              </ToggleGroupItem>
+            );
+          })}
+        </ToggleGroup>
+      </div>
+      <div className="space-y-2">
+        <Label id="announcement-tone-label">Color</Label>
+        <ToggleGroup
+          type="single"
+          value={tone}
+          onValueChange={chooseTone}
+          {...selectOnArrow(chooseTone)}
+          aria-labelledby="announcement-tone-label"
+          variant="outline"
+          spacing={1}
+          className="flex-wrap"
+        >
+          {announcementTones.map((value) => (
+            <ToggleGroupItem
+              key={value}
+              value={value}
+              data-value={value}
+              aria-label={announcementToneOptions[value].label}
+              title={announcementToneOptions[value].label}
+              className="px-0 data-[state=on]:border-ring data-[state=on]:ring-1 data-[state=on]:ring-ring"
+            >
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "size-4 rounded-full",
+                  announcementToneOptions[value].fill,
+                )}
+              />
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </div>
+    </div>
+  );
+}
+
 function WidthToggle({
   width,
   onWidth,
@@ -6505,7 +6623,7 @@ function WidthToggle({
       {...selectOnArrow(choose)}
       aria-label="Preview width"
       variant="segmented"
-      className="w-auto bg-surface-elevated"
+      className="w-fit bg-surface-elevated"
     >
       {(
         [
@@ -6579,53 +6697,81 @@ const DESKTOP_PREVIEW = 1024;
 /**
  * The real public view, inert: no links in the tab order, no landmarks.
  * Desktop renders the page at a real desktop width and scales the frame down
- * to the space available, so container queries pick the desktop layout.
+ * to the space available, so container queries pick the desktop layout. With
+ * `fill`, the frame is the whole screen: a desktop page takes the full width
+ * once there is room for it and reaches the bottom like a real tab.
  */
 function PreviewFrame({
   data,
   logoUrl,
   now,
   width,
+  fill = false,
 }: {
   data: PublicStatus;
   logoUrl: string | null;
   now: number;
   width: "desktop" | "phone";
+  fill?: boolean;
 }) {
   const outer = useRef<HTMLDivElement | null>(null);
   const inner = useRef<HTMLDivElement | null>(null);
-  const [box, setBox] = useState({ available: 0, height: 0 });
+  const [box, setBox] = useState({ available: 0, height: 0, room: 0 });
   useEffect(() => {
     const frame = outer.current;
     const page = inner.current;
     if (!frame || !page) return;
+    const screen = fill ? frame.parentElement : null;
     const measure = () =>
-      setBox({ available: frame.clientWidth, height: page.offsetHeight });
+      setBox({
+        available: frame.clientWidth,
+        height: page.offsetHeight,
+        room: screen?.clientHeight ?? 0,
+      });
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(frame);
     observer.observe(page);
+    if (screen) observer.observe(screen);
     return () => observer.disconnect();
-  }, []);
-  const scaled = width === "desktop" && box.available > 0 && box.height > 0;
-  const scale = scaled ? Math.min(1, box.available / DESKTOP_PREVIEW) : 1;
+  }, [fill]);
+  const desktop = width === "desktop";
+  const bare = fill && desktop;
+  const layoutWidth =
+    fill && box.available > DESKTOP_PREVIEW ? box.available : DESKTOP_PREVIEW;
+  const scaled = desktop && box.available > 0 && box.height > 0;
+  const scale = scaled ? Math.min(1, box.available / layoutWidth) : 1;
+  const minHeight = bare && box.room > 0 ? box.room / scale : undefined;
   return (
     <div
       ref={outer}
       data-preview-scale={scale.toFixed(2)}
       className={cn(
-        "mx-auto overflow-hidden rounded-lg border border-border",
-        width === "phone" ? "w-[360px] max-w-full" : "w-full",
+        "mx-auto overflow-hidden",
+        !bare && "rounded-lg border border-border",
+        desktop ? "w-full" : "w-[360px] max-w-full",
+        fill && !desktop && "my-4",
       )}
-      style={scaled ? { height: Math.ceil(box.height * scale) + 2 } : undefined}
+      style={
+        scaled
+          ? { height: Math.ceil(box.height * scale) + (bare ? 0 : 2) }
+          : undefined
+      }
     >
       <div
         ref={inner}
         inert
-        className="@container origin-top-left"
+        className={cn(
+          "@container origin-top-left",
+          bare && "flex flex-col *:flex-1",
+        )}
         style={
           scaled
-            ? { width: DESKTOP_PREVIEW, transform: `scale(${scale})` }
+            ? {
+                width: layoutWidth,
+                minHeight,
+                transform: `scale(${scale})`,
+              }
             : undefined
         }
       >

@@ -37,7 +37,9 @@ import {
 } from "@/components/ui/sidebar";
 import {
   navigationHref,
-  dashboardNavigation,
+  type NavigationGroup,
+  type NavigationItem,
+  type NavigationSection,
 } from "@/lib/dashboard-navigation";
 
 const icons: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
@@ -56,18 +58,64 @@ const icons: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   security: ShieldCheckIcon,
   settings: Settings2Icon,
 };
-type NavigationGroup = (typeof dashboardNavigation)[number];
-
-function NavSection({
+/** An area with one page: a plain button, no dropdown. */
+function NavLink({
   item,
+  id,
   activeSection,
   disabled,
 }: {
-  item: NavigationGroup["items"][number];
+  item: NavigationItem;
+  id: string;
   activeSection?: string;
   disabled?: boolean;
 }) {
-  const active = item.sections.some((section) => section.id === activeSection);
+  const { isMobile, setOpenMobile } = useSidebar();
+  const Icon = icons[item.icon];
+  const href = navigationHref(id);
+  const active = id === activeSection;
+  return (
+    <SidebarMenuItem>
+      {!disabled && href ? (
+        <SidebarMenuButton asChild tooltip={item.title} isActive={active}>
+          <Link
+            href={href}
+            aria-current={active ? "page" : undefined}
+            onClick={() => {
+              if (isMobile) setOpenMobile(false);
+            }}
+          >
+            <Icon />
+            <span>{item.title}</span>
+          </Link>
+        </SidebarMenuButton>
+      ) : (
+        // Not built yet, or no organization: shown, but not a link.
+        <SidebarMenuButton
+          tooltip={item.title}
+          aria-disabled="true"
+          className="text-muted-foreground/60"
+        >
+          <Icon />
+          <span>{item.title}</span>
+        </SidebarMenuButton>
+      )}
+    </SidebarMenuItem>
+  );
+}
+
+function NavSection({
+  item,
+  sections,
+  activeSection,
+  disabled,
+}: {
+  item: NavigationItem;
+  sections: NavigationSection[];
+  activeSection?: string;
+  disabled?: boolean;
+}) {
+  const active = sections.some((section) => section.id === activeSection);
   const [open, setOpen] = useState(active);
   const {
     state,
@@ -76,35 +124,6 @@ function NavSection({
     setOpenMobile,
   } = useSidebar();
   const Icon = icons[item.icon];
-  const href = item.id ? navigationHref(item.id) : undefined;
-
-  if (href) {
-    const current = item.id === activeSection;
-    return (
-      <SidebarMenuItem>
-        {disabled ? (
-          <SidebarMenuButton tooltip={item.title} disabled>
-            <Icon />
-            <span>{item.title}</span>
-          </SidebarMenuButton>
-        ) : (
-          <SidebarMenuButton asChild tooltip={item.title} isActive={current}>
-            <Link
-              href={href}
-              aria-current={current ? "page" : undefined}
-              onClick={() => {
-                if (isMobile) setOpenMobile(false);
-              }}
-            >
-              <Icon />
-              <span>{item.title}</span>
-            </Link>
-          </SidebarMenuButton>
-        )}
-      </SidebarMenuItem>
-    );
-  }
-
   return (
     <Collapsible
       asChild
@@ -133,7 +152,7 @@ function NavSection({
         </CollapsibleTrigger>
         <CollapsibleContent>
           <SidebarMenuSub>
-            {item.sections.map((section) => (
+            {sections.map((section) => (
               <SidebarMenuSubItem key={section.id}>
                 {!disabled && navigationHref(section.id) ? (
                   <SidebarMenuSubButton
@@ -182,14 +201,25 @@ export function NavMain({
     <SidebarGroup>
       <SidebarGroupLabel>{group.title}</SidebarGroupLabel>
       <SidebarMenu>
-        {group.items.map((item) => (
-          <NavSection
-            key={`${item.title}-${activeSection ?? "overview"}`}
-            item={item}
-            activeSection={activeSection}
-            disabled={disabled}
-          />
-        ))}
+        {group.items.map((item) =>
+          item.sections ? (
+            <NavSection
+              key={`${item.title}-${activeSection ?? "overview"}`}
+              item={item}
+              sections={item.sections}
+              activeSection={activeSection}
+              disabled={disabled}
+            />
+          ) : (
+            <NavLink
+              key={item.title}
+              item={item}
+              id={item.id}
+              activeSection={activeSection}
+              disabled={disabled}
+            />
+          ),
+        )}
       </SidebarMenu>
     </SidebarGroup>
   );

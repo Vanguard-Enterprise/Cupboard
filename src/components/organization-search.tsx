@@ -92,7 +92,7 @@ export function OrganizationSearch({
   const { profile } = useOrganization();
   const guard = useGuardedNavigation();
   // With unsaved edits, the leave prompt waits until this menu has closed and
-  // returned focus, so Keep editing lands back where the operator was.
+  // returned focus, so Cancel lands back where the operator was.
   const afterClose = useRef<string | null>(null);
   // The menu has no trigger to return to (Ctrl+K opens it from anywhere), so
   // closing puts focus back on whatever the operator was using.
@@ -174,10 +174,10 @@ export function OrganizationSearch({
                   Dashboard
                 </CommandItem>
                 <CommandItem
-                  value="Server inventory Rust RCON A2S servers"
+                  value="Game servers inventory Rust RCON A2S servers"
                   onSelect={() => navigate(serversPath)}
                 >
-                  Server inventory
+                  Game servers
                 </CommandItem>
                 <CommandItem
                   value="Organization settings profile contacts"

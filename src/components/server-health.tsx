@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { type Identity } from "@/lib/api-client";
+import { SkeletonRows } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
@@ -148,11 +149,7 @@ function HealthView({ identity }: { identity: Identity }) {
               </AlertDescription>
             </Alert>
           )}
-          {!servers && !error && (
-            <p role="status" className="text-sm text-muted-foreground">
-              Loading server health...
-            </p>
-          )}
+          {!servers && !error && <SkeletonRows label="Loading server health" />}
           {servers?.length === 0 && (
             <div className="rounded-lg border border-dashed p-8 text-center">
               <h2 className="font-semibold">No servers yet</h2>

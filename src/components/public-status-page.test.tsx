@@ -41,6 +41,12 @@ const status: PublicStatus = {
   links: [],
   footerText: "",
   poweredBy: true,
+  showName: true,
+  headerTitle: "",
+  logoAlign: "left",
+  logoSize: "medium",
+  announcementIcon: "megaphone",
+  announcementTone: "neutral",
   logoVersion: null,
   updatedAt: now,
   components: [
@@ -173,9 +179,11 @@ describe("Public status page", () => {
     expect(times.length).toBeGreaterThan(3);
     for (const time of times)
       expect(time.getAttribute("dateTime")).toMatch(/Z$/);
-    // Every absolute time names its zone; a fresh page needs no "just now".
-    expect(screen.getByText(/^Updated/).textContent).toMatch(
-      /^Updated \d+:\d\d [AP]M \S+$/,
+    // The update reads as an age; its clock time and zone stay on hover.
+    const updated = screen.getByText(/^Updated/);
+    expect(updated.textContent).toBe("Updated just now");
+    expect(updated.querySelector("time")!.getAttribute("title")).toMatch(
+      /^\d+:\d\d [AP]M \S+$/,
     );
   });
 
@@ -393,9 +401,8 @@ describe("Public status page", () => {
     expect(
       screen.getByText(/Last known: US Vanilla is unavailable/),
     ).toBeTruthy();
-    // The age shows only once it matters.
-    expect(screen.getByText(/^Updated/).textContent).toMatch(
-      /^Updated \d+:\d\d [AP]M \S+ \(1 minute ago\)$/,
+    expect(screen.getByText(/^Updated/).textContent).toBe(
+      "Updated 1 minute ago",
     );
     expect(live.textContent).toBe(
       "Couldn't refresh. Status may be out of date.",
@@ -639,15 +646,13 @@ describe("Public status page", () => {
     const glyph = hero.querySelector("h2 svg")!;
     expect(glyph.getAttribute("aria-hidden")).toBe("true");
     expect(glyph.getAttribute("class")).toContain("text-destructive");
-    // The statement hangs off its glyph: the glyph sits in the indent, so a
-    // wrapped line starts under the first, never under the glyph (P-31).
+    // The glyph sits inline before the title, in the column: a wrapped line
+    // lines up with the title's text, never under the glyph (P-31).
     const statement = hero.firstElementChild!;
-    expect(statement.className).toContain("pl-(--hang)");
-    expect(glyph.getAttribute("class")).toContain(
-      "left-[calc(var(--hang)*-1)]",
-    );
-    expect(glyph.getAttribute("class")).not.toContain("inline-block");
-    expect(screen.getByRole("main").className).toContain("[--hang:2rem]");
+    const heading = hero.querySelector("h2")!;
+    expect(heading.className.split(" ")).toContain("flex");
+    expect(glyph.getAttribute("class")).toContain("shrink-0");
+    expect(glyph.getAttribute("class")).not.toContain("absolute");
     // Visible: the title and the update time. The rest is for screen readers.
     const shown = [...statement.children].filter(
       (el) => !el.classList.contains("sr-only"),
@@ -1012,6 +1017,154 @@ describe("Public status page", () => {
   // claude P-38: "3 of 5 online" above five visible rows repeated them. The
   // page count follows the roll-up rule: shown only while a group is
   // collapsed. CSS (`:has`) decides, so the test checks that contract.
+  it("opens a service's uptime, response times, and incidents from its row", async () => {
+    const hour = Math.floor(now / 3_600_000) * 3_600_000;
+    const day = Math.floor(now / 86_400_000) * 86_400_000;
+    const bucket = (start: number, down: number, latencyMs: number | null) => ({
+      start,
+      operational: 60 - down,
+      degraded: 0,
+      down,
+      maintenance: 0,
+      unknown: 0,
+      latencyMs,
+      latencyCount: latencyMs === null ? 0 : 60,
+    });
+    vi.mocked(apiRequest).mockResolvedValueOnce({
+      now,
+      hours: [bucket(hour - 3_600_000, 0, 120), bucket(hour, 6, 180)],
+      days: [bucket(day, 6, 150)],
+      incidents: [
+        { startedAt: now - 600_000, endedAt: now - 240_000, worst: "down" },
+      ],
+    });
+    render(<PublicStatusPage slug="northstar" initial={status} />);
+    const row = screen.getByRole("button", { name: /^EU Main/ });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(row);
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    const panel = document.getElementById(row.getAttribute("aria-controls")!)!;
+    expect(await within(panel).findByText("Recent incidents")).toBeTruthy();
+    expect(apiRequest).toHaveBeenLastCalledWith(
+      `public/status/northstar/components/${status.components[0].id}/history`,
+    );
+    // 114 of 120 minutes up over the day: never rounded up to 100%.
+    expect(within(panel).getAllByText("95.00%").length).toBeGreaterThan(0);
+    expect(within(panel).getByText("Average 150 ms")).toBeTruthy();
+    expect(within(panel).getByText("Unavailable for 6 minutes")).toBeTruthy();
+    fireEvent.click(row);
+    expect(panel.hidden).toBe(true);
+  });
+
+  it("shows the announcement with its chosen icon and color", () => {
+    const { rerender } = render(
+      <PublicStatusView data={status} logoUrl={null} now={now} />,
+    );
+    const plain = screen.getByRole("note", { name: "Announcement" });
+    expect(plain.className).not.toContain("border");
+    expect(plain.querySelector("svg")!.getAttribute("class")).toContain(
+      "text-muted-foreground",
+    );
+    rerender(
+      <PublicStatusView
+        data={{
+          ...status,
+          announcementIcon: "alert",
+          announcementTone: "danger",
+        }}
+        logoUrl={null}
+        now={now}
+      />,
+    );
+    const red = screen.getByRole("note", { name: "Announcement" });
+    expect(red.className).toContain("border-destructive/40");
+    const glyph = red.querySelector("svg")!.getAttribute("class")!;
+    expect(glyph).toContain("text-destructive");
+    expect(glyph).toContain("lucide-triangle-alert");
+  });
+
+  it("titles the top bar with the operator's title, else the page name", () => {
+    const { rerender } = render(
+      <PublicStatusView
+        data={{ ...status, headerTitle: "Northstar" }}
+        logoUrl={null}
+        now={now}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+      "Northstar",
+    );
+    rerender(
+      <PublicStatusView
+        data={{ ...status, headerTitle: "  " }}
+        logoUrl={null}
+        now={now}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+      status.name,
+    );
+  });
+
+  it("places the logo left, center, or right, and sizes a logo title", () => {
+    const view = (data: Partial<PublicStatus>) => (
+      <PublicStatusView
+        data={{ ...status, logoVersion: 3, ...data }}
+        logoUrl="/logo.png"
+        now={now}
+      />
+    );
+    const { rerender } = render(view({}));
+    const header = () => screen.getByRole("banner");
+    expect(header().className).toContain("@min-[40rem]:justify-between");
+    expect(header().className).not.toContain("flex-row-reverse");
+    rerender(view({ logoAlign: "right" }));
+    expect(header().className).toContain("@min-[40rem]:flex-row-reverse");
+    rerender(view({ logoAlign: "center" }));
+    expect(header().className).toContain("items-center");
+    expect(header().className).toContain(
+      "@min-[40rem]:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]",
+    );
+    // Links and support stay reachable in every position.
+    expect(
+      within(header()).getByRole("link", { name: "Contact support" }),
+    ).toBeTruthy();
+    // A logo standing in for the title takes the chosen size.
+    rerender(view({ showName: false, logoSize: "large" }));
+    const logo = within(header()).getByRole("img", { name: status.name });
+    expect(logo.getAttribute("class")).toContain("h-16");
+    rerender(view({ showName: false, logoSize: "small" }));
+    expect(
+      within(header())
+        .getByRole("img", { name: status.name })
+        .getAttribute("class"),
+    ).toContain("h-10");
+  });
+
+  it("uses the logo as the title when the name is turned off", () => {
+    const { rerender } = render(
+      <PublicStatusView
+        data={{ ...status, showName: false, logoVersion: 3 }}
+        logoUrl="/logo.png"
+        now={now}
+      />,
+    );
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title.textContent).toBe("");
+    expect(within(title).getByRole("img", { name: status.name })).toBeTruthy();
+    // Without a logo the name always shows.
+    rerender(
+      <PublicStatusView
+        data={{ ...status, showName: false }}
+        logoUrl={null}
+        now={now}
+      />,
+    );
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+      status.name,
+    );
+  });
+
   it("shows the page count only while a group hides its rows", () => {
     const fleet = Array.from({ length: 9 }, (_, i) => ({
       id: `s${i}`,
@@ -1031,10 +1184,10 @@ describe("Public status page", () => {
     expect(count.textContent).toBe("8 of 9 online");
     expect(count.className.split(" ")).toContain("hidden");
     expect(count.className).toContain(
-      "group-has-[button[aria-expanded=false]]/services:block",
+      "group-has-[button[data-group-toggle][aria-expanded=false]]/services:block",
     );
     expect(services.className.split(" ")).toContain("group/services");
-    const hiding = ":has(button[aria-expanded=false])";
+    const hiding = ":has(button[data-group-toggle][aria-expanded=false])";
     expect(services.matches(hiding)).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "EU" }));
     expect(services.matches(hiding)).toBe(false);

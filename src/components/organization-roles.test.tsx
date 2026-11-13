@@ -286,7 +286,9 @@ it.each(["cancel", "escape", "save"])(
 it("moves focus to Roles when a refresh removes the inspected role", async () => {
   const user = userEvent.setup();
   mount();
-  const heading = await screen.findByRole("heading", { name: "Roles" });
+  // The loading view has its own heading; wait for the loaded page's.
+  await screen.findByRole("table");
+  const heading = screen.getByRole("heading", { name: "Roles" });
   await user.click(
     within(screen.getByRole("table")).getByRole("button", {
       name: "View Viewer role",

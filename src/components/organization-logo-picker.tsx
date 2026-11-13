@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 
 export function OrganizationLogoPicker({
   disabled,
@@ -51,6 +52,7 @@ export function OrganizationLogoPicker({
           disabled={disabled}
           onClick={() => input.current?.click()}
         >
+          {loading && <Spinner aria-hidden="true" />}
           {hasLogo ? "Replace logo" : "Select logo"}
         </Button>
         {hasLogo && (
@@ -71,8 +73,9 @@ export function OrganizationLogoPicker({
           </Tooltip>
         )}
       </div>
+      {/* Busy shows in the button, so the form below never shifts. */}
       {loading && (
-        <p role="status" className="text-sm text-muted-foreground">
+        <p role="status" className="sr-only">
           Preparing logo...
         </p>
       )}

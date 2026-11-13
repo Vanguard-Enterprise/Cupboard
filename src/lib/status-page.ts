@@ -50,6 +50,11 @@ export type StatusFont =
   | "jetbrains-mono";
 export type StatusLink = { label: string; url: string };
 
+export const logoAligns = ["left", "center", "right"] as const;
+export type LogoAlign = (typeof logoAligns)[number];
+export const logoSizes = ["small", "medium", "large"] as const;
+export type LogoSize = (typeof logoSizes)[number];
+
 /** How the public page looks. Saved with the page; the logo uploads separately. */
 export type Branding = {
   theme: StatusTheme;
@@ -58,6 +63,14 @@ export type Branding = {
   links: StatusLink[];
   footerText: string;
   poweredBy: boolean;
+  /** The top bar's title; empty shows the page name. */
+  headerTitle: string;
+  /** When false and a logo exists, the logo stands in for the title. */
+  showName: boolean;
+  /** Where the logo and title sit in the top bar. */
+  logoAlign: LogoAlign;
+  /** How large the logo is when it stands in for the title. */
+  logoSize: LogoSize;
 };
 
 export const statusFonts: { id: StatusFont; label: string }[] = [
@@ -184,36 +197,66 @@ export function publicLogoPath(slug: string, version: number) {
   return `/app-api/public/status/${slug}/logo?v=${version}`;
 }
 
-/** The published page as visitors receive it: public targets by display name only. */
-export type PublicStatus = Branding & {
-  name: string;
-  announcement: string;
-  supportUrl: string;
-  logoVersion: number | null;
-  updatedAt: number;
-  components: {
-    id: string;
-    name: string;
-    groupName: string;
-    health: ComponentHealth;
-    observedAt: number | null;
-  }[];
-  maintenance: MaintenanceWindow[];
+export const announcementIcons = [
+  "megaphone",
+  "info",
+  "alert",
+  "wrench",
+  "calendar",
+  "sparkles",
+] as const;
+export type AnnouncementIcon = (typeof announcementIcons)[number];
+export const announcementTones = [
+  "neutral",
+  "info",
+  "success",
+  "warning",
+  "danger",
+] as const;
+export type AnnouncementTone = (typeof announcementTones)[number];
+/** The title the public page's top bar shows. */
+export function headerTitleOf(page: { name: string; headerTitle: string }) {
+  return page.headerTitle.trim() || page.name;
+}
+
+/** The announcement's glyph and color. They go live with the announcement. */
+export type AnnouncementStyle = {
+  announcementIcon: AnnouncementIcon;
+  announcementTone: AnnouncementTone;
 };
 
-export type StatusPageState = Branding & {
-  revision: number;
-  logoVersion: number | null;
-  name: string;
-  slug: string;
-  published: boolean;
-  announcement: string;
-  supportUrl: string;
-  components: StatusComponent[];
-  maintenance: MaintenanceWindow[];
-  sources: StatusSource[];
-  tags: StatusTag[];
-};
+/** The published page as visitors receive it: public targets by display name only. */
+export type PublicStatus = Branding &
+  AnnouncementStyle & {
+    name: string;
+    announcement: string;
+    supportUrl: string;
+    logoVersion: number | null;
+    updatedAt: number;
+    components: {
+      id: string;
+      name: string;
+      groupName: string;
+      health: ComponentHealth;
+      observedAt: number | null;
+    }[];
+    maintenance: MaintenanceWindow[];
+  };
+
+export type StatusPageState = Branding &
+  AnnouncementStyle & {
+    revision: number;
+    logoVersion: number | null;
+    name: string;
+    slug: string;
+    published: boolean;
+    announcement: string;
+    supportUrl: string;
+    components: StatusComponent[];
+    maintenance: MaintenanceWindow[];
+    sources: StatusSource[];
+    tags: StatusTag[];
+  };
 
 /** Editable copy of the page. Components keep their ids so maintenance links survive. */
 export type ComponentDraft = {
@@ -270,6 +313,10 @@ export function draftOf(state: StatusPageState): PageDraft {
     links: state.links.map((link) => ({ ...link })),
     footerText: state.footerText,
     poweredBy: state.poweredBy,
+    showName: state.showName,
+    headerTitle: state.headerTitle,
+    logoAlign: state.logoAlign,
+    logoSize: state.logoSize,
     components: state.components.map((c) => ({
       id: c.id,
       name: c.name,
@@ -293,6 +340,10 @@ export function sameDraft(a: PageDraft, b: PageDraft) {
     a.font === b.font &&
     a.footerText === b.footerText &&
     a.poweredBy === b.poweredBy &&
+    a.showName === b.showName &&
+    a.headerTitle === b.headerTitle &&
+    a.logoAlign === b.logoAlign &&
+    a.logoSize === b.logoSize &&
     JSON.stringify(a.links) === JSON.stringify(b.links) &&
     JSON.stringify(a.components) === JSON.stringify(b.components)
   );
@@ -907,6 +958,110 @@ export function relativeTime(at: number, now: number) {
 /** Relative time for something that already happened; clock skew never reads as future. */
 export function timeAgo(at: number, now: number) {
   return relativeTime(Math.min(at, now), now);
+}
+
+/** "just now", "5 seconds ago", then as `timeAgo`: for a ticking Updated line. */
+export function secondsAgo(at: number, now: number) {
+  const seconds = Math.floor((now - at) / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds} seconds ago`;
+  return timeAgo(at, now);
+}
+
+/** Minute samples of one target's state over an hour or a UTC day. */
+export type HealthBucket = {
+  start: number;
+  operational: number;
+  degraded: number;
+  down: number;
+  maintenance: number;
+  unknown: number;
+  /** Mean URL response time in the span, when one was measured. */
+  latencyMs: number | null;
+  /** How many response times `latencyMs` averages. */
+  latencyCount: number;
+};
+export type StatusIncident = {
+  startedAt: number;
+  endedAt: number | null;
+  worst: "degraded" | "down";
+};
+/** A public target's history (`public/status/{slug}/components/{id}/history`). */
+export type TargetHistory = {
+  now: number;
+  hours: HealthBucket[];
+  days: HealthBucket[];
+  incidents: StatusIncident[];
+};
+
+/**
+ * Mean response time over several spans, each weighted by how many times it
+ * was measured, so a partial hour counts for what it holds. Null with none.
+ */
+export function meanLatency(buckets: HealthBucket[]) {
+  let total = 0;
+  let count = 0;
+  for (const b of buckets)
+    if (b.latencyMs !== null && b.latencyCount > 0) {
+      total += b.latencyMs * b.latencyCount;
+      count += b.latencyCount;
+    }
+  return count ? Math.round(total / count) : null;
+}
+
+export const HOUR_MS = 3_600_000;
+export const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * Share of known, unplanned minutes the target answered (degraded counts as
+ * up; maintenance and unknown minutes are left out), or null with no data.
+ */
+export function uptimeShare(buckets: HealthBucket[]) {
+  let up = 0;
+  let known = 0;
+  for (const b of buckets) {
+    up += b.operational + b.degraded;
+    known += b.operational + b.degraded + b.down;
+  }
+  return known === 0 ? null : up / known;
+}
+
+/** "99.95%", never rounded up to 100 while any minute was down. */
+export function uptimeLabel(share: number | null) {
+  if (share === null) return "No data";
+  if (share >= 1) return "100%";
+  const floored = Math.floor(share * 10_000) / 100;
+  return `${Math.min(floored, 99.99).toFixed(2)}%`;
+}
+
+/** A bucket's worst state, for one bar in a history strip. */
+export function bucketTone(
+  bucket: HealthBucket | undefined,
+): ComponentStatus | "empty" {
+  if (!bucket) return "empty";
+  if (bucket.down > 0) return "down";
+  if (bucket.degraded > 0) return "degraded";
+  if (bucket.maintenance > 0) return "maintenance";
+  if (bucket.operational > 0) return "operational";
+  return bucket.unknown > 0 ? "unknown" : "empty";
+}
+
+/**
+ * `count` consecutive spans of `size` ending with the one holding `now`,
+ * oldest first, each with its bucket when one was recorded.
+ */
+export function bucketSeries(
+  buckets: HealthBucket[],
+  now: number,
+  size: number,
+  count: number,
+) {
+  const byStart = new Map(buckets.map((b) => [b.start, b]));
+  const last = Math.floor(now / size) * size;
+  return Array.from({ length: count }, (_, i) => {
+    const start = last - (count - 1 - i) * size;
+    return { start, bucket: byStart.get(start) };
+  });
 }
 
 /** "1 hour", "2 hours 30 minutes", "45 minutes". */

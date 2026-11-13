@@ -86,7 +86,9 @@ export async function proxyApi(
     ) &&
     !/^discord\/guilds\/[0-9]{17,20}(?:\/remove)?$/.test(path) &&
     !(
-      /^public\/status\/[a-z0-9-]{1,40}$/.test(path) && request.method === "GET"
+      /^public\/status\/[a-z0-9-]{1,40}(?:\/components\/[0-9a-f-]{36}\/history)?$/.test(
+        path,
+      ) && request.method === "GET"
     )
   )
     return Response.json({ error: "Not found." }, { status: 404 });

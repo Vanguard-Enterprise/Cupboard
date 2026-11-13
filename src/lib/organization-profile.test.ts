@@ -131,7 +131,9 @@ describe("organization profile", () => {
     const links = dashboardNavigation
       .flatMap((group) =>
         group.items.flatMap((item) =>
-          item.sections.map((section) => navigationHref(section.id)),
+          item.sections
+            ? item.sections.map((section) => navigationHref(section.id))
+            : [navigationHref(item.id)],
         ),
       )
       .filter(Boolean);
@@ -140,6 +142,7 @@ describe("organization profile", () => {
       "/dashboard/infrastructure/machines",
       "/dashboard/infrastructure/maintenance",
       "/dashboard/files",
+      "/dashboard/community/discord",
       "/dashboard/organization/team/users",
       "/dashboard/organization/team/roles",
       "/dashboard/organization/integrations/connections",

@@ -23,7 +23,7 @@ import {
  * the browser's Back button, reload, and closing the tab.
  */
 
-type Guard = { dirty: boolean; changes?: string };
+type Guard = { dirty: boolean; changes?: readonly string[] };
 
 type Leave =
   | { kind: "push"; href: string }
@@ -74,7 +74,7 @@ function pushHistoryGuard() {
 }
 
 /**
- * Where Keep editing puts focus back. A menu item closes with its menu, so a
+ * Where Cancel puts focus back. A menu item closes with its menu, so a
  * leave chosen from a menu (sign out, switch organization) returns to the
  * button that opened the menu, which labels the menu.
  */
@@ -97,7 +97,7 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
     () => new Map(),
   );
   const [pending, setPendingState] = React.useState<Leave | null>(null);
-  // The prompt has no trigger, so Keep editing returns focus here itself.
+  // The prompt has no trigger, so Cancel returns focus here itself.
   const returnTo = React.useRef<HTMLElement | null>(null);
   const setPending = React.useCallback((leave: Leave | null) => {
     if (leave) returnTo.current = focusToRestore();
@@ -124,7 +124,7 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
       if (
         guard &&
         existing?.dirty === guard.dirty &&
-        existing.changes === guard.changes
+        existing.changes?.join("\n") === guard.changes?.join("\n")
       )
         return current;
       if (!guard && !existing) return current;
@@ -228,10 +228,7 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
     () => ({ setGuard, request, dirty }),
     [setGuard, request, dirty],
   );
-  const changes = dirtyGuards
-    .map((guard) => guard.changes)
-    .filter(Boolean)
-    .join(" ");
+  const changes = dirtyGuards.flatMap((guard) => guard.changes ?? []);
 
   return (
     <UnsavedChangesContext.Provider value={context}>
@@ -247,6 +244,8 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
       >
         <AlertDialogContent
           data-slot="unsaved-changes-prompt"
+          // Without a list of changes the title says it all.
+          {...(changes.length ? {} : { "aria-describedby": undefined })}
           onCloseAutoFocus={(event) => {
             const target = returnTo.current;
             returnTo.current = null;
@@ -257,13 +256,23 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
         >
           <AlertDialogHeader>
             <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You have unsaved changes. They are lost if you leave.
-            </AlertDialogDescription>
-            {changes && <p className="text-sm text-foreground">{changes}</p>}
+            {changes.length > 0 && (
+              <AlertDialogDescription asChild>
+                <div>
+                  <p>
+                    {changes.length === 1 ? "Your change:" : "Your changes:"}
+                  </p>
+                  <ul className="mt-1 list-disc pl-5 text-foreground">
+                    {changes.map((change) => (
+                      <li key={change}>{change}</li>
+                    ))}
+                  </ul>
+                </div>
+              </AlertDialogDescription>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive-solid"
               onClick={() => {
@@ -273,7 +282,7 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
                 if (leave) perform(leave);
               }}
             >
-              Discard and leave
+              Confirm
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -284,12 +293,12 @@ function UnsavedChangesProvider({ children }: { children: React.ReactNode }) {
 
 /**
  * Registers a page's unsaved edits with the workspace guard. While `dirty`,
- * leaving the page asks first. `changes` is one sentence naming what is
- * pending ("Footer text and logo."), shown in the prompt.
+ * leaving the page asks first. `changes` names what is pending, one item
+ * each ("Footer text", "Logo"), listed in the prompt.
  */
 function useUnsavedChanges(
   dirty: boolean,
-  { changes }: { changes?: string } = {},
+  { changes }: { changes?: readonly string[] } = {},
 ) {
   const context = React.useContext(UnsavedChangesContext);
   const id = React.useId();

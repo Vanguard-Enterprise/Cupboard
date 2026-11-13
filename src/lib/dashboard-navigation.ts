@@ -1,24 +1,22 @@
-export const dashboardNavigation = [
+export type NavigationSection = { id: string; title: string };
+/**
+ * A sidebar entry: one page of its own (`id`), or a dropdown of `sections`
+ * when the area has several pages.
+ */
+export type NavigationItem = { title: string; icon: string } & (
+  | { id: string; sections?: never }
+  | { id?: never; sections: NavigationSection[] }
+);
+export type NavigationGroup = { title: string; items: NavigationItem[] };
+
+export const dashboardNavigation: NavigationGroup[] = [
   {
     title: "Operations",
     items: [
       {
         title: "Game servers",
         icon: "servers",
-        sections: [
-          {
-            id: "servers",
-            title: "Server inventory",
-          },
-          {
-            id: "server-lifecycle",
-            title: "Lifecycle & wipes",
-          },
-          {
-            id: "server-files",
-            title: "Files & plugins",
-          },
-        ],
+        id: "servers",
       },
       {
         title: "Infrastructure",
@@ -41,38 +39,12 @@ export const dashboardNavigation = [
       {
         title: "Observability",
         icon: "metrics",
-        sections: [
-          {
-            id: "health",
-            title: "Health & uptime",
-          },
-          {
-            id: "performance",
-            title: "Performance",
-          },
-          {
-            id: "analytics",
-            title: "Trends & reports",
-          },
-          {
-            id: "alerts",
-            title: "Alerts & incidents",
-          },
-        ],
+        id: "observability",
       },
       {
-        title: "File store",
+        title: "Files",
         icon: "files",
-        sections: [
-          {
-            id: "file-library",
-            title: "Shared library",
-          },
-          {
-            id: "file-access",
-            title: "Versions & access",
-          },
-        ],
+        id: "file-library",
       },
     ],
   },
@@ -146,9 +118,7 @@ export const dashboardNavigation = [
       {
         title: "Discord",
         icon: "discord",
-        // A single page, so the sidebar shows a link instead of a dropdown.
         id: "discord",
-        sections: [],
       },
     ],
   },

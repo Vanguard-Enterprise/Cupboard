@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { apiRequest } from "@/lib/api-client";
 import { type StatusPageState } from "@/lib/status-page";
-import { toast } from "sonner";
 import { formatTime } from "@/components/ui/time-field";
 
 vi.mock("@/lib/api-client", () => ({ apiRequest: vi.fn() }));
@@ -32,7 +31,7 @@ import {
   live,
   mount,
   ready,
-  savedInBar,
+  savedToast,
   said,
   stubImages,
   conflictError,
@@ -41,7 +40,7 @@ import {
 registerStatusPageHooks();
 
 describe("Status page admin", () => {
-  it("stages a cropped logo until Save changes and drops it on Discard", async () => {
+  it("stages a cropped logo until Save and drops it on Discard", async () => {
     const user = userEvent.setup();
     stubImages();
     vi.mocked(apiRequest).mockResolvedValueOnce(empty);
@@ -87,7 +86,7 @@ describe("Status page admin", () => {
     );
     // A page never saved gets its row first; the logo is checked against it.
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...empty, revision: 1 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
         "/app-api/status-page/logo",
@@ -102,8 +101,7 @@ describe("Status page admin", () => {
         }),
       ),
     );
-    await savedInBar();
-    expect(toast.success).not.toHaveBeenCalled();
+    await savedToast();
     expect(apiRequest).toHaveBeenCalledTimes(2);
   });
 
@@ -201,7 +199,7 @@ describe("Status page admin", () => {
       expect.anything(),
       expect.anything(),
     );
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenCalledWith(
         "status-page/logo/remove",
@@ -209,8 +207,7 @@ describe("Status page admin", () => {
         "org-one",
       ),
     );
-    await savedInBar();
-    expect(toast.success).not.toHaveBeenCalled();
+    await savedToast();
   });
 
   it("reorders within a group, announces the position, and discards on request", async () => {
@@ -256,7 +253,7 @@ describe("Status page admin", () => {
     await user.clear(name);
     await user.type(name, "Northstar Status");
     vi.mocked(apiRequest).mockRejectedValueOnce(conflictError);
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     const bar = await screen.findByRole("region", { name: "Unsaved changes" });
     await waitFor(() =>
       expect(bar.textContent).toContain("Changed in another session"),
@@ -280,7 +277,7 @@ describe("Status page admin", () => {
       "Northstar Status",
     );
     vi.mocked(apiRequest).mockResolvedValueOnce({ ...live, revision: 6 });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenLastCalledWith(
         "status-page",
@@ -316,9 +313,7 @@ describe("Status page admin", () => {
     await user.click(away);
     const confirm = await screen.findByRole("alertdialog");
     expect(confirm.textContent).toContain("Leave without saving?");
-    await user.click(
-      within(confirm).getByRole("button", { name: "Keep editing" }),
-    );
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     away.remove();
   });
@@ -340,7 +335,7 @@ describe("Status page admin", () => {
         dialog.querySelector("#maintenance-start-date")?.textContent,
       ).toContain("Jan 1, 2030");
       await user.click(
-        within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+        within(dialog).getByRole("button", { name: "Schedule" }),
       );
       const title = within(dialog).getByLabelText("Title");
       expect(title.getAttribute("aria-invalid")).toBe("true");
@@ -369,7 +364,7 @@ describe("Status page admin", () => {
         /^Starts in 2 hours, on .+\. The end is before the start\.$/,
       );
       await user.click(
-        within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+        within(dialog).getByRole("button", { name: "Schedule" }),
       );
       expect(end.getAttribute("aria-invalid")).toBe("true");
       expect(dialog.textContent).toContain(
@@ -390,7 +385,7 @@ describe("Status page admin", () => {
         within(dialog).getByRole("radio", { name: "Specific targets" }),
       );
       await user.click(
-        within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+        within(dialog).getByRole("button", { name: "Schedule" }),
       );
       expect(dialog.textContent).toContain(
         "Choose at least one affected target.",
@@ -407,7 +402,7 @@ describe("Status page admin", () => {
       );
       vi.mocked(apiRequest).mockResolvedValueOnce(live);
       await user.click(
-        within(dialog).getByRole("button", { name: "Schedule maintenance" }),
+        within(dialog).getByRole("button", { name: "Schedule" }),
       );
       await waitFor(() =>
         expect(apiRequest).toHaveBeenLastCalledWith(

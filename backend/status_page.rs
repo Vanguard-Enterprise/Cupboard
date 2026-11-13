@@ -43,6 +43,17 @@ const FONTS: [&str; 7] = [
     "jetbrains-mono",
 ];
 const DEFAULT_ACCENT: &str = "#7cb58d";
+const ANNOUNCEMENT_ICONS: [&str; 6] = [
+    "megaphone",
+    "info",
+    "alert",
+    "wrench",
+    "calendar",
+    "sparkles",
+];
+const LOGO_ALIGNS: [&str; 3] = ["left", "center", "right"];
+const LOGO_SIZES: [&str; 3] = ["small", "medium", "large"];
+const ANNOUNCEMENT_TONES: [&str; 5] = ["neutral", "info", "success", "warning", "danger"];
 /// URL targets are probed about once a minute; older results count as unknown.
 const URL_INTERVAL_MS: i64 = 60_000;
 const URL_STALE_MS: i64 = 5 * 60_000;
@@ -59,6 +70,10 @@ pub fn routes() -> Router<PgPool> {
         .route("/app-api/status-page", get(read).post(save))
         .route("/app-api/public/status/{slug}", get(public_read))
         .route("/app-api/public/status/{slug}/logo", get(public_logo))
+        .route(
+            "/app-api/public/status/{slug}/components/{id}/history",
+            get(public_history),
+        )
         .route(
             "/app-api/status-page/logo",
             get(read_logo).post(upload_logo),
@@ -140,6 +155,14 @@ struct Branding {
     links: Vec<Link>,
     footer_text: String,
     powered_by: bool,
+    /// The top bar's title; empty shows the page name.
+    header_title: String,
+    /// When false and a logo exists, the logo stands in for the title.
+    show_name: bool,
+    /// Where the logo and title sit in the top bar.
+    logo_align: String,
+    /// How large the logo is when it stands in for the title.
+    logo_size: String,
     /// Changes whenever the logo is replaced, so clients can bust caches.
     logo_version: Option<i64>,
 }
@@ -151,6 +174,8 @@ struct StatusPage {
     slug: String,
     published: bool,
     announcement: String,
+    announcement_icon: String,
+    announcement_tone: String,
     support_url: String,
     #[serde(flatten)]
     branding: Branding,
@@ -166,6 +191,8 @@ struct Settings {
     slug: String,
     published: bool,
     announcement: String,
+    announcement_icon: String,
+    announcement_tone: String,
     support_url: String,
     theme: String,
     accent_color: String,
@@ -173,8 +200,12 @@ struct Settings {
     links: Value,
     footer_text: String,
     powered_by: bool,
+    show_name: bool,
+    header_title: String,
+    logo_align: String,
+    logo_size: String,
 }
-const SETTINGS: &str = "SELECT revision,name,slug,published,announcement,support_url,theme,accent_color,font,links,footer_text,powered_by FROM status_pages WHERE organization_id=$1";
+const SETTINGS: &str = "SELECT revision,name,slug,published,announcement,announcement_icon,announcement_tone,support_url,theme,accent_color,font,links,footer_text,powered_by,show_name,header_title,logo_align,logo_size FROM status_pages WHERE organization_id=$1";
 
 fn now() -> i64 {
     time::OffsetDateTime::now_utc()
@@ -262,6 +293,8 @@ async fn settings(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Set
         slug: slugify(&ctx.organization_name),
         published: false,
         announcement: String::new(),
+        announcement_icon: ANNOUNCEMENT_ICONS[0].into(),
+        announcement_tone: ANNOUNCEMENT_TONES[0].into(),
         support_url: String::new(),
         theme: THEMES[0].into(),
         accent_color: DEFAULT_ACCENT.into(),
@@ -269,6 +302,10 @@ async fn settings(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Set
         links: Value::Array(Vec::new()),
         footer_text: String::new(),
         powered_by: true,
+        show_name: true,
+        header_title: String::new(),
+        logo_align: LOGO_ALIGNS[0].into(),
+        logo_size: LOGO_SIZES[1].into(),
     }))
 }
 async fn branding(conn: &mut PgConnection, org: &str, settings: &Settings) -> ApiResult<Branding> {
@@ -284,6 +321,10 @@ async fn branding(conn: &mut PgConnection, org: &str, settings: &Settings) -> Ap
         links: serde_json::from_value(settings.links.clone()).unwrap_or_default(),
         footer_text: settings.footer_text.clone(),
         powered_by: settings.powered_by,
+        header_title: settings.header_title.clone(),
+        show_name: settings.show_name,
+        logo_align: settings.logo_align.clone(),
+        logo_size: settings.logo_size.clone(),
         logo_version,
     })
 }
@@ -380,6 +421,8 @@ async fn state(conn: &mut PgConnection, ctx: &team::Context) -> ApiResult<Status
         slug: settings.slug,
         published: settings.published,
         announcement: settings.announcement,
+        announcement_icon: settings.announcement_icon,
+        announcement_tone: settings.announcement_tone,
         support_url: settings.support_url,
         branding,
         components,
@@ -416,6 +459,8 @@ struct PublicMaintenance {
 struct PublicStatus {
     name: String,
     announcement: String,
+    announcement_icon: String,
+    announcement_tone: String,
     support_url: String,
     #[serde(flatten)]
     branding: Branding,
@@ -521,6 +566,8 @@ async fn public_read(
     Ok(Json(PublicStatus {
         name: settings.name,
         announcement: settings.announcement,
+        announcement_icon: settings.announcement_icon,
+        announcement_tone: settings.announcement_tone,
         support_url: settings.support_url,
         branding,
         updated_at: now,
@@ -559,6 +606,8 @@ struct SaveInput {
     slug: String,
     published: bool,
     announcement: String,
+    announcement_icon: String,
+    announcement_tone: String,
     support_url: String,
     theme: String,
     accent_color: String,
@@ -566,6 +615,10 @@ struct SaveInput {
     links: Vec<Link>,
     footer_text: String,
     powered_by: bool,
+    show_name: bool,
+    header_title: String,
+    logo_align: String,
+    logo_size: String,
     components: Vec<ComponentInput>,
 }
 fn text(value: &str, max: usize, message: &'static str) -> ApiResult<String> {
@@ -608,6 +661,14 @@ async fn save(
         return Err(conflict());
     }
     let name = bounded(&input.name, 80, "Enter a page name of 1 to 80 characters.")?;
+    let header_title = text(
+        &input.header_title,
+        80,
+        "Keep the title under 80 characters on one line.",
+    )?;
+    if header_title.contains('\n') {
+        return Err(invalid("Keep the title under 80 characters on one line."));
+    }
     if name.chars().any(char::is_control) {
         return Err(invalid("Enter a page name of 1 to 80 characters."));
     }
@@ -622,6 +683,18 @@ async fn save(
         500,
         "Keep the announcement under 500 characters.",
     )?;
+    if !LOGO_ALIGNS.contains(&input.logo_align.as_str()) {
+        return Err(invalid("Place the logo on the left, center, or right."));
+    }
+    if !LOGO_SIZES.contains(&input.logo_size.as_str()) {
+        return Err(invalid("Choose a small, medium, or large logo."));
+    }
+    if !ANNOUNCEMENT_ICONS.contains(&input.announcement_icon.as_str()) {
+        return Err(invalid("Choose one of the listed announcement icons."));
+    }
+    if !ANNOUNCEMENT_TONES.contains(&input.announcement_tone.as_str()) {
+        return Err(invalid("Choose one of the listed announcement colors."));
+    }
     let support_url = support_url(&input.support_url)?;
     if !THEMES.contains(&input.theme.as_str()) {
         return Err(invalid("Choose a dark, light, or system theme."));
@@ -724,7 +797,7 @@ async fn save(
         };
         components.push((id, name, source_id));
     }
-    sqlx::query("INSERT INTO status_pages(organization_id,revision,name,slug,published,announcement,support_url,created_at,theme,accent_color,font,links,footer_text,powered_by) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(organization_id) DO UPDATE SET revision=status_pages.revision+1,name=EXCLUDED.name,slug=EXCLUDED.slug,published=EXCLUDED.published,announcement=EXCLUDED.announcement,support_url=EXCLUDED.support_url,theme=EXCLUDED.theme,accent_color=EXCLUDED.accent_color,font=EXCLUDED.font,links=EXCLUDED.links,footer_text=EXCLUDED.footer_text,powered_by=EXCLUDED.powered_by")
+    sqlx::query("INSERT INTO status_pages(organization_id,revision,name,slug,published,announcement,support_url,created_at,theme,accent_color,font,links,footer_text,powered_by,show_name,announcement_icon,announcement_tone,header_title,logo_align,logo_size) VALUES($1,1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(organization_id) DO UPDATE SET header_title=EXCLUDED.header_title,logo_align=EXCLUDED.logo_align,logo_size=EXCLUDED.logo_size, revision=status_pages.revision+1,name=EXCLUDED.name,slug=EXCLUDED.slug,published=EXCLUDED.published,announcement=EXCLUDED.announcement,announcement_icon=EXCLUDED.announcement_icon,announcement_tone=EXCLUDED.announcement_tone,support_url=EXCLUDED.support_url,theme=EXCLUDED.theme,accent_color=EXCLUDED.accent_color,font=EXCLUDED.font,links=EXCLUDED.links,footer_text=EXCLUDED.footer_text,powered_by=EXCLUDED.powered_by,show_name=EXCLUDED.show_name")
         .bind(&org)
         .bind(&name)
         .bind(&slug)
@@ -738,8 +811,36 @@ async fn save(
         .bind(serde_json::to_value(&links).map_err(|_| internal())?)
         .bind(&footer_text)
         .bind(input.powered_by)
+        .bind(input.show_name)
+        .bind(&input.announcement_icon)
+        .bind(&input.announcement_tone)
+        .bind(&header_title)
+        .bind(&input.logo_align)
+        .bind(&input.logo_size)
         .execute(&mut *tx)
         .await?;
+    // History follows a target's id; a target that is removed or now watches
+    // something else starts over.
+    let before: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT id,kind,source_id FROM status_page_components WHERE organization_id=$1",
+    )
+    .bind(&org)
+    .fetch_all(&mut *tx)
+    .await?;
+    let restarted: Vec<String> = before
+        .into_iter()
+        .filter(|(id, kind, source)| {
+            !input
+                .components
+                .iter()
+                .zip(&components)
+                .any(|(c, (new_id, _, new_source))| {
+                    new_id == id && &c.kind == kind && new_source == source
+                })
+        })
+        .map(|(id, _, _)| id)
+        .collect();
+    forget_history(&mut tx, &org, &restarted).await?;
     sqlx::query("DELETE FROM status_page_components WHERE organization_id=$1")
         .bind(&org)
         .execute(&mut *tx)
@@ -1253,22 +1354,42 @@ async fn probe(value: &str, allows: fn(IpAddr) -> bool) -> Probe {
     }
 }
 
-/// Probe URL targets independently of browser sessions. Claimed rows move their
-/// next check forward first, so replicas never probe the same target at once.
+/// Probe URL targets and sample history independently of browser sessions.
+/// Claimed rows move their next run forward first, so replicas never do the
+/// same work at once. The two run side by side: a backlog of slow URL probes
+/// never holds back the minute samples of every other target.
 pub async fn monitor(pool: PgPool) {
-    loop {
+    let probes = async {
         loop {
-            match check_due(&pool, crate::pelican::public_ip).await {
-                Ok(true) => continue,
-                Ok(false) => break,
-                Err(_) => {
-                    eprintln!("Status page URL checks failed; retrying shortly.");
-                    break;
+            loop {
+                match check_due(&pool, crate::pelican::public_ip).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(_) => {
+                        eprintln!("Status page URL checks failed; retrying shortly.");
+                        break;
+                    }
                 }
             }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
+    };
+    let samples = async {
+        loop {
+            loop {
+                match sample_due(&pool).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(_) => {
+                        eprintln!("Status page history sampling failed; retrying shortly.");
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    };
+    tokio::join!(probes, samples);
 }
 
 pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiResult<bool> {
@@ -1290,19 +1411,299 @@ pub(crate) async fn check_due(pool: &PgPool, allows: fn(IpAddr) -> bool) -> ApiR
         .await;
     for (org, id, url, probe) in results {
         // A result only lands if the target still watches the same address.
-        sqlx::query("UPDATE status_page_url_checks SET checked_at=$4,result=$5,status_code=$6,latency_ms=$7,error=$8 WHERE organization_id=$1 AND component_id=$2 AND url=$3")
+        // Like a sample, it waits for a save in progress, so a response time
+        // never lands under a target the save just re-pointed.
+        let at = now();
+        let mut tx = pool.begin().await?;
+        sqlx::query("SELECT 1 FROM status_pages WHERE organization_id=$1 FOR SHARE")
+            .bind(&org)
+            .execute(&mut *tx)
+            .await?;
+        let landed = sqlx::query("UPDATE status_page_url_checks SET checked_at=$4,result=$5,status_code=$6,latency_ms=$7,error=$8 WHERE organization_id=$1 AND component_id=$2 AND url=$3")
             .bind(&org)
             .bind(&id)
             .bind(&url)
-            .bind(now())
+            .bind(at)
             .bind(probe.result)
             .bind(probe.status_code)
             .bind(probe.latency_ms)
             .bind(probe.error)
-            .execute(pool)
-            .await?;
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            > 0;
+        if let (true, Some(latency)) = (landed, probe.latency_ms) {
+            sqlx::query("INSERT INTO status_page_health_hours(organization_id,component_id,hour,latency_total,latency_count) VALUES($1,$2,$3,$4,1) ON CONFLICT(organization_id,component_id,hour) DO UPDATE SET latency_total=status_page_health_hours.latency_total+EXCLUDED.latency_total,latency_count=status_page_health_hours.latency_count+1")
+                .bind(&org)
+                .bind(&id)
+                .bind(at.div_euclid(HOUR_MS) * HOUR_MS)
+                .bind(i64::from(latency))
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
     }
     Ok(true)
+}
+
+/* ---------------- History ---------------- */
+
+/// Every target's state is recorded about once a minute, into hourly counts.
+const SAMPLE_MS: i64 = 60_000;
+const HOUR_MS: i64 = 60 * 60 * 1000;
+const DAY_MS: i64 = 24 * HOUR_MS;
+/// History is kept, and shown, for this many days.
+const HISTORY_DAYS: i64 = 90;
+const MAX_INCIDENTS: i64 = 10;
+const STATES: [&str; 5] = ["operational", "degraded", "down", "maintenance", "unknown"];
+
+/// The state a sample records: open maintenance covering the target wins, so
+/// planned work never counts as an outage.
+fn sampled_state<'a>(health: &'a str, id: &str, windows: &[Value]) -> &'a str {
+    let covered = windows.iter().any(|ids| {
+        ids.as_array()
+            .is_some_and(|ids| ids.is_empty() || ids.iter().any(|v| v.as_str() == Some(id)))
+    });
+    if covered {
+        "maintenance"
+    } else if STATES.contains(&health) {
+        health
+    } else {
+        "unknown"
+    }
+}
+
+/// Removes the history of targets that were removed or now watch another source.
+async fn forget_history(conn: &mut PgConnection, org: &str, ids: &[String]) -> ApiResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    for table in ["status_page_health_hours", "status_page_incidents"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table} WHERE organization_id=$1 AND component_id=ANY($2)"
+        ))
+        .bind(org)
+        .bind(ids)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Records one sample for each page that is due. Pages are claimed by moving
+/// their sample time first, so replicas never record the same minute twice.
+pub(crate) async fn sample_due(pool: &PgPool) -> ApiResult<bool> {
+    let now = now();
+    let claimed: Vec<(String, i64)> = sqlx::query_as(
+        "WITH due AS (SELECT organization_id,sampled_at FROM status_pages WHERE sampled_at<=$1-$2 ORDER BY sampled_at LIMIT 20 FOR UPDATE SKIP LOCKED) \
+         UPDATE status_pages p SET sampled_at=$1 FROM due WHERE p.organization_id=due.organization_id RETURNING p.organization_id,due.sampled_at",
+    )
+    .bind(now)
+    .bind(SAMPLE_MS)
+    .fetch_all(pool)
+    .await?;
+    if claimed.is_empty() {
+        return Ok(false);
+    }
+    // Each page is already claimed for this minute, so one failing page must
+    // not cost the others their sample.
+    let mut failed = false;
+    for (org, previous) in claimed {
+        let prune = previous.div_euclid(HOUR_MS) != now.div_euclid(HOUR_MS);
+        if sample(pool, &org, now, prune).await.is_err() {
+            failed = true;
+        }
+    }
+    if failed {
+        eprintln!("A status page's history sample failed; it is retried next minute.");
+    }
+    Ok(true)
+}
+
+async fn sample(pool: &PgPool, org: &str, now: i64, prune: bool) -> ApiResult<()> {
+    let mut tx = pool.begin().await?;
+    // Waits for a save in progress, which takes this row first: the sample
+    // then sees its targets, and never writes an old source's state under a
+    // target id whose history the save just cleared.
+    sqlx::query("SELECT 1 FROM status_pages WHERE organization_id=$1 FOR SHARE")
+        .bind(org)
+        .execute(&mut *tx)
+        .await?;
+    let components = components_of(&mut tx, org).await?;
+    let windows: Vec<Value> = sqlx::query_scalar(
+        "SELECT component_ids FROM status_page_maintenance WHERE organization_id=$1 AND completed_at IS NULL AND starts_at<=$2 AND ends_at>$2",
+    )
+    .bind(org)
+    .bind(now)
+    .fetch_all(&mut *tx)
+    .await?;
+    let ids: Vec<String> = components.iter().map(|c| c.id.clone()).collect();
+    let states: Vec<String> = components
+        .iter()
+        .map(|c| sampled_state(&c.health, &c.id, &windows).to_owned())
+        .collect();
+    sqlx::query(
+        "INSERT INTO status_page_health_hours(organization_id,component_id,hour,operational,degraded,down,maintenance,unknown) \
+         SELECT $1,x.id,$2,(x.s='operational')::int,(x.s='degraded')::int,(x.s='down')::int,(x.s='maintenance')::int,(x.s='unknown')::int \
+         FROM unnest($3::text[],$4::text[]) AS x(id,s) \
+         ON CONFLICT(organization_id,component_id,hour) DO UPDATE SET \
+         operational=status_page_health_hours.operational+EXCLUDED.operational,\
+         degraded=status_page_health_hours.degraded+EXCLUDED.degraded,\
+         down=status_page_health_hours.down+EXCLUDED.down,\
+         maintenance=status_page_health_hours.maintenance+EXCLUDED.maintenance,\
+         unknown=status_page_health_hours.unknown+EXCLUDED.unknown",
+    )
+    .bind(org)
+    .bind(now.div_euclid(HOUR_MS) * HOUR_MS)
+    .bind(&ids)
+    .bind(&states)
+    .execute(&mut *tx)
+    .await?;
+    // A problem opens an incident, or deepens the open one; recovery closes
+    // it. Unknown and maintenance samples leave it as it is.
+    sqlx::query(
+        "INSERT INTO status_page_incidents(organization_id,component_id,started_at,worst) \
+         SELECT $1,x.id,$2,x.s FROM unnest($3::text[],$4::text[]) AS x(id,s) WHERE x.s IN ('degraded','down') \
+         ON CONFLICT(organization_id,component_id) WHERE ended_at IS NULL DO UPDATE SET \
+         worst=CASE WHEN EXCLUDED.worst='down' THEN 'down' ELSE status_page_incidents.worst END",
+    )
+    .bind(org)
+    .bind(now)
+    .bind(&ids)
+    .bind(&states)
+    .execute(&mut *tx)
+    .await?;
+    let recovered: Vec<String> = ids
+        .iter()
+        .zip(&states)
+        .filter(|(_, s)| *s == "operational")
+        .map(|(id, _)| id.clone())
+        .collect();
+    sqlx::query("UPDATE status_page_incidents SET ended_at=$2 WHERE organization_id=$1 AND ended_at IS NULL AND component_id=ANY($3)")
+        .bind(org)
+        .bind(now)
+        .bind(&recovered)
+        .execute(&mut *tx)
+        .await?;
+    if prune {
+        let oldest = now - HISTORY_DAYS * DAY_MS;
+        sqlx::query("DELETE FROM status_page_health_hours h WHERE organization_id=$1 AND (hour<$2 OR NOT EXISTS (SELECT 1 FROM status_page_components c WHERE c.organization_id=h.organization_id AND c.id=h.component_id))")
+            .bind(org)
+            .bind(oldest)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM status_page_incidents i WHERE organization_id=$1 AND (COALESCE(ended_at,$3)<$2 OR NOT EXISTS (SELECT 1 FROM status_page_components c WHERE c.organization_id=i.organization_id AND c.id=i.component_id))")
+            .bind(org)
+            .bind(oldest)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Minute samples per state over one hour or one UTC day, with the mean URL
+/// response time in that span when one was measured.
+#[derive(Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct HealthBucket {
+    start: i64,
+    operational: i64,
+    degraded: i64,
+    down: i64,
+    maintenance: i64,
+    unknown: i64,
+    latency_ms: Option<i64>,
+    /// How many response times `latency_ms` averages.
+    latency_count: i64,
+}
+#[derive(Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+struct Incident {
+    started_at: i64,
+    ended_at: Option<i64>,
+    worst: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct History {
+    now: i64,
+    /// The last 24 hours, oldest first; hours without samples are absent.
+    hours: Vec<HealthBucket>,
+    /// The last 90 UTC days, oldest first; days without samples are absent.
+    days: Vec<HealthBucket>,
+    /// The most recent incidents, newest first.
+    incidents: Vec<Incident>,
+}
+
+/// One target's history. Callers have already checked that `component` is a
+/// target of `org` the caller may see.
+async fn history_of(
+    conn: &mut PgConnection,
+    org: &str,
+    component: &str,
+    now: i64,
+) -> ApiResult<History> {
+    const COUNTS: &str = "sum(operational)::bigint AS operational,sum(degraded)::bigint AS degraded,sum(down)::bigint AS down,sum(maintenance)::bigint AS maintenance,sum(unknown)::bigint AS unknown,CASE WHEN sum(latency_count)>0 THEN (sum(latency_total)/sum(latency_count))::bigint END AS latency_ms,sum(latency_count)::bigint AS latency_count";
+    let this_hour = now.div_euclid(HOUR_MS) * HOUR_MS;
+    let hours = sqlx::query_as(&format!(
+        "SELECT hour AS start,{COUNTS} FROM status_page_health_hours WHERE organization_id=$1 AND component_id=$2 AND hour>$3 GROUP BY hour ORDER BY hour"
+    ))
+    .bind(org)
+    .bind(component)
+    .bind(this_hour - DAY_MS)
+    .fetch_all(&mut *conn)
+    .await?;
+    let today = now.div_euclid(DAY_MS) * DAY_MS;
+    let days = sqlx::query_as(&format!(
+        "SELECT (hour/{DAY_MS})*{DAY_MS} AS start,{COUNTS} FROM status_page_health_hours WHERE organization_id=$1 AND component_id=$2 AND hour>=$3 GROUP BY 1 ORDER BY 1"
+    ))
+    .bind(org)
+    .bind(component)
+    // Today and the 89 whole days before it.
+    .bind(today - (HISTORY_DAYS - 1) * DAY_MS)
+    .fetch_all(&mut *conn)
+    .await?;
+    let incidents = sqlx::query_as(
+        "SELECT started_at,ended_at,worst FROM status_page_incidents WHERE organization_id=$1 AND component_id=$2 AND COALESCE(ended_at,$3)>$4 ORDER BY started_at DESC LIMIT $5",
+    )
+    .bind(org)
+    .bind(component)
+    .bind(now)
+    .bind(now - HISTORY_DAYS * DAY_MS)
+    .bind(MAX_INCIDENTS)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(History {
+        now,
+        hours,
+        days,
+        incidents,
+    })
+}
+
+/// A public target's history on a published page. Hidden targets, and
+/// targets of other pages, are not found.
+async fn public_history(
+    State(pool): State<PgPool>,
+    Path((slug, id)): Path<(String, String)>,
+) -> ApiResult<Json<History>> {
+    let missing = || ApiError(StatusCode::NOT_FOUND, "This service has no public history.");
+    if !valid_slug(&slug) || uuid::Uuid::parse_str(&id).is_err() {
+        return Err(missing());
+    }
+    let mut conn = pool.acquire().await?;
+    let org: String = sqlx::query_scalar(
+        "SELECT p.organization_id FROM status_pages p JOIN status_page_components c ON c.organization_id=p.organization_id \
+         WHERE p.slug=$1 AND p.published AND c.id=$2 AND c.public",
+    )
+    .bind(&slug)
+    .bind(&id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(missing)?;
+    Ok(Json(history_of(&mut conn, &org, &id, now()).await?))
 }
 
 #[cfg(test)]
@@ -1431,6 +1832,20 @@ mod tests {
         assert_eq!(shown[1].component_ids, serde_json::json!(["eu"]));
         let body = serde_json::to_string(&shown).unwrap();
         assert!(!body.contains("hidden") && !body.contains("deleted"));
+    }
+
+    #[test]
+    fn samples_record_maintenance_over_the_target_health() {
+        let all = serde_json::json!([]);
+        let eu = serde_json::json!(["eu"]);
+        assert_eq!(sampled_state("down", "eu", &[]), "down");
+        assert_eq!(sampled_state("down", "eu", &[all]), "maintenance");
+        assert_eq!(
+            sampled_state("down", "eu", std::slice::from_ref(&eu)),
+            "maintenance"
+        );
+        assert_eq!(sampled_state("degraded", "us", &[eu]), "degraded");
+        assert_eq!(sampled_state("anything", "us", &[]), "unknown");
     }
 
     #[test]
