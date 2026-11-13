@@ -7629,7 +7629,14 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
         }
         // Busy guilds list hundreds of roles and emojis, well past 64 KiB.
         let emojis = busy_guild_emojis();
-        axum::Json(json!({"id":id,"name":" Test guild ","icon":format!("a_{}", "0f".repeat(16)),"banner":"0a".repeat(16),"home_header":"0b".repeat(16),"owner_id":"200000000000000001","approximate_member_count":42,"emojis":emojis,"roles":[{"id":id,"name":"@everyone","color":0,"position":0},{"id":"300000000000000001","name":"Mods","color":255,"position":1,"hoist":true}]})).into_response()
+        // In the guild with a hidden member list, @everyone also can't view
+        // channels unless a channel allows it.
+        let everyone = if id == DISCORD_HIDDEN_MEMBERS_GUILD {
+            "0"
+        } else {
+            "1024"
+        };
+        axum::Json(json!({"id":id,"name":" Test guild ","icon":format!("a_{}", "0f".repeat(16)),"banner":"0a".repeat(16),"home_header":"0b".repeat(16),"owner_id":"200000000000000001","approximate_member_count":42,"emojis":emojis,"roles":[{"id":id,"name":"@everyone","color":0,"position":0,"permissions":everyone},{"id":"300000000000000001","name":"Mods","color":255,"position":1,"hoist":true}]})).into_response()
     }
     async fn leave(State(mock): State<DiscordMock>, headers: HeaderMap) -> StatusCode {
         if !bot(&headers) {
@@ -8150,6 +8157,9 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
             .iter()
             .all(|role| role["memberCount"].is_null())
     );
+    // A channel with no overwrites is private when @everyone can't view
+    // channels server-wide.
+    assert_eq!(hidden["channels"][0]["private"], true);
     // The read refreshed the guild's list entry.
     let (name, members): (String, Option<i32>) = sqlx::query_as(
         "SELECT name,member_count FROM discord_guilds WHERE organization_id=$1 AND guild_id=$2",
@@ -8190,6 +8200,24 @@ async fn discord_guild_overview_reads_discord_for_the_linking_organization_only(
     let (status, _) = owner.request("GET", path, json!(null)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(mock.reads.load(Ordering::SeqCst), reads + 1);
+    // That limit was scoped to one guild, so another guild still reads
+    // Discord.
+    sqlx::query(
+        "UPDATE discord_guild_snapshots SET fetched_at=now()-interval '1 hour' WHERE guild_id=$1",
+    )
+    .bind(DISCORD_HIDDEN_MEMBERS_GUILD)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, _) = owner
+        .request(
+            "GET",
+            &format!("discord/guilds/{DISCORD_HIDDEN_MEMBERS_GUILD}"),
+            json!(null),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(mock.reads.load(Ordering::SeqCst), reads + 2);
 
     // Removing the guild deletes what Cupboard stored about it.
     let (status, removed) = owner

@@ -76,9 +76,12 @@ struct Settings {
     /// operator to the worktree that started the install.
     state_prefix: String,
     api: String,
-    /// Unix time until which Discord asked Cupboard to stop sending reads.
-    /// Pages serve stored snapshots until then instead of piling on.
+    /// Unix time until which Discord asked Cupboard to stop sending any
+    /// reads, after a global rate limit. Pages serve stored snapshots until
+    /// then instead of piling on.
     rate_limited_until: AtomicI64,
+    /// The same, per guild, for limits Discord scopes to one guild's routes.
+    guild_cooldowns: Mutex<HashMap<String, i64>>,
     /// Refreshes, installs, and removals of one guild take turns. A request
     /// that arrives during a refresh waits, then reads the snapshot it
     /// stored, and an install can't save a guild the bot has just left.
@@ -159,6 +162,7 @@ impl DiscordConfig {
             state_prefix,
             api: api.trim_end_matches('/').to_owned(),
             rate_limited_until: AtomicI64::new(0),
+            guild_cooldowns: Mutex::default(),
             guild_locks: Mutex::default(),
         }))
     }
@@ -448,10 +452,13 @@ async fn exchange(
     // Best effort: the bot is already in the guild, so a failed revoke must not
     // fail the install. The token is never stored, carries only `identify`,
     // and expires on its own.
+    let revoking = tokio::time::Instant::now();
     let revoked = tokio::time::timeout(REVOKE_TIMEOUT, revoke).await;
     if !matches!(revoked, Ok(Ok(ref response)) if response.status().is_success()) {
         eprintln!("Discord didn't confirm revoking a guild installer's token.");
     }
+    // Revoking has its own budget, so it doesn't eat into the guild read's.
+    let deadline = deadline + revoking.elapsed();
     let installer = installer?;
     let Some(guild_id) = token.guild.map(|guild| guild.id) else {
         return Err(discord_failed());
@@ -611,6 +618,7 @@ async fn remove(
 }
 
 const VIEW_CHANNEL: u64 = 1 << 10;
+const ADMINISTRATOR: u64 = 1 << 3;
 const MAX_MEMBERS: usize = 1000;
 
 fn guild_gone() -> ApiError {
@@ -629,7 +637,20 @@ async fn bot_get(
     path: String,
     limit: usize,
 ) -> ApiResult<Option<Value>> {
-    if config.rate_limited_until.load(Ordering::Relaxed) > now() {
+    let guild = path
+        .strip_prefix("guilds/")
+        .and_then(|rest| rest.split(['/', '?']).next())
+        .unwrap_or_default()
+        .to_owned();
+    let cooling = || {
+        config
+            .guild_cooldowns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&guild)
+            .is_some_and(|until| *until > now())
+    };
+    if config.rate_limited_until.load(Ordering::Relaxed) > now() || cooling() {
         return Err(rate_limited());
     }
     let send = || {
@@ -649,8 +670,17 @@ async fn bot_get(
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<f64>().ok())
             .filter(|seconds| seconds.is_finite() && *seconds >= 0.0);
+        let global = response
+            .headers()
+            .get("x-ratelimit-global")
+            .is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"true"))
+            || response
+                .headers()
+                .get("x-ratelimit-scope")
+                .is_some_and(|v| v.as_bytes() == b"global");
         // Wait out one short limit. A long one, or a second in a row, pauses
-        // every Discord read until it ends.
+        // reads until it ends: every read for a global limit, otherwise only
+        // this guild's, since Discord limits each guild's routes separately.
         match wait {
             Some(seconds) if attempt == 0 && seconds <= 3.0 => {
                 tokio::time::sleep(Duration::from_secs_f64(seconds)).await;
@@ -660,9 +690,20 @@ async fn bot_get(
                 let backoff = wait.map_or(DEFAULT_BACKOFF_SECONDS, |seconds| {
                     (seconds.ceil() as i64).clamp(1, 3600)
                 });
-                config
-                    .rate_limited_until
-                    .fetch_max(now() + backoff, Ordering::Relaxed);
+                if global || guild.is_empty() {
+                    config
+                        .rate_limited_until
+                        .fetch_max(now() + backoff, Ordering::Relaxed);
+                } else {
+                    let mut cooldowns = config
+                        .guild_cooldowns
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    let current = now();
+                    cooldowns.retain(|_, until| *until > current);
+                    let until = cooldowns.entry(guild.clone()).or_default();
+                    *until = (*until).max(current + backoff);
+                }
                 return Err(rate_limited());
             }
         }
@@ -961,21 +1002,42 @@ async fn read_guild(config: &Settings, id: &str) -> ApiResult<Value> {
             })
         })
         .collect();
+    // @everyone's server permissions. Discord always sends them; assume
+    // visible if a response ever leaves them out.
+    let everyone_base = guild
+        .get("roles")
+        .and_then(Value::as_array)
+        .and_then(|roles| {
+            roles
+                .iter()
+                .find(|role| role.get("id").and_then(Value::as_str) == Some(id))
+        })
+        .and_then(|role| role.get("permissions"))
+        .and_then(Value::as_str)
+        .and_then(|bits| bits.parse::<u64>().ok())
+        .unwrap_or(VIEW_CHANNEL);
     let channels: Vec<Value> = items(&channels)
         .iter()
         .map(|channel| {
-            let private = channel
+            // Discord starts from @everyone's server permissions, then
+            // applies the channel's @everyone deny and allow, in that order.
+            let everyone = channel
                 .get("permission_overwrites")
                 .and_then(Value::as_array)
-                .is_some_and(|overwrites| {
-                    overwrites.iter().any(|o| {
-                        o.get("id").and_then(Value::as_str) == Some(id)
-                            && o.get("deny")
-                                .and_then(Value::as_str)
-                                .and_then(|d| d.parse::<u64>().ok())
-                                .is_some_and(|d| d & VIEW_CHANNEL != 0)
-                    })
+                .and_then(|overwrites| {
+                    overwrites
+                        .iter()
+                        .find(|o| o.get("id").and_then(Value::as_str) == Some(id))
                 });
+            let bits = |key: &str| {
+                everyone
+                    .and_then(|o| o.get(key))
+                    .and_then(Value::as_str)
+                    .and_then(|bits| bits.parse::<u64>().ok())
+                    .unwrap_or(0)
+            };
+            let visible = (everyone_base & !bits("deny")) | bits("allow");
+            let private = visible & (VIEW_CHANNEL | ADMINISTRATOR) == 0;
             json!({
                 "id": text(channel, "id"),
                 "name": text(channel, "name"),
