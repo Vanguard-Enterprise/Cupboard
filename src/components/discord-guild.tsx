@@ -874,10 +874,12 @@ function Extras({ overview }: { overview: GuildOverview }) {
             {overview.events.map((event) => (
               <li
                 key={event.id}
-                className="flex justify-between gap-4 py-2 text-sm"
+                className="flex flex-col gap-0.5 py-2 text-sm sm:flex-row sm:justify-between sm:gap-4"
               >
-                <span className="font-medium">{event.name}</span>
-                <span className="shrink-0 text-muted-foreground tabular-nums">
+                <span className="min-w-0 font-medium break-words">
+                  {event.name}
+                </span>
+                <span className="text-muted-foreground tabular-nums sm:shrink-0">
                   {event.startsAt ? times.format(new Date(event.startsAt)) : ""}
                   {event.userCount !== null &&
                     `, ${numbers.format(event.userCount)} interested`}
