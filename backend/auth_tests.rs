@@ -7201,6 +7201,8 @@ struct DiscordMock {
     left: std::sync::Arc<std::sync::atomic::AtomicU16>,
     /// 0 leaves normally, 1 fails, 2 answers that the bot already left.
     leave_mode: std::sync::Arc<std::sync::atomic::AtomicU16>,
+    /// Requests to exchange an OAuth code for a token.
+    exchanges: std::sync::Arc<std::sync::atomic::AtomicU16>,
     /// Bot reads of a guild.
     reads: std::sync::Arc<std::sync::atomic::AtomicU16>,
     /// 0 answers guild reads, 1 rate limits them for a minute.
@@ -7229,7 +7231,12 @@ async fn discord_mock() -> (String, DiscordMock, tokio::task::JoinHandle<()>) {
     fn bot(headers: &HeaderMap) -> bool {
         headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bot bot-token-secret")
     }
-    async fn token(headers: HeaderMap, body: String) -> axum::response::Response {
+    async fn token(
+        State(mock): State<DiscordMock>,
+        headers: HeaderMap,
+        body: String,
+    ) -> axum::response::Response {
+        mock.exchanges.fetch_add(1, Ordering::SeqCst);
         // Basic base64("130000000000000099:client-secret-value")
         let expected = "Basic MTMwMDAwMDAwMDAwMDAwMDk5OmNsaWVudC1zZWNyZXQtdmFsdWU=";
         if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some(expected)
@@ -7591,6 +7598,7 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
     // The same state is refused after the operator switches organizations,
     // and Discord never sees the code.
     let first = owner.organization.clone();
+    let exchanges = mock.exchanges.load(Ordering::SeqCst);
     owner.create_organization().await;
     assert_ne!(owner.organization, first);
     assert_eq!(
@@ -7604,7 +7612,7 @@ async fn discord_installs_are_single_use_scoped_authorized_and_keep_secrets_priv
             .0,
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(mock.revoked.lock().unwrap().len(), 1);
+    assert_eq!(mock.exchanges.load(Ordering::SeqCst), exchanges);
     let (status, _) = owner
         .request("POST", "auth/organization", json!({"id":first}))
         .await;
